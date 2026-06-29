@@ -14,18 +14,11 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
-from import_orchestrator.database import ImportDatabase
-from import_orchestrator.kube import KubeClient
-from import_orchestrator.models import ImportStatus, OCIReference, PipelineRunStatus
-from import_orchestrator.orchestrator import ImportOrchestrator
+# Default configuration constants for the import orchestrator.
 
-__version__ = "0.1.0"
-
-__all__ = [
-    "ImportDatabase",
-    "ImportOrchestrator",
-    "ImportStatus",
-    "KubeClient",
-    "OCIReference",
-    "PipelineRunStatus",
-]
+NAMESPACE = "lightwell-poc-tenant"
+CLUSTER_API = "https://api.stone-prod-p01.wcfb.p1.openshiftapps.com:6443"
+DEFAULT_DB_PATH = "./pnc_import_state.db"
+DEFAULT_MAX_PARALLEL = 5
+DEFAULT_POLL_INTERVAL = 30  # seconds
+DEFAULT_MAX_RETRIES = 3

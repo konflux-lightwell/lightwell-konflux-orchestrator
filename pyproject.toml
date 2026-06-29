@@ -9,7 +9,7 @@ description = "CLI tool for orchestrating data imports"
 requires-python = ">=3.11"
 license = "Apache-2.0"
 dependencies = [
-    "click>=8.0",
+    "pyyaml>=6.0",
 ]
 
 [dependency-groups]
