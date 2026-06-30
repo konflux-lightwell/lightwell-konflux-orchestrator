@@ -85,30 +85,37 @@ class KubeClient:
     def get_pipelinerun_status(self, name: str) -> PipelineRunStatus | None:
         """Get the status of a specific PipelineRun by name.
 
-        Checks the live cluster first, then falls back to kubearchive for pruned runs.
-        Returns None if the PipelineRun is not found in either place.
+        Checks the live cluster first (jsonpath), then falls back to kubearchive
+        (JSON only — ka does not support jsonpath output format).
+        Returns None if not found in either place.
         """
-        for kubectl_cmd in (["kubectl"], ["kubectl", "ka"]):
-            try:
-                result = subprocess.run(
-                    [
-                        *kubectl_cmd,
-                        *self._kubectl_base_args,
-                        "get",
-                        "pr",
-                        name,
-                        "-o",
-                        "jsonpath={.status.conditions[0].status}",
-                    ],
-                    capture_output=True,
-                    check=True,
-                    text=True,
-                )
-                status = result.stdout.strip()
-                if status in ("True", "False", "Unknown"):
-                    return PipelineRunStatus(name=name, status=status)  # type: ignore
-            except subprocess.CalledProcessError:
-                pass
+        # Live cluster — supports jsonpath
+        try:
+            result = subprocess.run(
+                ["kubectl", *self._kubectl_base_args, "get", "pr", name,
+                 "-o", "jsonpath={.status.conditions[0].status}"],
+                capture_output=True, check=True, text=True,
+            )
+            status = result.stdout.strip()
+            if status in ("True", "False", "Unknown"):
+                return PipelineRunStatus(name=name, status=status)  # type: ignore
+        except subprocess.CalledProcessError:
+            pass
+
+        # Kubearchive fallback — JSON only
+        try:
+            result = subprocess.run(
+                ["kubectl", "ka", *self._kubectl_base_args, "get", "pr", name, "-o", "json"],
+                capture_output=True, check=True, text=True,
+            )
+            data = json.loads(result.stdout)
+            for cond in data.get("status", {}).get("conditions", []):
+                if cond.get("type") == "Succeeded":
+                    status = cond.get("status", "")
+                    if status in ("True", "False", "Unknown"):
+                        return PipelineRunStatus(name=name, status=status)  # type: ignore
+        except (subprocess.CalledProcessError, json.JSONDecodeError, KeyError):
+            pass
 
         return None
 
