@@ -191,7 +191,7 @@ class KubeClient:
             return None
 
     def find_release_for_snapshot(self, snapshot_name: str) -> str | None:
-        """Find a Release whose spec.snapshot matches snapshot_name."""
+        """Find an active (non-terminally-failed) Release for the given snapshot."""
         try:
             result = subprocess.run(
                 ["kubectl", *self._kubectl_base_args, "get", "releases", "-o", "json"],
@@ -199,8 +199,18 @@ class KubeClient:
             )
             data = json.loads(result.stdout)
             for item in data.get("items", []):
-                if item.get("spec", {}).get("snapshot") == snapshot_name:
-                    return item["metadata"]["name"]
+                if item.get("spec", {}).get("snapshot") != snapshot_name:
+                    continue
+                released = next(
+                    (c for c in item.get("status", {}).get("conditions", [])
+                     if c.get("type") == "Released"),
+                    None,
+                )
+                # Skip terminally failed releases so a new one gets created
+                if released and released.get("status") == "False" \
+                        and released.get("reason") != "Progressing":
+                    continue
+                return item["metadata"]["name"]
             return None
         except (subprocess.CalledProcessError, json.JSONDecodeError, KeyError):
             return None
