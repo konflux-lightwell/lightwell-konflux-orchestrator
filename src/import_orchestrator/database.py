@@ -170,7 +170,7 @@ class ImportDatabase:
             UPDATE oci_references
             SET {", ".join(fields)}
             WHERE id = ?
-        """,
+        """,  # nosec B608 - field names are hardcoded, not user input
             values,
         )
 
