@@ -57,8 +57,10 @@ class ImportDatabase:
             CREATE TABLE IF NOT EXISTS oci_references (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 oci_ref TEXT NOT NULL UNIQUE,
-                status TEXT NOT NULL CHECK(status IN ('pending', 'triggered', 'running', 'success', 'failed')),
+                status TEXT NOT NULL CHECK(status IN ('pending', 'triggered', 'running', 'awaiting_release', 'success', 'failed')),
                 pipelinerun_name TEXT,
+                snapshot_name TEXT,
+                release_name TEXT,
                 triggered_at TIMESTAMP,
                 completed_at TIMESTAMP,
                 last_checked_at TIMESTAMP,
@@ -80,6 +82,12 @@ class ImportDatabase:
             CREATE INDEX IF NOT EXISTS idx_pipelinerun_name ON oci_references(pipelinerun_name)
         """
         )
+
+        for col in ("release_name TEXT", "snapshot_name TEXT"):
+            try:
+                cursor.execute(f"ALTER TABLE oci_references ADD COLUMN {col}")
+            except sqlite3.OperationalError:
+                pass  # column already exists
 
         self.conn.commit()
 
@@ -131,6 +139,8 @@ class ImportDatabase:
         oci_ref_id: int,
         status: ImportStatus,
         pipelinerun_name: str | None = None,
+        snapshot_name: str | None = None,
+        release_name: str | None = None,
         error_message: str | None = None,
         triggered_at: datetime | None = None,
         completed_at: datetime | None = None,
@@ -146,6 +156,15 @@ class ImportDatabase:
         if pipelinerun_name is not None:
             fields.append("pipelinerun_name = ?")
             values.append(pipelinerun_name)
+
+        if release_name is not None:
+            fields.append("release_name = ?")
+            # Empty string is a sentinel meaning "clear to NULL" (e.g. on retry reset)
+            values.append(None if release_name == "" else release_name)
+
+        if snapshot_name is not None:
+            fields.append("snapshot_name = ?")
+            values.append(None if snapshot_name == "" else snapshot_name)
 
         if error_message is not None:
             fields.append("error_message = ?")
@@ -207,6 +226,19 @@ class ImportDatabase:
 
         return [self._row_to_oci_reference(row) for row in cursor.fetchall()]
 
+    def count_in_flight(self) -> int:
+        """Count entries actively being processed (total minus pending, success, and failed)."""
+        assert self.conn is not None
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """
+            SELECT COUNT(*) FROM oci_references
+            WHERE status NOT IN (?, ?, ?)
+        """,
+            (ImportStatus.PENDING.value, ImportStatus.SUCCESS.value, ImportStatus.FAILED.value),
+        )
+        return cursor.fetchone()[0]
+
     def get_statistics(self) -> dict[str, int]:
         """Return counts grouped by status for progress reporting."""
         assert self.conn is not None
@@ -235,6 +267,8 @@ class ImportDatabase:
             oci_ref=row["oci_ref"],
             status=ImportStatus(row["status"]),
             pipelinerun_name=row["pipelinerun_name"],
+            snapshot_name=row["snapshot_name"],
+            release_name=row["release_name"],
             triggered_at=self._parse_timestamp(row["triggered_at"]),
             completed_at=self._parse_timestamp(row["completed_at"]),
             last_checked_at=self._parse_timestamp(row["last_checked_at"]),
