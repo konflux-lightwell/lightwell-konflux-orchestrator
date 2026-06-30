@@ -28,6 +28,7 @@ class ImportStatus(str, Enum):
     PENDING = "pending"
     TRIGGERED = "triggered"
     RUNNING = "running"
+    AWAITING_RELEASE = "releasing"
     SUCCESS = "success"
     FAILED = "failed"
 
@@ -40,6 +41,8 @@ class OCIReference:
     oci_ref: str
     status: ImportStatus
     pipelinerun_name: str | None = None
+    snapshot_name: str | None = None
+    release_name: str | None = None
     triggered_at: datetime | None = None
     completed_at: datetime | None = None
     last_checked_at: datetime | None = None
