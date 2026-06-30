@@ -17,7 +17,6 @@ This tool provides batch orchestration for importing PNC (Project Newcastle) bui
 
 - Python 3.11+
 - `kubectl` authenticated to the target cluster (kubeconfig or `KONFLUX_TOKEN`)
-- `QUAY_TOKEN` environment variable (unless using `--skip-fetch`)
 - Companion scripts (from `build-definitions` submodule):
   - `build-definitions/docs/examples/fetch_pnc_oci_references.sh` — fetches OCI references from Quay
   - `build-definitions/docs/examples/trigger-pnc-import.sh` — triggers individual PipelineRuns
@@ -43,64 +42,99 @@ pip install -e ".[dev]"
 ```bash
 # Show help
 import-orchestrator --help
+import-orchestrator fetch --help
+import-orchestrator orchestrate --help
 
-# Fetch OCI refs and trigger up to 10 parallel imports
-QUAY_TOKEN=<token> import-orchestrator --max-parallel 10
+# Typical workflow: fetch then orchestrate
+QUAY_TOKEN=<token> import-orchestrator fetch
+import-orchestrator orchestrate --max-parallel 10
 
-# Resume interrupted run from existing database
-import-orchestrator --db pnc_import_state.db --skip-fetch
+# Fetch only (populate database for inspection)
+QUAY_TOKEN=<token> import-orchestrator fetch
 
-# Fetch only (dry run to populate database for inspection)
-QUAY_TOKEN=<token> import-orchestrator --fetch-only
+# Resume interrupted orchestration from existing database
+import-orchestrator orchestrate
 
 # Import remediated builds instead of rebuilds
-QUAY_TOKEN=<token> LIGHTWELL_ARTIFACT_TYPE=REMEDIATED \
-  import-orchestrator --max-parallel 5
+QUAY_TOKEN=<token> LIGHTWELL_ARTIFACT_TYPE=REMEDIATED import-orchestrator fetch
+import-orchestrator orchestrate --max-parallel 5
 
 # Reset database and start fresh
-QUAY_TOKEN=<token> import-orchestrator --reset
+QUAY_TOKEN=<token> import-orchestrator --reset fetch
+import-orchestrator orchestrate
 ```
 
 ### Command-Line Options
 
+#### Global Options
+
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--db` | `./pnc_import_state.db` | SQLite database path |
+| `--reset` | `false` | Reset database (delete existing data before running) |
+
+#### `fetch` Subcommand
+
+Fetches OCI references from Quay and stores them in the database.
+
+```bash
+import-orchestrator fetch [--fetch-script SCRIPT]
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
 | `--fetch-script` | `build-definitions/docs/examples/fetch_pnc_oci_references.sh` | Path to fetch script |
+
+#### `orchestrate` Subcommand
+
+Orchestrates the import process by triggering PipelineRuns and monitoring their status.
+
+```bash
+import-orchestrator orchestrate [OPTIONS]
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
 | `--trigger-script` | `build-definitions/docs/examples/trigger-pnc-import.sh` | Path to trigger script |
-| `--max-parallel` | `5` | Maximum parallel PipelineRuns |
+| `--max-parallel` | `1` | Maximum parallel PipelineRuns |
 | `--poll-interval` | `30` | Seconds between status checks |
 | `--max-retries` | `3` | Max retry attempts for failed imports |
-| `--skip-fetch` | `false` | Skip fetching OCI refs (resume from existing database) |
-| `--fetch-only` | `false` | Only fetch and populate database, don't trigger imports |
-| `--reset` | `false` | Reset database (delete existing data before fetch) |
 
 ### Environment Variables
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `QUAY_TOKEN` | Yes (unless `--skip-fetch`) | Authentication token for Quay.io API |
-| `KONFLUX_TOKEN` or `KUBECONFIG` | Yes | Kubectl authentication |
+| `QUAY_TOKEN` | Yes (for `fetch`) | Authentication token for Quay.io API |
+| `KONFLUX_TOKEN` or `KUBECONFIG` | Yes (for `orchestrate`) | Kubectl authentication |
 | `LIGHTWELL_ARTIFACT_TYPE` | No | `REBUILD` (default) or `REMEDIATED` |
 
 ### Operation Flow
 
-1. **Fetch phase** (unless `--skip-fetch`):
-   - Runs `fetch_pnc_oci_references.sh` to get OCI references
-   - Stores references in SQLite with `status='pending'`
-   - Reports newly added vs. already tracked references
+#### `fetch` subcommand
 
-2. **Orchestration loop** (unless `--fetch-only`):
+1. Runs `fetch_pnc_oci_references.sh` to get OCI references from Quay
+2. Stores references in SQLite with `status='pending'`
+3. Reports newly added vs. already tracked references
+4. Prints database statistics
+
+**Exit codes:**
+- `0` — Fetch successful (even if no new references found)
+- `2` — Fetch script not found
+
+#### `orchestrate` subcommand
+
+1. Checks if database has any OCI references (warns if empty but continues)
+2. **Orchestration loop:**
    - Checks status of triggered/running imports via kubectl
    - Updates database with current PipelineRun statuses
    - Triggers new imports up to `--max-parallel` limit
    - Sleeps for `--poll-interval` seconds
    - Repeats until all imports are complete (success or retry-exhausted)
 
-3. **Exit codes**:
-   - `0` — All imports successful or no work to do
-   - `1` — Some imports failed after exhausting retries
-   - `2` — Script validation error (missing files)
+**Exit codes:**
+- `0` — All imports successful or no work to do
+- `1` — Some imports failed after exhausting retries
+- `2` — Trigger script not found
 
 ### Database Inspection
 
@@ -157,36 +191,25 @@ tox -e py311
 
 The project enforces the following standards, all configured with a **120-character line length** and targeting **Python 3.11**:
 
-- **Black** -- Code formatter (skip string normalization with `-S`)
 - **Ruff** -- Linter with rules: `E` (pycodestyle errors), `F` (pyflakes), `W` (pycodestyle warnings), `I` (import sorting)
-- **Flake8** -- Additional style checking
 - **Bandit** -- Security vulnerability scanning
 - **pip-audit** -- Dependency vulnerability scanning
 
 ### Linting and Formatting
 
-Check formatting (no changes applied):
-
 ```bash
-tox -e black
+ruff check src/ tests/
 ```
 
-Auto-format code:
-
-```bash
-tox -e black-format
-```
-
-Run ruff:
+Or via tox:
 
 ```bash
 tox -e ruff
 ```
 
-Run flake8:
-
+To automatically format the code:
 ```bash
-tox -e flake8
+ruff format src/ tests/
 ```
 
 ### Security Checks
@@ -202,7 +225,7 @@ tox -e pip-audit
 tox
 ```
 
-This runs all environments: `py311`, `flake8`, `black`, `ruff`, `bandit`, `pip-audit`.
+This runs all environments: `py311`, `ruff`, `bandit`, `pip-audit`.
 
 ## License
 
