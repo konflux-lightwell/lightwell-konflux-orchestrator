@@ -21,7 +21,7 @@ import sys
 import textwrap
 from pathlib import Path
 
-from import_orchestrator.commands import fetch, orchestrate
+from import_orchestrator.commands import fetch, import_file, orchestrate
 from import_orchestrator.constants import DEFAULT_DB_PATH
 
 
@@ -41,6 +41,9 @@ def make_parser() -> argparse.ArgumentParser:
         Examples:
           # Fetch OCI references into the database
           import-orchestrator fetch
+
+          # Import OCI references from a text file
+          import-orchestrator import-file refs.txt
 
           # Orchestrate imports (up to 10 parallel)
           import-orchestrator orchestrate --max-parallel 10
@@ -66,6 +69,7 @@ def make_parser() -> argparse.ArgumentParser:
 
     subparsers = parser.add_subparsers(dest="command")
     fetch.register(subparsers)
+    import_file.register(subparsers)
     orchestrate.register(subparsers)
 
     return parser

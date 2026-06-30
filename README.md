@@ -43,10 +43,15 @@ pip install -e ".[dev]"
 # Show help
 import-orchestrator --help
 import-orchestrator fetch --help
+import-orchestrator import-file --help
 import-orchestrator orchestrate --help
 
 # Typical workflow: fetch then orchestrate
 QUAY_TOKEN=<token> import-orchestrator fetch
+import-orchestrator orchestrate --max-parallel 10
+
+# Alternative: import from file then orchestrate
+import-orchestrator import-file refs.txt
 import-orchestrator orchestrate --max-parallel 10
 
 # Fetch only (populate database for inspection)
@@ -85,6 +90,26 @@ import-orchestrator fetch [--fetch-script SCRIPT]
 |--------|---------|-------------|
 | `--fetch-script` | `build-definitions/docs/examples/fetch_pnc_oci_references.sh` | Path to fetch script |
 
+#### `import-file` Subcommand
+
+Imports OCI references from a text file into the database.
+
+```bash
+import-orchestrator import-file <file>
+```
+
+Reads OCI references from a text file (one per line) and adds them to the database as pending imports. Lines starting with `#` and blank lines are ignored.
+
+**File format:**
+```
+# Comments are ignored
+quay.io/namespace/repo:tag@sha256:abc123...
+quay.io/namespace/repo:tag2@sha256:def456...
+
+# Blank lines are also ignored
+quay.io/namespace/repo:tag3@sha256:789abc...
+```
+
 #### `orchestrate` Subcommand
 
 Orchestrates the import process by triggering PipelineRuns and monitoring their status.
@@ -120,6 +145,18 @@ import-orchestrator orchestrate [OPTIONS]
 **Exit codes:**
 - `0` — Fetch successful (even if no new references found)
 - `2` — Fetch script not found
+
+#### `import-file` subcommand
+
+1. Reads OCI references from the specified text file
+2. Skips blank lines and comment lines (starting with `#`)
+3. Adds each reference to the database with `status='pending'`
+4. Skips duplicates (already in database)
+5. Prints summary of how many were added
+
+**Exit codes:**
+- `0` — Import successful (even if all duplicates)
+- `2` — File not found
 
 #### `orchestrate` subcommand
 

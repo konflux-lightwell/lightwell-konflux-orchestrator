@@ -25,6 +25,8 @@ from import_orchestrator.constants import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_POLL_INTERVAL,
 )
+from import_orchestrator.database import ImportDatabase
+from import_orchestrator.models import ImportStatus
 
 
 class TestMakeParser:
@@ -252,3 +254,171 @@ class TestMainFetch:
 
         exit_code = main()
         assert exit_code == 0
+
+
+class TestMakeParserImportFile:
+    def test_parses_file_argument(self):
+        parser = make_parser()
+        args = parser.parse_args(["import-file", "/tmp/refs.txt"])
+        assert args.file == Path("/tmp/refs.txt")
+        assert args.command == "import-file"
+
+    def test_inherits_top_level_db_flag(self):
+        parser = make_parser()
+        args = parser.parse_args(["--db", "/tmp/custom.db", "import-file", "refs.txt"])
+        assert args.db == Path("/tmp/custom.db")
+
+    def test_has_func_attribute(self):
+        parser = make_parser()
+        args = parser.parse_args(["import-file", "refs.txt"])
+        assert hasattr(args, "func")
+        assert callable(args.func)
+
+
+class TestMainImportFile:
+    def test_missing_file_returns_2(self, monkeypatch, tmp_path: Path):
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "prog",
+                "--db",
+                str(tmp_path / "test.db"),
+                "import-file",
+                "/nonexistent/refs.txt",
+            ],
+        )
+        exit_code = main()
+        assert exit_code == 2
+
+    def test_empty_file_returns_0(self, monkeypatch, tmp_path: Path):
+        refs_file = tmp_path / "empty.txt"
+        refs_file.write_text("")
+
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "prog",
+                "--db",
+                str(tmp_path / "test.db"),
+                "import-file",
+                str(refs_file),
+            ],
+        )
+
+        exit_code = main()
+        assert exit_code == 0
+
+    def test_imports_refs_from_file(self, monkeypatch, tmp_path: Path):
+        refs_file = tmp_path / "refs.txt"
+        refs_file.write_text("quay.io/repo:tag1@sha256:aaa\nquay.io/repo:tag2@sha256:bbb\n")
+
+        db_path = tmp_path / "test.db"
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "prog",
+                "--db",
+                str(db_path),
+                "import-file",
+                str(refs_file),
+            ],
+        )
+
+        exit_code = main()
+        assert exit_code == 0
+
+        with ImportDatabase(db_path) as db:
+            pending = db.get_by_status(ImportStatus.PENDING)
+            assert len(pending) == 2
+            refs = {r.oci_ref for r in pending}
+            assert refs == {"quay.io/repo:tag1@sha256:aaa", "quay.io/repo:tag2@sha256:bbb"}
+
+    def test_skips_comments_and_blank_lines(self, monkeypatch, tmp_path: Path):
+        refs_file = tmp_path / "refs.txt"
+        refs_file.write_text(
+            "# This is a comment\n"
+            "\n"
+            "quay.io/repo:tag1@sha256:aaa\n"
+            "  \n"
+            "# Another comment\n"
+            "quay.io/repo:tag2@sha256:bbb\n"
+            "\n"
+        )
+
+        db_path = tmp_path / "test.db"
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "prog",
+                "--db",
+                str(db_path),
+                "import-file",
+                str(refs_file),
+            ],
+        )
+
+        exit_code = main()
+        assert exit_code == 0
+
+        with ImportDatabase(db_path) as db:
+            pending = db.get_by_status(ImportStatus.PENDING)
+            assert len(pending) == 2
+
+    def test_handles_duplicates(self, monkeypatch, tmp_path: Path, capsys):
+        refs_file = tmp_path / "refs.txt"
+        refs_file.write_text(
+            "quay.io/repo:tag1@sha256:aaa\nquay.io/repo:tag1@sha256:aaa\nquay.io/repo:tag2@sha256:bbb\n"
+        )
+
+        db_path = tmp_path / "test.db"
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "prog",
+                "--db",
+                str(db_path),
+                "import-file",
+                str(refs_file),
+            ],
+        )
+
+        exit_code = main()
+        assert exit_code == 0
+
+        with ImportDatabase(db_path) as db:
+            pending = db.get_by_status(ImportStatus.PENDING)
+            assert len(pending) == 2
+
+        captured = capsys.readouterr()
+        assert "2 new" in captured.err
+        assert "1 already in database" in captured.err
+
+    def test_works_with_reset_flag(self, monkeypatch, tmp_path: Path):
+        db_path = tmp_path / "test.db"
+
+        # Pre-populate the database
+        with ImportDatabase(db_path) as db:
+            db.add_oci_reference("quay.io/repo:old@sha256:old")
+
+        refs_file = tmp_path / "refs.txt"
+        refs_file.write_text("quay.io/repo:new@sha256:new\n")
+
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "prog",
+                "--db",
+                str(db_path),
+                "--reset",
+                "import-file",
+                str(refs_file),
+            ],
+        )
+
+        exit_code = main()
+        assert exit_code == 0
+
+        with ImportDatabase(db_path) as db:
+            pending = db.get_by_status(ImportStatus.PENDING)
+            assert len(pending) == 1
+            assert pending[0].oci_ref == "quay.io/repo:new@sha256:new"
