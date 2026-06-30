@@ -85,32 +85,32 @@ class KubeClient:
     def get_pipelinerun_status(self, name: str) -> PipelineRunStatus | None:
         """Get the status of a specific PipelineRun by name.
 
-        Returns None if the PipelineRun is not found or its status is unrecognized.
+        Checks the live cluster first, then falls back to kubearchive for pruned runs.
+        Returns None if the PipelineRun is not found in either place.
         """
-        try:
-            result = subprocess.run(
-                [
-                    "kubectl",
-                    *self._kubectl_base_args,
-                    "get",
-                    "pr",
-                    name,
-                    "-o",
-                    "jsonpath={.status.conditions[0].status}",
-                ],
-                capture_output=True,
-                check=True,
-                text=True,
-            )
+        for kubectl_cmd in (["kubectl"], ["kubectl", "ka"]):
+            try:
+                result = subprocess.run(
+                    [
+                        *kubectl_cmd,
+                        *self._kubectl_base_args,
+                        "get",
+                        "pr",
+                        name,
+                        "-o",
+                        "jsonpath={.status.conditions[0].status}",
+                    ],
+                    capture_output=True,
+                    check=True,
+                    text=True,
+                )
+                status = result.stdout.strip()
+                if status in ("True", "False", "Unknown"):
+                    return PipelineRunStatus(name=name, status=status)  # type: ignore
+            except subprocess.CalledProcessError:
+                pass
 
-            status = result.stdout.strip()
-            if status in ("True", "False", "Unknown"):
-                return PipelineRunStatus(name=name, status=status)  # type: ignore
-
-            return None
-
-        except subprocess.CalledProcessError:
-            return None
+        return None
 
     def count_running_imports(self) -> int:
         """Count running PipelineRuns whose names start with 'pnc-import-'."""
