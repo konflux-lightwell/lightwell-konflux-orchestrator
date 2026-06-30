@@ -1,0 +1,55 @@
+.common:
+  image: quay.io/redhat-aqe/tox:latest
+  tags: [itup-alm-x86]
+  cache:
+    paths:
+      - .cache/pip
+  before_script:
+    - curl https://certs.corp.redhat.com/certs/Current-IT-Root-CAs.pem > /etc/pki/ca-trust/source/anchors/Current-IT-Root-CAs.pem
+    - update-ca-trust
+
+stages:
+  - lint
+  - sast
+  - security
+  - secret-detection
+  - unit-tests
+
+unit-tests:
+  extends: .common
+  stage: unit-tests
+  script:
+    - tox -e py311
+
+ruff:
+  extends: .common
+  stage: lint
+  script:
+    - tox -e ruff
+
+sast:
+  extends: .common
+  stage: sast
+
+bandit:
+  extends: .common
+  stage: security
+  script:
+    - tox -e bandit
+
+pip-audit:
+  extends: .common
+  stage: security
+  script:
+    - tox -e pip-audit
+
+include:
+  - template: Security/SAST.gitlab-ci.yml
+  - template: Security/Secret-Detection.gitlab-ci.yml
+
+variables:
+  SECRET_DETECTION_ENABLED: 'true'
+
+secret_detection:
+  stage: secret-detection
+  tags: [itup-alm-x86]
