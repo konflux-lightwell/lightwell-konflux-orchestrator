@@ -76,13 +76,19 @@ class TestMakeParser:
 
     def test_all_flags_combined(self):
         parser = make_parser()
-        args = parser.parse_args([
-            "--db", "/tmp/test.db",
-            "--max-parallel", "8",
-            "--poll-interval", "15",
-            "--max-retries", "2",
-            "--skip-fetch",
-        ])
+        args = parser.parse_args(
+            [
+                "--db",
+                "/tmp/test.db",
+                "--max-parallel",
+                "8",
+                "--poll-interval",
+                "15",
+                "--max-retries",
+                "2",
+                "--skip-fetch",
+            ]
+        )
         assert args.db == Path("/tmp/test.db")
         assert args.max_parallel == 8
         assert args.poll_interval == 15
@@ -107,9 +113,12 @@ class TestMain:
             "sys.argv",
             [
                 "prog",
-                "--db", str(tmp_path / "test.db"),
-                "--fetch-script", str(fetch_script),
-                "--trigger-script", "/nonexistent/trigger.sh",
+                "--db",
+                str(tmp_path / "test.db"),
+                "--fetch-script",
+                str(fetch_script),
+                "--trigger-script",
+                "/nonexistent/trigger.sh",
             ],
         )
         exit_code = main()
@@ -125,8 +134,10 @@ class TestMain:
             "sys.argv",
             [
                 "prog",
-                "--db", str(db_path),
-                "--fetch-script", str(fetch_script),
+                "--db",
+                str(db_path),
+                "--fetch-script",
+                str(fetch_script),
                 "--reset",
                 "--skip-fetch",
                 "--fetch-only",
@@ -154,8 +165,10 @@ class TestMain:
             "sys.argv",
             [
                 "prog",
-                "--db", str(tmp_path / "test.db"),
-                "--fetch-script", str(fetch_script),
+                "--db",
+                str(tmp_path / "test.db"),
+                "--fetch-script",
+                str(fetch_script),
                 "--fetch-only",
             ],
         )
@@ -170,17 +183,18 @@ class TestMain:
         trigger_script = tmp_path / "trigger.sh"
         trigger_script.touch()
 
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout="", stderr=""
-        )
+        mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
         monkeypatch.setattr(
             "sys.argv",
             [
                 "prog",
-                "--db", str(tmp_path / "test.db"),
-                "--fetch-script", str(fetch_script),
-                "--trigger-script", str(trigger_script),
+                "--db",
+                str(tmp_path / "test.db"),
+                "--fetch-script",
+                str(fetch_script),
+                "--trigger-script",
+                str(trigger_script),
             ],
         )
 
