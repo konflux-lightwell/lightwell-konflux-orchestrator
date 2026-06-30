@@ -74,9 +74,7 @@ class TestGetRunningPipelineRuns:
 
     @patch("import_orchestrator.kube.subprocess.run")
     def test_handles_empty_output(self, mock_run, kube: KubeClient):
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout="", stderr=""
-        )
+        mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
         result = kube.get_running_pipelineruns()
         assert result == []
@@ -98,9 +96,7 @@ class TestGetRunningPipelineRuns:
 class TestGetPipelineRunStatus:
     @patch("import_orchestrator.kube.subprocess.run")
     def test_returns_status(self, mock_run, kube: KubeClient):
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout="True", stderr=""
-        )
+        mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="True", stderr="")
 
         result = kube.get_pipelinerun_status("my-pr")
         assert result is not None
@@ -116,9 +112,7 @@ class TestGetPipelineRunStatus:
 
     @patch("import_orchestrator.kube.subprocess.run")
     def test_returns_none_for_unknown_status_string(self, mock_run, kube: KubeClient):
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout="", stderr=""
-        )
+        mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
         result = kube.get_pipelinerun_status("my-pr")
         assert result is None

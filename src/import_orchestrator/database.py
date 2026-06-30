@@ -168,7 +168,7 @@ class ImportDatabase:
         cursor.execute(
             f"""
             UPDATE oci_references
-            SET {', '.join(fields)}
+            SET {", ".join(fields)}
             WHERE id = ?
         """,
             values,

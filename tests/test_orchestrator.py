@@ -95,9 +95,7 @@ class TestFetchAndStoreOciRefs:
         fetch_script = tmp_path / "fetch.sh"
         fetch_script.touch()
 
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout="", stderr=""
-        )
+        mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
         total, newly_added = orchestrator.fetch_and_store_oci_refs(fetch_script)
         assert total == 0
@@ -137,9 +135,7 @@ class TestTriggerImport:
 
         oci_ref = OCIReference(id=1, oci_ref="quay.io/repo:tag@sha256:abc", status=ImportStatus.PENDING)
 
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout="some output", stderr=""
-        )
+        mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="some output", stderr="")
 
         name = orchestrator.trigger_import(oci_ref)
         assert name is None
@@ -150,13 +146,9 @@ class TestUpdatePipelineRunStatuses:
         ref, _ = orchestrator.db.add_oci_reference("quay.io/repo:tag@sha256:abc")
         assert ref.id is not None
 
-        orchestrator.db.update_status(
-            ref.id, ImportStatus.TRIGGERED, pipelinerun_name="pnc-import-abc"
-        )
+        orchestrator.db.update_status(ref.id, ImportStatus.TRIGGERED, pipelinerun_name="pnc-import-abc")
 
-        mock_kube.get_pipelinerun_status.return_value = PipelineRunStatus(
-            name="pnc-import-abc", status="Unknown"
-        )
+        mock_kube.get_pipelinerun_status.return_value = PipelineRunStatus(name="pnc-import-abc", status="Unknown")
 
         orchestrator.update_pipelinerun_statuses()
 
@@ -167,13 +159,9 @@ class TestUpdatePipelineRunStatuses:
         ref, _ = orchestrator.db.add_oci_reference("quay.io/repo:tag@sha256:abc")
         assert ref.id is not None
 
-        orchestrator.db.update_status(
-            ref.id, ImportStatus.RUNNING, pipelinerun_name="pnc-import-abc"
-        )
+        orchestrator.db.update_status(ref.id, ImportStatus.RUNNING, pipelinerun_name="pnc-import-abc")
 
-        mock_kube.get_pipelinerun_status.return_value = PipelineRunStatus(
-            name="pnc-import-abc", status="True"
-        )
+        mock_kube.get_pipelinerun_status.return_value = PipelineRunStatus(name="pnc-import-abc", status="True")
 
         orchestrator.update_pipelinerun_statuses()
 
@@ -184,13 +172,9 @@ class TestUpdatePipelineRunStatuses:
         ref, _ = orchestrator.db.add_oci_reference("quay.io/repo:tag@sha256:abc")
         assert ref.id is not None
 
-        orchestrator.db.update_status(
-            ref.id, ImportStatus.RUNNING, pipelinerun_name="pnc-import-abc"
-        )
+        orchestrator.db.update_status(ref.id, ImportStatus.RUNNING, pipelinerun_name="pnc-import-abc")
 
-        mock_kube.get_pipelinerun_status.return_value = PipelineRunStatus(
-            name="pnc-import-abc", status="False"
-        )
+        mock_kube.get_pipelinerun_status.return_value = PipelineRunStatus(name="pnc-import-abc", status="False")
 
         orchestrator.update_pipelinerun_statuses()
 
@@ -209,9 +193,7 @@ class TestUpdatePipelineRunStatuses:
         ref, _ = orchestrator.db.add_oci_reference("quay.io/repo:tag@sha256:abc")
         assert ref.id is not None
 
-        orchestrator.db.update_status(
-            ref.id, ImportStatus.TRIGGERED, pipelinerun_name="pnc-import-abc"
-        )
+        orchestrator.db.update_status(ref.id, ImportStatus.TRIGGERED, pipelinerun_name="pnc-import-abc")
 
         mock_kube.get_pipelinerun_status.return_value = None
 
