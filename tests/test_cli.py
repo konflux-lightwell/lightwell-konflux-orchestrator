@@ -30,7 +30,7 @@ from import_orchestrator.constants import (
 class TestMakeParser:
     def test_default_values(self):
         parser = make_parser()
-        args = parser.parse_args([])
+        args = parser.parse_args(["orchestrate"])
         assert args.db == Path(DEFAULT_DB_PATH)
         assert args.max_parallel == DEFAULT_MAX_PARALLEL
         assert args.poll_interval == DEFAULT_POLL_INTERVAL
@@ -41,37 +41,37 @@ class TestMakeParser:
 
     def test_custom_db_path(self):
         parser = make_parser()
-        args = parser.parse_args(["--db", "/tmp/custom.db"])
+        args = parser.parse_args(["--db", "/tmp/custom.db", "orchestrate"])
         assert args.db == Path("/tmp/custom.db")
 
     def test_max_parallel(self):
         parser = make_parser()
-        args = parser.parse_args(["--max-parallel", "10"])
+        args = parser.parse_args(["orchestrate", "--max-parallel", "10"])
         assert args.max_parallel == 10
 
     def test_poll_interval(self):
         parser = make_parser()
-        args = parser.parse_args(["--poll-interval", "60"])
+        args = parser.parse_args(["orchestrate", "--poll-interval", "60"])
         assert args.poll_interval == 60
 
     def test_max_retries(self):
         parser = make_parser()
-        args = parser.parse_args(["--max-retries", "5"])
+        args = parser.parse_args(["orchestrate", "--max-retries", "5"])
         assert args.max_retries == 5
 
     def test_skip_fetch_flag(self):
         parser = make_parser()
-        args = parser.parse_args(["--skip-fetch"])
+        args = parser.parse_args(["orchestrate", "--skip-fetch"])
         assert args.skip_fetch is True
 
     def test_fetch_only_flag(self):
         parser = make_parser()
-        args = parser.parse_args(["--fetch-only"])
+        args = parser.parse_args(["orchestrate", "--fetch-only"])
         assert args.fetch_only is True
 
     def test_reset_flag(self):
         parser = make_parser()
-        args = parser.parse_args(["--reset"])
+        args = parser.parse_args(["--reset", "orchestrate"])
         assert args.reset is True
 
     def test_all_flags_combined(self):
@@ -80,6 +80,7 @@ class TestMakeParser:
             [
                 "--db",
                 "/tmp/test.db",
+                "orchestrate",
                 "--max-parallel",
                 "8",
                 "--poll-interval",
@@ -97,10 +98,15 @@ class TestMakeParser:
 
 
 class TestMain:
+    def test_no_subcommand_returns_2(self, monkeypatch):
+        monkeypatch.setattr("sys.argv", ["prog"])
+        exit_code = main()
+        assert exit_code == 2
+
     def test_missing_fetch_script_returns_2(self, monkeypatch, tmp_path: Path):
         monkeypatch.setattr(
             "sys.argv",
-            ["prog", "--db", str(tmp_path / "test.db"), "--fetch-script", "/nonexistent/fetch.sh"],
+            ["prog", "--db", str(tmp_path / "test.db"), "orchestrate", "--fetch-script", "/nonexistent/fetch.sh"],
         )
         exit_code = main()
         assert exit_code == 2
@@ -115,6 +121,7 @@ class TestMain:
                 "prog",
                 "--db",
                 str(tmp_path / "test.db"),
+                "orchestrate",
                 "--fetch-script",
                 str(fetch_script),
                 "--trigger-script",
@@ -136,9 +143,10 @@ class TestMain:
                 "prog",
                 "--db",
                 str(db_path),
+                "--reset",
+                "orchestrate",
                 "--fetch-script",
                 str(fetch_script),
-                "--reset",
                 "--skip-fetch",
                 "--fetch-only",
             ],
@@ -167,6 +175,7 @@ class TestMain:
                 "prog",
                 "--db",
                 str(tmp_path / "test.db"),
+                "orchestrate",
                 "--fetch-script",
                 str(fetch_script),
                 "--fetch-only",
@@ -191,6 +200,7 @@ class TestMain:
                 "prog",
                 "--db",
                 str(tmp_path / "test.db"),
+                "orchestrate",
                 "--fetch-script",
                 str(fetch_script),
                 "--trigger-script",

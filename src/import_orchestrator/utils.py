@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+from pathlib import Path
 
 
 def extract_tag(oci_ref: str) -> str:
@@ -50,3 +51,10 @@ def should_retry(error: subprocess.CalledProcessError) -> bool:
         return False
 
     return True
+
+
+def get_build_definitions_scripts_dir() -> Path:
+    project_root = Path(__file__).parents[3]
+    scripts_dir = project_root / "build-definitions" / "docs" / "examples"
+
+    return scripts_dir

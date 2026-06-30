@@ -43,22 +43,23 @@ pip install -e ".[dev]"
 ```bash
 # Show help
 import-orchestrator --help
+import-orchestrator orchestrate --help
 
 # Fetch OCI refs and trigger up to 10 parallel imports
-QUAY_TOKEN=<token> import-orchestrator --max-parallel 10
+QUAY_TOKEN=<token> import-orchestrator orchestrate --max-parallel 10
 
 # Resume interrupted run from existing database
-import-orchestrator --db pnc_import_state.db --skip-fetch
+import-orchestrator --db pnc_import_state.db orchestrate --skip-fetch
 
 # Fetch only (dry run to populate database for inspection)
-QUAY_TOKEN=<token> import-orchestrator --fetch-only
+QUAY_TOKEN=<token> import-orchestrator orchestrate --fetch-only
 
 # Import remediated builds instead of rebuilds
 QUAY_TOKEN=<token> LIGHTWELL_ARTIFACT_TYPE=REMEDIATED \
-  import-orchestrator --max-parallel 5
+  import-orchestrator orchestrate --max-parallel 5
 
 # Reset database and start fresh
-QUAY_TOKEN=<token> import-orchestrator --reset
+QUAY_TOKEN=<token> import-orchestrator --reset orchestrate
 ```
 
 ### Command-Line Options
