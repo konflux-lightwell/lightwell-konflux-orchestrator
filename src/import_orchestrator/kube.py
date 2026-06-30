@@ -131,28 +131,17 @@ class KubeClient:
         except subprocess.CalledProcessError:
             return None
 
-    def get_snapshot_auto_release_status(self, snapshot_name: str) -> str | None:
-        """Check if snapshot was auto-released and return the newer snapshot name, or None.
-
-        Returns the name of the newer snapshot from the AutoReleased condition message,
-        or None if not auto-released.
-        """
+    def is_snapshot_auto_released(self, snapshot_name: str) -> bool:
+        """Return True if the snapshot was superseded and auto-released by Konflux."""
         try:
             result = subprocess.run(
                 ["kubectl", *self._kubectl_base_args, "get", "snapshot", snapshot_name,
-                 "-o", "jsonpath={.status.conditions[?(@.type==\"AutoReleased\")].status}{'\\t'}"
-                       "{.status.conditions[?(@.type==\"AutoReleased\")].message}"],
+                 "-o", "jsonpath={.status.conditions[?(@.type==\"AutoReleased\")].status}"],
                 capture_output=True, check=True, text=True,
             )
-            parts = result.stdout.strip().split("\t")
-            if parts[0] != "True":
-                return None
-            # Message is e.g. "Released in newer Snapshot pnc-import-20260630-014147-000"
-            msg = parts[1] if len(parts) > 1 else ""
-            words = msg.split()
-            return words[-1] if words else ""
+            return result.stdout.strip() == "True"
         except subprocess.CalledProcessError:
-            return None
+            return False
 
     def find_release_plan_for_snapshot(self, snapshot_name: str) -> str | None:
         """Find the ReleasePlan whose spec.application matches the snapshot's application label."""

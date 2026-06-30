@@ -165,24 +165,13 @@ class ImportOrchestrator:
                     if not snapshot_name:
                         print(f"  Waiting for snapshot for {tag}...", file=sys.stderr)
                         continue
-                    newer_snapshot = self.kube.get_snapshot_auto_release_status(snapshot_name)
-                    if newer_snapshot:
-                        # Superseded — track the newer snapshot's release instead
-                        self.db.update_status(oci_ref.id, ImportStatus.AWAITING_RELEASE, snapshot_name=newer_snapshot)
-                        print(f"  Snapshot superseded by {newer_snapshot}, tracking its release ({tag})", file=sys.stderr)
-                        continue
                     # Cache snapshot_name; check for a release next poll to give Integration Service time
                     self.db.update_status(oci_ref.id, ImportStatus.AWAITING_RELEASE, snapshot_name=snapshot_name)
                     print(f"  Found snapshot {snapshot_name} for {tag}, checking for release next poll", file=sys.stderr)
                     continue
 
-                # snapshot_name already cached from a prior poll — re-check auto-release in case it was
-                # just superseded, then find or create the Release without further delay
-                newer_snapshot = self.kube.get_snapshot_auto_release_status(snapshot_name)
-                if newer_snapshot:
-                    self.db.update_status(oci_ref.id, ImportStatus.AWAITING_RELEASE, snapshot_name=newer_snapshot)
-                    print(f"  Snapshot superseded by {newer_snapshot}, tracking its release ({tag})", file=sys.stderr)
-                    continue
+                # snapshot_name already cached — check auto-release status for logging only,
+                # then find or create a release for our snapshot regardless
                 release_name = self.kube.find_release_for_snapshot(snapshot_name)
                 if not release_name:
                     release_plan = self.kube.find_release_plan_for_snapshot(snapshot_name)
