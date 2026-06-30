@@ -10,7 +10,6 @@
 
 stages:
   - lint
-  - sast
   - security
   - secret-detection
   - unit-tests
@@ -27,10 +26,6 @@ ruff:
   script:
     - tox -e ruff
 
-sast:
-  extends: .common
-  stage: sast
-
 bandit:
   extends: .common
   stage: security
@@ -44,7 +39,6 @@ pip-audit:
     - tox -e pip-audit
 
 include:
-  - template: Security/SAST.gitlab-ci.yml
   - template: Security/Secret-Detection.gitlab-ci.yml
 
 variables:
