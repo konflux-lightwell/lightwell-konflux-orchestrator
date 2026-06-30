@@ -17,7 +17,6 @@ This tool provides batch orchestration for importing PNC (Project Newcastle) bui
 
 - Python 3.11+
 - `kubectl` authenticated to the target cluster (kubeconfig or `KONFLUX_TOKEN`)
-- `QUAY_TOKEN` environment variable (unless using `--skip-fetch`)
 - Companion scripts (from `build-definitions` submodule):
   - `build-definitions/docs/examples/fetch_pnc_oci_references.sh` — fetches OCI references from Quay
   - `build-definitions/docs/examples/trigger-pnc-import.sh` — triggers individual PipelineRuns
@@ -49,9 +48,6 @@ import-orchestrator orchestrate --help
 # Typical workflow: fetch then orchestrate
 QUAY_TOKEN=<token> import-orchestrator fetch
 import-orchestrator orchestrate --max-parallel 10
-
-# One-liner workflow
-QUAY_TOKEN=<token> import-orchestrator fetch && import-orchestrator orchestrate --max-parallel 10
 
 # Fetch only (populate database for inspection)
 QUAY_TOKEN=<token> import-orchestrator fetch
@@ -195,36 +191,25 @@ tox -e py311
 
 The project enforces the following standards, all configured with a **120-character line length** and targeting **Python 3.11**:
 
-- **Black** -- Code formatter (skip string normalization with `-S`)
 - **Ruff** -- Linter with rules: `E` (pycodestyle errors), `F` (pyflakes), `W` (pycodestyle warnings), `I` (import sorting)
-- **Flake8** -- Additional style checking
 - **Bandit** -- Security vulnerability scanning
 - **pip-audit** -- Dependency vulnerability scanning
 
 ### Linting and Formatting
 
-Check formatting (no changes applied):
-
 ```bash
-tox -e black
+ruff check src/ tests/
 ```
 
-Auto-format code:
-
-```bash
-tox -e black-format
-```
-
-Run ruff:
+Or via tox:
 
 ```bash
 tox -e ruff
 ```
 
-Run flake8:
-
+To automatically format the code:
 ```bash
-tox -e flake8
+ruff format src/ tests/
 ```
 
 ### Security Checks
@@ -240,7 +225,7 @@ tox -e pip-audit
 tox
 ```
 
-This runs all environments: `py311`, `flake8`, `black`, `ruff`, `bandit`, `pip-audit`.
+This runs all environments: `py311`, `ruff`, `bandit`, `pip-audit`.
 
 ## License
 
