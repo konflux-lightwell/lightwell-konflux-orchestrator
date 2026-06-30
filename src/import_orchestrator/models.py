@@ -28,7 +28,7 @@ class ImportStatus(str, Enum):
     PENDING = "pending"
     TRIGGERED = "triggered"
     RUNNING = "running"
-    AWAITING_RELEASE = "awaiting_release"
+    AWAITING_RELEASE = "releasing"
     SUCCESS = "success"
     FAILED = "failed"
 

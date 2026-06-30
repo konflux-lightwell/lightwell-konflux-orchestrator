@@ -301,7 +301,7 @@ class ImportOrchestrator:
             f"Status: pending={stats[ImportStatus.PENDING.value]}, "
             f"triggered={stats[ImportStatus.TRIGGERED.value]}, "
             f"running={stats[ImportStatus.RUNNING.value]}, "
-            f"awaiting_release={stats[ImportStatus.AWAITING_RELEASE.value]}, "
+            f"releasing={stats[ImportStatus.AWAITING_RELEASE.value]}, "
             f"success={stats[ImportStatus.SUCCESS.value]}, "
             f"failed={stats[ImportStatus.FAILED.value]}",
             file=sys.stderr,

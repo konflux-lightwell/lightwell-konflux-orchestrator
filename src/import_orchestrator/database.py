@@ -57,7 +57,7 @@ class ImportDatabase:
             CREATE TABLE IF NOT EXISTS oci_references (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 oci_ref TEXT NOT NULL UNIQUE,
-                status TEXT NOT NULL CHECK(status IN ('pending', 'triggered', 'running', 'awaiting_release', 'success', 'failed')),
+                status TEXT NOT NULL CHECK(status IN ('pending', 'triggered', 'running', 'releasing', 'success', 'failed')),
                 pipelinerun_name TEXT,
                 snapshot_name TEXT,
                 release_name TEXT,
