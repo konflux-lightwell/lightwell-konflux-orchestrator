@@ -149,7 +149,13 @@ class ImportOrchestrator:
 
     def update_release_statuses(self) -> None:
         """For AWAITING_RELEASE imports, find the Release and check its status."""
-        for oci_ref in self.db.get_by_status(ImportStatus.AWAITING_RELEASE):
+        releasing = self.db.get_by_status(ImportStatus.AWAITING_RELEASE)
+
+        # Count how many releases are already actively tracked this cycle.
+        # Only create new releases up to max_parallel to avoid flooding the release pipeline.
+        active_releases = sum(1 for r in releasing if r.release_name)
+
+        for oci_ref in releasing:
             if oci_ref.id is None or not oci_ref.pipelinerun_name:
                 continue
 
@@ -176,6 +182,9 @@ class ImportOrchestrator:
                 # then find or create a release for our snapshot regardless
                 release_name = self.kube.find_release_for_snapshot(snapshot_name)
                 if not release_name:
+                    if active_releases >= self.max_parallel:
+                        print(f"  Release capacity full ({active_releases}/{self.max_parallel}), deferring {tag}", file=sys.stderr)
+                        continue
                     release_plan = self.kube.find_release_plan_for_snapshot(snapshot_name)
                     if not release_plan:
                         print(f"  No ReleasePlan found for {snapshot_name} ({tag}), will retry", file=sys.stderr)
@@ -185,6 +194,7 @@ class ImportOrchestrator:
                         file=sys.stderr,
                     )
                     release_name = self.kube.create_release(snapshot_name, release_plan)
+                    active_releases += 1
                 if not release_name:
                     print(f"  Failed to create release for {snapshot_name} ({tag}), will retry", file=sys.stderr)
                     continue
