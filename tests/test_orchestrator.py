@@ -165,8 +165,8 @@ class TestUpdatePipelineRunStatuses:
 
         orchestrator.update_pipelinerun_statuses()
 
-        success = orchestrator.db.get_by_status(ImportStatus.SUCCESS)
-        assert len(success) == 1
+        awaiting = orchestrator.db.get_by_status(ImportStatus.AWAITING_RELEASE)
+        assert len(awaiting) == 1
 
     def test_updates_running_to_failed(self, orchestrator: ImportOrchestrator, mock_kube: MagicMock):
         ref, _ = orchestrator.db.add_oci_reference("quay.io/repo:tag@sha256:abc")
@@ -207,8 +207,13 @@ class TestUpdatePipelineRunStatuses:
 class TestTriggerNextBatch:
     @patch("import_orchestrator.orchestrator.subprocess.run")
     def test_triggers_up_to_available_slots(self, mock_run, orchestrator: ImportOrchestrator, mock_kube: MagicMock):
-        mock_kube.count_running_imports.return_value = 3  # 5 max - 3 running = 2 slots
+        # Add 3 already in-flight imports (simulating running/triggered)
+        for i in range(3):
+            ref, _ = orchestrator.db.add_oci_reference(f"quay.io/repo:inflight{i}@sha256:bbb{i}")
+            assert ref.id is not None
+            orchestrator.db.update_status(ref.id, ImportStatus.RUNNING)
 
+        # Add 5 pending imports
         for i in range(5):
             orchestrator.db.add_oci_reference(f"quay.io/repo:tag{i}@sha256:aaa{i}")
 
@@ -219,14 +224,21 @@ class TestTriggerNextBatch:
             stderr="pipelinerun.tekton.dev/pnc-import-xxx created\n",
         )
 
+        # 5 max - 3 in-flight = 2 slots available
         triggered = orchestrator.trigger_next_batch()
         assert triggered == 2
 
     def test_returns_zero_when_no_slots(self, orchestrator: ImportOrchestrator, mock_kube: MagicMock):
-        mock_kube.count_running_imports.return_value = 5
+        # Fill all 5 slots with in-flight imports
+        for i in range(5):
+            ref, _ = orchestrator.db.add_oci_reference(f"quay.io/repo:inflight{i}@sha256:bbb{i}")
+            assert ref.id is not None
+            orchestrator.db.update_status(ref.id, ImportStatus.RUNNING)
 
+        # Add a pending import
         orchestrator.db.add_oci_reference("quay.io/repo:tag@sha256:abc")
 
+        # No slots available, should return 0 without triggering
         triggered = orchestrator.trigger_next_batch()
         assert triggered == 0
 
@@ -302,6 +314,11 @@ class TestRunUntilComplete:
             return PipelineRunStatus(name=name, status="True")
 
         mock_kube.get_pipelinerun_status.side_effect = fake_pr_status
+
+        # Mock the release flow
+        mock_kube.find_snapshot_by_pipelinerun.return_value = "snapshot-abc"
+        mock_kube.find_release_for_snapshot.return_value = "release-abc"
+        mock_kube.get_release_status.return_value = "True"
 
         exit_code = orchestrator.run_until_complete()
         assert exit_code == 0

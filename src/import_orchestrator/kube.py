@@ -92,9 +92,18 @@ class KubeClient:
         # Live cluster — supports jsonpath
         try:
             result = subprocess.run(
-                ["kubectl", *self._kubectl_base_args, "get", "pr", name,
-                 "-o", "jsonpath={.status.conditions[0].status}"],
-                capture_output=True, check=True, text=True,
+                [
+                    "kubectl",
+                    *self._kubectl_base_args,
+                    "get",
+                    "pr",
+                    name,
+                    "-o",
+                    "jsonpath={.status.conditions[0].status}",
+                ],
+                capture_output=True,
+                check=True,
+                text=True,
             )
             status = result.stdout.strip()
             if status in ("True", "False", "Unknown"):
@@ -106,7 +115,9 @@ class KubeClient:
         try:
             result = subprocess.run(
                 ["kubectl", "ka", *self._kubectl_base_args, "get", "pr", name, "-o", "json"],
-                capture_output=True, check=True, text=True,
+                capture_output=True,
+                check=True,
+                text=True,
             )
             data = json.loads(result.stdout)
             for cond in data.get("status", {}).get("conditions", []):
@@ -128,10 +139,19 @@ class KubeClient:
         """Find the Snapshot created by a specific PipelineRun via its label."""
         try:
             result = subprocess.run(
-                ["kubectl", *self._kubectl_base_args, "get", "snapshots",
-                 "-l", f"appstudio.openshift.io/build-pipelinerun={pr_name}",
-                 "-o", "jsonpath={.items[0].metadata.name}"],
-                capture_output=True, check=True, text=True,
+                [
+                    "kubectl",
+                    *self._kubectl_base_args,
+                    "get",
+                    "snapshots",
+                    "-l",
+                    f"appstudio.openshift.io/build-pipelinerun={pr_name}",
+                    "-o",
+                    "jsonpath={.items[0].metadata.name}",
+                ],
+                capture_output=True,
+                check=True,
+                text=True,
             )
             name = result.stdout.strip()
             return name if name else None
@@ -142,9 +162,18 @@ class KubeClient:
         """Return True if the snapshot was superseded and auto-released by Konflux."""
         try:
             result = subprocess.run(
-                ["kubectl", *self._kubectl_base_args, "get", "snapshot", snapshot_name,
-                 "-o", "jsonpath={.status.conditions[?(@.type==\"AutoReleased\")].status}"],
-                capture_output=True, check=True, text=True,
+                [
+                    "kubectl",
+                    *self._kubectl_base_args,
+                    "get",
+                    "snapshot",
+                    snapshot_name,
+                    "-o",
+                    'jsonpath={.status.conditions[?(@.type=="AutoReleased")].status}',
+                ],
+                capture_output=True,
+                check=True,
+                text=True,
             )
             return result.stdout.strip() == "True"
         except subprocess.CalledProcessError:
@@ -154,9 +183,18 @@ class KubeClient:
         """Find the ReleasePlan whose spec.application matches the snapshot's application label."""
         try:
             snap = subprocess.run(
-                ["kubectl", *self._kubectl_base_args, "get", "snapshot", snapshot_name,
-                 "-o", "jsonpath={.metadata.labels.appstudio\\.openshift\\.io/application}"],
-                capture_output=True, check=True, text=True,
+                [
+                    "kubectl",
+                    *self._kubectl_base_args,
+                    "get",
+                    "snapshot",
+                    snapshot_name,
+                    "-o",
+                    "jsonpath={.metadata.labels.appstudio\\.openshift\\.io/application}",
+                ],
+                capture_output=True,
+                check=True,
+                text=True,
             )
             application = snap.stdout.strip()
             if not application:
@@ -164,7 +202,9 @@ class KubeClient:
 
             plans = subprocess.run(
                 ["kubectl", *self._kubectl_base_args, "get", "releaseplans", "-o", "json"],
-                capture_output=True, check=True, text=True,
+                capture_output=True,
+                check=True,
+                text=True,
             )
             data = json.loads(plans.stdout)
             for item in data.get("items", []):
@@ -189,7 +229,10 @@ class KubeClient:
         try:
             result = subprocess.run(
                 ["kubectl", *self._kubectl_base_args, "create", "-f", "-"],
-                input=manifest, capture_output=True, check=True, text=True,
+                input=manifest,
+                capture_output=True,
+                check=True,
+                text=True,
             )
             match = re.search(r"release\.appstudio\.redhat\.com/(\S+)\s+created", result.stdout + result.stderr)
             return match.group(1) if match else None
@@ -202,20 +245,20 @@ class KubeClient:
         try:
             result = subprocess.run(
                 ["kubectl", *self._kubectl_base_args, "get", "releases", "-o", "json"],
-                capture_output=True, check=True, text=True,
+                capture_output=True,
+                check=True,
+                text=True,
             )
             data = json.loads(result.stdout)
             for item in data.get("items", []):
                 if item.get("spec", {}).get("snapshot") != snapshot_name:
                     continue
                 released = next(
-                    (c for c in item.get("status", {}).get("conditions", [])
-                     if c.get("type") == "Released"),
+                    (c for c in item.get("status", {}).get("conditions", []) if c.get("type") == "Released"),
                     None,
                 )
                 # Skip terminally failed releases so a new one gets created
-                if released and released.get("status") == "False" \
-                        and released.get("reason") != "Progressing":
+                if released and released.get("status") == "False" and released.get("reason") != "Progressing":
                     continue
                 return item["metadata"]["name"]
             return None
@@ -233,10 +276,19 @@ class KubeClient:
         """
         try:
             result = subprocess.run(
-                ["kubectl", *self._kubectl_base_args, "get", "release", release_name,
-                 "-o", "jsonpath={.status.conditions[?(@.type==\"Released\")].status}{'\\t'}"
-                       "{.status.conditions[?(@.type==\"Released\")].reason}"],
-                capture_output=True, check=True, text=True,
+                [
+                    "kubectl",
+                    *self._kubectl_base_args,
+                    "get",
+                    "release",
+                    release_name,
+                    "-o",
+                    "jsonpath={.status.conditions[?(@.type==\"Released\")].status}{'\\t'}"
+                    '{.status.conditions[?(@.type=="Released")].reason}',
+                ],
+                capture_output=True,
+                check=True,
+                text=True,
             )
             parts = result.stdout.strip().split("\t")
             status = parts[0] if parts else ""

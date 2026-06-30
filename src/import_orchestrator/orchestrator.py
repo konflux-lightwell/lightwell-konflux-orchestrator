@@ -167,7 +167,9 @@ class ImportOrchestrator:
                         continue
                     # Cache snapshot_name; check for a release next poll to give Integration Service time
                     self.db.update_status(oci_ref.id, ImportStatus.AWAITING_RELEASE, snapshot_name=snapshot_name)
-                    print(f"  Found snapshot {snapshot_name} for {tag}, checking for release next poll", file=sys.stderr)
+                    print(
+                        f"  Found snapshot {snapshot_name} for {tag}, checking for release next poll", file=sys.stderr
+                    )
                     continue
 
                 # snapshot_name already cached — check auto-release status for logging only,
@@ -178,7 +180,10 @@ class ImportOrchestrator:
                     if not release_plan:
                         print(f"  No ReleasePlan found for {snapshot_name} ({tag}), will retry", file=sys.stderr)
                         continue
-                    print(f"  No release found for {snapshot_name}, creating via {release_plan} ({tag})...", file=sys.stderr)
+                    print(
+                        f"  No release found for {snapshot_name}, creating via {release_plan} ({tag})...",
+                        file=sys.stderr,
+                    )
                     release_name = self.kube.create_release(snapshot_name, release_plan)
                 if not release_name:
                     print(f"  Failed to create release for {snapshot_name} ({tag}), will retry", file=sys.stderr)
@@ -192,7 +197,8 @@ class ImportOrchestrator:
                 print(f"  ✓ Released: {tag} (release/{release_name})", file=sys.stderr)
             elif release_status == "False":
                 self.db.update_status(
-                    oci_ref.id, ImportStatus.FAILED,
+                    oci_ref.id,
+                    ImportStatus.FAILED,
                     completed_at=datetime.now(),
                     error_message=f"Release {release_name} failed",
                 )
