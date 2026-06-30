@@ -21,7 +21,7 @@ import sys
 import textwrap
 from pathlib import Path
 
-from import_orchestrator.commands import orchestrate
+from import_orchestrator.commands import fetch, orchestrate
 from import_orchestrator.constants import DEFAULT_DB_PATH
 
 
@@ -34,19 +34,19 @@ def make_parser() -> argparse.ArgumentParser:
         epilog=textwrap.dedent(
             """
         Environment Variables:
-          QUAY_TOKEN                Required for fetch (unless --skip-fetch)
+          QUAY_TOKEN                Required for fetch
           KONFLUX_TOKEN or KUBECONFIG  Required for kubectl auth
           LIGHTWELL_ARTIFACT_TYPE   REBUILD or REMEDIATED (default: REBUILD)
 
         Examples:
-          # Fetch and import up to 10 parallel
+          # Fetch OCI references into the database
+          import-orchestrator fetch
+
+          # Orchestrate imports (up to 10 parallel)
           import-orchestrator orchestrate --max-parallel 10
 
-          # Resume from existing database
-          import-orchestrator --db existing.db orchestrate --skip-fetch
-
-          # Dry run: fetch and populate database only
-          import-orchestrator orchestrate --fetch-only
+          # Full workflow
+          import-orchestrator fetch && import-orchestrator orchestrate
         """
         ),
     )
@@ -65,6 +65,7 @@ def make_parser() -> argparse.ArgumentParser:
     )
 
     subparsers = parser.add_subparsers(dest="command")
+    fetch.register(subparsers)
     orchestrate.register(subparsers)
 
     return parser

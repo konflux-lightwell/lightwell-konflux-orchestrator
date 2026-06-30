@@ -39,15 +39,8 @@ def register(subparsers: argparse._SubParsersAction) -> None:
 
     parser = subparsers.add_parser(
         "orchestrate",
-        help="Fetch OCI references and orchestrate batch PNC import PipelineRuns",
-        description="Fetch OCI references and orchestrate batch PNC import PipelineRuns",
-    )
-
-    parser.add_argument(
-        "--fetch-script",
-        type=Path,
-        default=scripts_dir / "fetch_pnc_oci_references.sh",
-        help="Path to fetch_pnc_oci_references.sh",
+        help="Orchestrate batch PNC import PipelineRuns",
+        description="Orchestrate batch PNC import PipelineRuns",
     )
 
     parser.add_argument(
@@ -78,65 +71,37 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         help=f"Max retry attempts for failed imports (default: {DEFAULT_MAX_RETRIES})",
     )
 
-    parser.add_argument(
-        "--skip-fetch",
-        action="store_true",
-        help="Skip fetching OCI refs (resume from existing database)",
-    )
-
-    parser.add_argument(
-        "--fetch-only",
-        action="store_true",
-        help="Only fetch and populate database, don't trigger imports",
-    )
-
     parser.set_defaults(func=run)
 
 
-def _validate_scripts(args: argparse.Namespace) -> int | None:
-    """Validate that required scripts exist. Returns an exit code on failure, None on success."""
-    if not args.skip_fetch and not args.fetch_script.exists():
-        print(f"ERROR: fetch script not found: {args.fetch_script}", file=sys.stderr)
-        return 2
-
-    if not args.fetch_only and not args.trigger_script.exists():
+def _validate_trigger_script(args: argparse.Namespace) -> int | None:
+    """Validate that the trigger script exists. Returns an exit code on failure, None on success."""
+    if not args.trigger_script.exists():
         print(f"ERROR: trigger script not found: {args.trigger_script}", file=sys.stderr)
         return 2
 
     return None
 
 
-def _run_fetch_phase(orchestrator: ImportOrchestrator, fetch_script: Path) -> tuple[int, int]:
-    """Execute the fetch phase and print results. Returns (total_fetched, newly_added)."""
-    print("Fetching OCI references...", file=sys.stderr)
-    total_fetched, newly_added = orchestrator.fetch_and_store_oci_refs(fetch_script)
-
-    if total_fetched == 0:
-        print("No OCI references found - exiting successfully", file=sys.stderr)
-    elif newly_added == 0:
-        print(
-            f"Fetched {total_fetched} OCI reference(s), all already in database",
-            file=sys.stderr,
-        )
-    elif newly_added == total_fetched:
-        print(f"Added {newly_added} new OCI reference(s) to database", file=sys.stderr)
-    else:
-        print(
-            f"Fetched {total_fetched} OCI reference(s): {newly_added} new, "
-            f"{total_fetched - newly_added} already in database",
-            file=sys.stderr,
-        )
-
-    return total_fetched, newly_added
+def _is_database_empty(db: ImportDatabase) -> bool:
+    """Check whether the database has any OCI references at all."""
+    stats = db.get_statistics()
+    return sum(stats.values()) == 0
 
 
 def run(args: argparse.Namespace) -> int:
     """Execute the orchestrate subcommand."""
-    validation_error = _validate_scripts(args)
+    validation_error = _validate_trigger_script(args)
     if validation_error is not None:
         return validation_error
 
     with ImportDatabase(args.db) as db:
+        if _is_database_empty(db):
+            print(
+                "WARNING: No OCI references in database. Run 'import-orchestrator fetch' first.",
+                file=sys.stderr,
+            )
+
         kube = KubeClient(NAMESPACE, CLUSTER_API)
         orchestrator = ImportOrchestrator(
             db=db,
@@ -146,15 +111,5 @@ def run(args: argparse.Namespace) -> int:
             poll_interval=args.poll_interval,
             max_retries=args.max_retries,
         )
-
-        if not args.skip_fetch:
-            total_fetched, _ = _run_fetch_phase(orchestrator, args.fetch_script)
-            if total_fetched == 0:
-                return 0
-
-        if args.fetch_only:
-            stats = db.get_statistics()
-            print(f"Database state: {stats}", file=sys.stderr)
-            return 0
 
         return orchestrator.run_until_complete()
