@@ -24,6 +24,7 @@ from datetime import datetime
 from pathlib import Path
 
 from import_orchestrator.database import ImportDatabase
+from import_orchestrator.engine.pipeline import PipelineMonitor
 from import_orchestrator.kube import KubeClient
 from import_orchestrator.models import ImportStatus, OCIReference
 from import_orchestrator.utils import extract_tag, should_retry
@@ -53,6 +54,7 @@ class ImportOrchestrator:
         self.max_parallel = max_parallel
         self.poll_interval = poll_interval
         self.max_retries = max_retries
+        self._pipeline_monitor = PipelineMonitor(db, kube)
 
     def trigger_import(self, oci_ref: OCIReference) -> str | None:
         """Trigger an import via the trigger script, returning the PipelineRun name.
@@ -85,34 +87,7 @@ class ImportOrchestrator:
 
     def update_pipelinerun_statuses(self) -> None:
         """Check status of all triggered/running imports and update the database."""
-        to_check = self.db.get_by_status(ImportStatus.TRIGGERED) + self.db.get_by_status(ImportStatus.RUNNING)
-
-        for oci_ref in to_check:
-            if not oci_ref.pipelinerun_name or oci_ref.id is None:
-                continue
-
-            pr_status = self.kube.get_pipelinerun_status(oci_ref.pipelinerun_name)
-
-            if pr_status is None:
-                continue
-
-            tag = extract_tag(oci_ref.oci_ref)
-
-            if pr_status.is_running:
-                if oci_ref.status == ImportStatus.TRIGGERED:
-                    self.db.update_status(oci_ref.id, ImportStatus.RUNNING)
-                    print(f"  Running: {tag}", file=sys.stderr)
-            elif pr_status.is_successful:
-                self.db.update_status(oci_ref.id, ImportStatus.AWAITING_RELEASE)
-                print(f"  Pipeline done, awaiting release: {tag}", file=sys.stderr)
-            elif pr_status.is_failed:
-                self.db.update_status(
-                    oci_ref.id,
-                    ImportStatus.FAILED,
-                    completed_at=datetime.now(),
-                    error_message="PipelineRun failed",
-                )
-                print(f"  ✗ Failed: {tag}", file=sys.stderr)
+        self._pipeline_monitor.update_statuses()
 
     def update_release_statuses(self) -> None:
         """For AWAITING_RELEASE imports, find the Release and check its status."""
