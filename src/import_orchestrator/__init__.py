@@ -15,7 +15,7 @@ limitations under the License.
 """
 
 from import_orchestrator.database import ImportDatabase
-from import_orchestrator.engine import ImportOrchestrator, IngestResult, OciIngest, PipelineMonitor
+from import_orchestrator.engine import ImportOrchestrator, IngestResult, OciIngest, PipelineMonitor, ReleaseMonitor
 from import_orchestrator.kube import KubeClient
 from import_orchestrator.models import ImportStatus, OCIReference, PipelineRunStatus
 
@@ -31,4 +31,5 @@ __all__ = [
     "OciIngest",
     "PipelineMonitor",
     "PipelineRunStatus",
+    "ReleaseMonitor",
 ]

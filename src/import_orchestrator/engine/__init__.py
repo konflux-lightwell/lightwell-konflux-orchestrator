@@ -17,10 +17,12 @@ limitations under the License.
 from import_orchestrator.engine.ingest import IngestResult, OciIngest
 from import_orchestrator.engine.orchestrator import ImportOrchestrator
 from import_orchestrator.engine.pipeline import PipelineMonitor
+from import_orchestrator.engine.release import ReleaseMonitor
 
 __all__ = [
     "ImportOrchestrator",
     "IngestResult",
     "OciIngest",
     "PipelineMonitor",
+    "ReleaseMonitor",
 ]

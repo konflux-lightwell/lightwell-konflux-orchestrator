@@ -25,6 +25,7 @@ from pathlib import Path
 
 from import_orchestrator.database import ImportDatabase
 from import_orchestrator.engine.pipeline import PipelineMonitor
+from import_orchestrator.engine.release import ReleaseMonitor
 from import_orchestrator.kube import KubeClient
 from import_orchestrator.models import ImportStatus, OCIReference
 from import_orchestrator.utils import extract_tag, should_retry
@@ -55,6 +56,7 @@ class ImportOrchestrator:
         self.poll_interval = poll_interval
         self.max_retries = max_retries
         self._pipeline_monitor = PipelineMonitor(db, kube)
+        self._release_monitor = ReleaseMonitor(db, kube, max_parallel)
 
     def trigger_import(self, oci_ref: OCIReference) -> str | None:
         """Trigger an import via the trigger script, returning the PipelineRun name.
@@ -91,72 +93,7 @@ class ImportOrchestrator:
 
     def update_release_statuses(self) -> None:
         """For AWAITING_RELEASE imports, find the Release and check its status."""
-        releasing = self.db.get_by_status(ImportStatus.AWAITING_RELEASE)
-
-        # Count how many releases are already actively tracked this cycle.
-        # Only create new releases up to max_parallel to avoid flooding the release pipeline.
-        active_releases = sum(1 for r in releasing if r.release_name)
-
-        for oci_ref in releasing:
-            if oci_ref.id is None or not oci_ref.pipelinerun_name:
-                continue
-
-            tag = extract_tag(oci_ref.oci_ref)
-            release_name = oci_ref.release_name
-            snapshot_name = oci_ref.snapshot_name
-
-            if not release_name:
-                if not snapshot_name:
-                    # First time seeing this entry — discover the snapshot by the build-pipelinerun label.
-                    # Konflux Integration Service always sets this label, so no digest fallback needed.
-                    snapshot_name = self.kube.find_snapshot_by_pipelinerun(oci_ref.pipelinerun_name)
-                    if not snapshot_name:
-                        print(f"  Waiting for snapshot for {tag}...", file=sys.stderr)
-                        continue
-                    # Cache snapshot_name; check for a release next poll to give Integration Service time
-                    self.db.update_status(oci_ref.id, ImportStatus.AWAITING_RELEASE, snapshot_name=snapshot_name)
-                    print(
-                        f"  Found snapshot {snapshot_name} for {tag}, checking for release next poll", file=sys.stderr
-                    )
-                    continue
-
-                # snapshot_name already cached — check auto-release status for logging only,
-                # then find or create a release for our snapshot regardless
-                release_name = self.kube.find_release_for_snapshot(snapshot_name)
-                if not release_name:
-                    if active_releases >= self.max_parallel:
-                        print(f"  Release capacity full ({active_releases}/{self.max_parallel}), deferring {tag}", file=sys.stderr)
-                        continue
-                    release_plan = self.kube.find_release_plan_for_snapshot(snapshot_name)
-                    if not release_plan:
-                        print(f"  No ReleasePlan found for {snapshot_name} ({tag}), will retry", file=sys.stderr)
-                        continue
-                    print(
-                        f"  No release found for {snapshot_name}, creating via {release_plan} ({tag})...",
-                        file=sys.stderr,
-                    )
-                    release_name = self.kube.create_release(snapshot_name, release_plan)
-                    active_releases += 1
-                if not release_name:
-                    print(f"  Failed to create release for {snapshot_name} ({tag}), will retry", file=sys.stderr)
-                    continue
-                self.db.update_status(oci_ref.id, ImportStatus.AWAITING_RELEASE, release_name=release_name)
-                print(f"  Tracking release/{release_name} ({tag})", file=sys.stderr)
-
-            release_status = self.kube.get_release_status(release_name)
-            if release_status == "True":
-                self.db.update_status(oci_ref.id, ImportStatus.SUCCESS, completed_at=datetime.now())
-                print(f"  ✓ Released: {tag} (release/{release_name})", file=sys.stderr)
-            elif release_status == "False":
-                self.db.update_status(
-                    oci_ref.id,
-                    ImportStatus.FAILED,
-                    completed_at=datetime.now(),
-                    error_message=f"Release {release_name} failed",
-                )
-                print(f"  ✗ Release failed: {tag} (release/{release_name})", file=sys.stderr)
-            else:
-                print(f"  Waiting for release/{release_name} ({tag})...", file=sys.stderr)
+        self._release_monitor.update_statuses()
 
     def trigger_next_batch(self) -> int:
         """Trigger imports up to the max_parallel limit, counting all in-flight stages.
