@@ -54,64 +54,6 @@ def orchestrator(db: ImportDatabase, mock_kube: MagicMock, tmp_path: Path):
     )
 
 
-class TestFetchAndStoreOciRefs:
-    @patch("import_orchestrator.engine.orchestrator.subprocess.run")
-    def test_stores_fetched_refs(self, mock_run, orchestrator: ImportOrchestrator, tmp_path: Path):
-        fetch_script = tmp_path / "fetch.sh"
-        fetch_script.touch()
-
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[],
-            returncode=0,
-            stdout="quay.io/repo:tag1@sha256:aaa\nquay.io/repo:tag2@sha256:bbb\n",
-            stderr="",
-        )
-
-        total, newly_added = orchestrator.fetch_and_store_oci_refs(fetch_script)
-        assert total == 2
-        assert newly_added == 2
-
-    @patch("import_orchestrator.engine.orchestrator.subprocess.run")
-    def test_handles_duplicates(self, mock_run, orchestrator: ImportOrchestrator, tmp_path: Path):
-        fetch_script = tmp_path / "fetch.sh"
-        fetch_script.touch()
-
-        # Pre-populate one reference
-        orchestrator.db.add_oci_reference("quay.io/repo:tag1@sha256:aaa")
-
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[],
-            returncode=0,
-            stdout="quay.io/repo:tag1@sha256:aaa\nquay.io/repo:tag2@sha256:bbb\n",
-            stderr="",
-        )
-
-        total, newly_added = orchestrator.fetch_and_store_oci_refs(fetch_script)
-        assert total == 2
-        assert newly_added == 1
-
-    @patch("import_orchestrator.engine.orchestrator.subprocess.run")
-    def test_empty_output_returns_zero(self, mock_run, orchestrator: ImportOrchestrator, tmp_path: Path):
-        fetch_script = tmp_path / "fetch.sh"
-        fetch_script.touch()
-
-        mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
-
-        total, newly_added = orchestrator.fetch_and_store_oci_refs(fetch_script)
-        assert total == 0
-        assert newly_added == 0
-
-    @patch("import_orchestrator.engine.orchestrator.subprocess.run")
-    def test_script_failure_raises(self, mock_run, orchestrator: ImportOrchestrator, tmp_path: Path):
-        fetch_script = tmp_path / "fetch.sh"
-        fetch_script.touch()
-
-        mock_run.side_effect = subprocess.CalledProcessError(1, "fetch", stderr="error")
-
-        with pytest.raises(subprocess.CalledProcessError):
-            orchestrator.fetch_and_store_oci_refs(fetch_script)
-
-
 class TestTriggerImport:
     @patch("import_orchestrator.engine.orchestrator.subprocess.run")
     def test_extracts_pipelinerun_name(self, mock_run, orchestrator: ImportOrchestrator):

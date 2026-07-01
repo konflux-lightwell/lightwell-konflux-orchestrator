@@ -30,10 +30,9 @@ from import_orchestrator.utils import extract_tag, should_retry
 
 
 class ImportOrchestrator:
-    """Coordinates fetching, triggering, monitoring, and retrying PNC imports.
+    """Coordinates triggering, monitoring, and retrying PNC imports.
 
     Manages the lifecycle of OCI reference imports by:
-    - Fetching references via an external script
     - Triggering PipelineRuns up to a configurable parallelism limit
     - Polling for completion and updating the database
     - Retrying transient failures
@@ -54,38 +53,6 @@ class ImportOrchestrator:
         self.max_parallel = max_parallel
         self.poll_interval = poll_interval
         self.max_retries = max_retries
-
-    def fetch_and_store_oci_refs(self, fetch_script: Path) -> tuple[int, int]:
-        """Run the fetch script and store discovered OCI references in the database.
-
-        Returns:
-            Tuple of (total_fetched, newly_added) counts.
-        """
-        try:
-            result = subprocess.run(
-                [str(fetch_script)],
-                capture_output=True,
-                check=True,
-                text=True,
-            )
-
-            oci_refs = [line.strip() for line in result.stdout.strip().split("\n") if line.strip()]
-
-            if not oci_refs:
-                print("WARNING: No OCI references returned from fetch script", file=sys.stderr)
-                return 0, 0
-
-            newly_added = 0
-            for oci_ref in oci_refs:
-                _, was_inserted = self.db.add_oci_reference(oci_ref)
-                if was_inserted:
-                    newly_added += 1
-
-            return len(oci_refs), newly_added
-
-        except subprocess.CalledProcessError as e:
-            print(f"ERROR: Fetch script failed: {e.stderr}", file=sys.stderr)
-            raise
 
     def trigger_import(self, oci_ref: OCIReference) -> str | None:
         """Trigger an import via the trigger script, returning the PipelineRun name.
