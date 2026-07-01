@@ -18,9 +18,11 @@ from import_orchestrator.engine.ingest import IngestResult, OciIngest
 from import_orchestrator.engine.orchestrator import ImportOrchestrator
 from import_orchestrator.engine.pipeline import PipelineMonitor
 from import_orchestrator.engine.release import ReleaseMonitor
+from import_orchestrator.engine.trigger import ImportTrigger
 
 __all__ = [
     "ImportOrchestrator",
+    "ImportTrigger",
     "IngestResult",
     "OciIngest",
     "PipelineMonitor",

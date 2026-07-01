@@ -26,9 +26,10 @@ from pathlib import Path
 from import_orchestrator.database import ImportDatabase
 from import_orchestrator.engine.pipeline import PipelineMonitor
 from import_orchestrator.engine.release import ReleaseMonitor
+from import_orchestrator.engine.trigger import ImportTrigger
 from import_orchestrator.kube import KubeClient
-from import_orchestrator.models import ImportStatus, OCIReference
-from import_orchestrator.utils import extract_tag, should_retry
+from import_orchestrator.models import ImportStatus
+from import_orchestrator.utils import extract_tag
 
 
 class ImportOrchestrator:
@@ -55,37 +56,9 @@ class ImportOrchestrator:
         self.max_parallel = max_parallel
         self.poll_interval = poll_interval
         self.max_retries = max_retries
+        self._trigger = ImportTrigger(db, trigger_script, max_parallel, max_retries)
         self._pipeline_monitor = PipelineMonitor(db, kube)
         self._release_monitor = ReleaseMonitor(db, kube, max_parallel)
-
-    def trigger_import(self, oci_ref: OCIReference) -> str | None:
-        """Trigger an import via the trigger script, returning the PipelineRun name.
-
-        Returns:
-            The PipelineRun name extracted from the trigger script output,
-            or None if the name could not be parsed.
-
-        Raises:
-            subprocess.CalledProcessError: If the trigger script exits with a non-zero code.
-        """
-        result = subprocess.run(
-            [str(self.trigger_script), oci_ref.oci_ref],
-            capture_output=True,
-            check=True,
-            text=True,
-        )
-
-        combined_output = result.stdout + result.stderr
-        match = re.search(r"pipelinerun\.tekton\.dev/(\S+)\s+created", combined_output)
-
-        if match:
-            return match.group(1)
-
-        print(
-            f"WARNING: Could not extract PipelineRun name from trigger output for {oci_ref.oci_ref}",
-            file=sys.stderr,
-        )
-        return None
 
     def update_pipelinerun_statuses(self) -> None:
         """Check status of all triggered/running imports and update the database."""
@@ -101,82 +74,7 @@ class ImportOrchestrator:
         Returns:
             The number of imports successfully triggered.
         """
-        in_flight = self.db.count_in_flight()
-        available_slots = max(0, self.max_parallel - in_flight)
-
-        if available_slots == 0:
-            return 0
-
-        pending = self.db.get_by_status(ImportStatus.PENDING)
-        retry_candidates = self.db.get_retry_candidates(self.max_retries)
-        candidates = (pending + retry_candidates)[:available_slots]
-
-        triggered = 0
-        for oci_ref in candidates:
-            if oci_ref.id is None:
-                continue
-
-            tag = extract_tag(oci_ref.oci_ref)
-            triggered += self._trigger_single_import(oci_ref, tag)
-
-        return triggered
-
-    def _trigger_single_import(self, oci_ref: OCIReference, tag: str) -> int:
-        """Attempt to trigger a single import. Returns 1 on success, 0 on failure."""
-        assert oci_ref.id is not None
-
-        try:
-            pr_name = self.trigger_import(oci_ref)
-            new_retry_count = oci_ref.retry_count + 1 if oci_ref.status == ImportStatus.FAILED else 0
-
-            self.db.update_status(
-                oci_ref.id,
-                ImportStatus.TRIGGERED,
-                pipelinerun_name=pr_name,
-                snapshot_name="",  # clear cached snapshot/release from a prior attempt
-                release_name="",
-                triggered_at=datetime.now(),
-                retry_count=new_retry_count,
-            )
-
-            retry_indicator = f" (retry {new_retry_count})" if new_retry_count > 0 else ""
-            print(f"  Triggered: {tag}{retry_indicator}", file=sys.stderr)
-            return 1
-
-        except subprocess.CalledProcessError as e:
-            error_msg = e.stderr.decode() if isinstance(e.stderr, bytes) else str(e.stderr)
-            self._handle_trigger_failure(oci_ref, tag, e, error_msg)
-            return 0
-
-    def _handle_trigger_failure(
-        self,
-        oci_ref: OCIReference,
-        tag: str,
-        error: subprocess.CalledProcessError,
-        error_msg: str,
-    ) -> None:
-        """Record a trigger failure in the database with appropriate retry semantics."""
-        assert oci_ref.id is not None
-
-        if should_retry(error):
-            self.db.update_status(
-                oci_ref.id,
-                ImportStatus.FAILED,
-                error_message=f"Trigger script failed (will retry): {error_msg}",
-                retry_count=oci_ref.retry_count + 1,
-            )
-        else:
-            self.db.update_status(
-                oci_ref.id,
-                ImportStatus.FAILED,
-                error_message=f"Trigger script failed (permanent): {error_msg}",
-                retry_count=self.max_retries,
-            )
-
-        print(
-            f"  ERROR: Failed to trigger {tag}: {error_msg[:100]}",
-            file=sys.stderr,
-        )
+        return self._trigger.trigger_next_batch()
 
     def is_complete(self) -> bool:
         """Check if all imports are either successful or permanently failed."""
