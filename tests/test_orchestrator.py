@@ -21,9 +21,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from import_orchestrator.database import ImportDatabase
+from import_orchestrator.engine import ImportOrchestrator, ImportTrigger, PipelineMonitor, ReleaseMonitor
 from import_orchestrator.kube import KubeClient
 from import_orchestrator.models import ImportStatus, PipelineRunStatus
-from import_orchestrator.engine import ImportOrchestrator
 
 
 @pytest.fixture
@@ -44,11 +44,21 @@ def mock_kube():
 def orchestrator(db: ImportDatabase, mock_kube: MagicMock, tmp_path: Path):
     trigger_script = tmp_path / "trigger.sh"
     trigger_script.touch()
-    return ImportOrchestrator(
+
+    trigger = ImportTrigger(
         db=db,
-        kube=mock_kube,
         trigger_script=trigger_script,
         max_parallel=5,
+        max_retries=3,
+    )
+    pipeline_monitor = PipelineMonitor(db=db, kube=mock_kube)
+    release_monitor = ReleaseMonitor(db=db, kube=mock_kube, max_parallel=5)
+
+    return ImportOrchestrator(
+        db=db,
+        trigger=trigger,
+        pipeline_monitor=pipeline_monitor,
+        release_monitor=release_monitor,
         poll_interval=1,
         max_retries=3,
     )

@@ -16,49 +16,38 @@ limitations under the License.
 
 from __future__ import annotations
 
-import re
-import subprocess
 import sys
 import time
-from datetime import datetime
-from pathlib import Path
 
 from import_orchestrator.database import ImportDatabase
 from import_orchestrator.engine.pipeline import PipelineMonitor
 from import_orchestrator.engine.release import ReleaseMonitor
 from import_orchestrator.engine.trigger import ImportTrigger
-from import_orchestrator.kube import KubeClient
 from import_orchestrator.models import ImportStatus
-from import_orchestrator.utils import extract_tag
 
 
 class ImportOrchestrator:
-    """Coordinates triggering, monitoring, and retrying PNC imports.
+    """Coordinates the import lifecycle by delegating to specialized components.
 
-    Manages the lifecycle of OCI reference imports by:
-    - Triggering PipelineRuns up to a configurable parallelism limit
-    - Polling for completion and updating the database
-    - Retrying transient failures
+    This is a thin coordinator that manages the polling loop and delegates
+    to ImportTrigger, PipelineMonitor, and ReleaseMonitor for the actual work.
     """
 
     def __init__(
         self,
         db: ImportDatabase,
-        kube: KubeClient,
-        trigger_script: Path,
-        max_parallel: int,
+        trigger: ImportTrigger,
+        pipeline_monitor: PipelineMonitor,
+        release_monitor: ReleaseMonitor,
         poll_interval: int,
         max_retries: int,
     ):
         self.db = db
-        self.kube = kube
-        self.trigger_script = trigger_script
-        self.max_parallel = max_parallel
         self.poll_interval = poll_interval
         self.max_retries = max_retries
-        self._trigger = ImportTrigger(db, trigger_script, max_parallel, max_retries)
-        self._pipeline_monitor = PipelineMonitor(db, kube)
-        self._release_monitor = ReleaseMonitor(db, kube, max_parallel)
+        self._trigger = trigger
+        self._pipeline_monitor = pipeline_monitor
+        self._release_monitor = release_monitor
 
     def update_pipelinerun_statuses(self) -> None:
         """Check status of all triggered/running imports and update the database."""
