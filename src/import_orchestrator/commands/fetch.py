@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 
 from import_orchestrator.database import ImportDatabase
-from import_orchestrator.orchestrator import ImportOrchestrator
+from import_orchestrator.engine import ImportOrchestrator
 from import_orchestrator.utils import get_build_definitions_scripts_dir
 
 

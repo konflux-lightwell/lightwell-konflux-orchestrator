@@ -28,8 +28,8 @@ from import_orchestrator.constants import (
     NAMESPACE,
 )
 from import_orchestrator.database import ImportDatabase
+from import_orchestrator.engine import ImportOrchestrator
 from import_orchestrator.kube import KubeClient
-from import_orchestrator.orchestrator import ImportOrchestrator
 from import_orchestrator.utils import get_build_definitions_scripts_dir
 
 

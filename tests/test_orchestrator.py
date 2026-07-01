@@ -23,7 +23,7 @@ import pytest
 from import_orchestrator.database import ImportDatabase
 from import_orchestrator.kube import KubeClient
 from import_orchestrator.models import ImportStatus, PipelineRunStatus
-from import_orchestrator.orchestrator import ImportOrchestrator
+from import_orchestrator.engine import ImportOrchestrator
 
 
 @pytest.fixture
@@ -55,7 +55,7 @@ def orchestrator(db: ImportDatabase, mock_kube: MagicMock, tmp_path: Path):
 
 
 class TestFetchAndStoreOciRefs:
-    @patch("import_orchestrator.orchestrator.subprocess.run")
+    @patch("import_orchestrator.engine.orchestrator.subprocess.run")
     def test_stores_fetched_refs(self, mock_run, orchestrator: ImportOrchestrator, tmp_path: Path):
         fetch_script = tmp_path / "fetch.sh"
         fetch_script.touch()
@@ -71,7 +71,7 @@ class TestFetchAndStoreOciRefs:
         assert total == 2
         assert newly_added == 2
 
-    @patch("import_orchestrator.orchestrator.subprocess.run")
+    @patch("import_orchestrator.engine.orchestrator.subprocess.run")
     def test_handles_duplicates(self, mock_run, orchestrator: ImportOrchestrator, tmp_path: Path):
         fetch_script = tmp_path / "fetch.sh"
         fetch_script.touch()
@@ -90,7 +90,7 @@ class TestFetchAndStoreOciRefs:
         assert total == 2
         assert newly_added == 1
 
-    @patch("import_orchestrator.orchestrator.subprocess.run")
+    @patch("import_orchestrator.engine.orchestrator.subprocess.run")
     def test_empty_output_returns_zero(self, mock_run, orchestrator: ImportOrchestrator, tmp_path: Path):
         fetch_script = tmp_path / "fetch.sh"
         fetch_script.touch()
@@ -101,7 +101,7 @@ class TestFetchAndStoreOciRefs:
         assert total == 0
         assert newly_added == 0
 
-    @patch("import_orchestrator.orchestrator.subprocess.run")
+    @patch("import_orchestrator.engine.orchestrator.subprocess.run")
     def test_script_failure_raises(self, mock_run, orchestrator: ImportOrchestrator, tmp_path: Path):
         fetch_script = tmp_path / "fetch.sh"
         fetch_script.touch()
@@ -113,7 +113,7 @@ class TestFetchAndStoreOciRefs:
 
 
 class TestTriggerImport:
-    @patch("import_orchestrator.orchestrator.subprocess.run")
+    @patch("import_orchestrator.engine.orchestrator.subprocess.run")
     def test_extracts_pipelinerun_name(self, mock_run, orchestrator: ImportOrchestrator):
         from import_orchestrator.models import OCIReference
 
@@ -129,7 +129,7 @@ class TestTriggerImport:
         name = orchestrator.trigger_import(oci_ref)
         assert name == "pnc-import-12345"
 
-    @patch("import_orchestrator.orchestrator.subprocess.run")
+    @patch("import_orchestrator.engine.orchestrator.subprocess.run")
     def test_returns_none_when_name_not_found(self, mock_run, orchestrator: ImportOrchestrator):
         from import_orchestrator.models import OCIReference
 
@@ -205,7 +205,7 @@ class TestUpdatePipelineRunStatuses:
 
 
 class TestTriggerNextBatch:
-    @patch("import_orchestrator.orchestrator.subprocess.run")
+    @patch("import_orchestrator.engine.orchestrator.subprocess.run")
     def test_triggers_up_to_available_slots(self, mock_run, orchestrator: ImportOrchestrator, mock_kube: MagicMock):
         # Add 3 already in-flight imports (simulating running/triggered)
         for i in range(3):
@@ -242,7 +242,7 @@ class TestTriggerNextBatch:
         triggered = orchestrator.trigger_next_batch()
         assert triggered == 0
 
-    @patch("import_orchestrator.orchestrator.subprocess.run")
+    @patch("import_orchestrator.engine.orchestrator.subprocess.run")
     def test_handles_trigger_failure(self, mock_run, orchestrator: ImportOrchestrator, mock_kube: MagicMock):
         orchestrator.db.add_oci_reference("quay.io/repo:tag@sha256:abc")
 
@@ -290,7 +290,7 @@ class TestIsComplete:
 
 
 class TestRunUntilComplete:
-    @patch("import_orchestrator.orchestrator.subprocess.run")
+    @patch("import_orchestrator.engine.orchestrator.subprocess.run")
     def test_completes_with_success(self, mock_run, orchestrator: ImportOrchestrator, mock_kube: MagicMock):
         ref, _ = orchestrator.db.add_oci_reference("quay.io/repo:tag@sha256:abc")
         assert ref.id is not None
