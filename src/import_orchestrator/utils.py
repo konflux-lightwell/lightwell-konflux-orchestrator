@@ -54,7 +54,9 @@ def should_retry(error: subprocess.CalledProcessError) -> bool:
 
 
 def get_build_definitions_scripts_dir() -> Path:
-    project_root = Path(__file__).parents[3]
+    # Start from src/import_orchestrator/utils.py
+    # Go up to src/import_orchestrator -> src -> [project root]
+    project_root = Path(__file__).parents[2]
     scripts_dir = project_root / "build-definitions" / "docs" / "examples"
 
     return scripts_dir
