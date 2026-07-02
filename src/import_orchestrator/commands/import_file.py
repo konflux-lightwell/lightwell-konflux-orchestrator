@@ -21,6 +21,7 @@ import sys
 from pathlib import Path
 
 from import_orchestrator.database import ImportDatabase
+from import_orchestrator.engine import OciIngest
 
 
 def register(subparsers: argparse._SubParsersAction) -> None:
@@ -46,50 +47,29 @@ def run(args: argparse.Namespace) -> int:
         print(f"ERROR: file not found: {args.file}", file=sys.stderr)
         return 2
 
-    oci_refs = _read_oci_references(args.file)
+    lines = args.file.read_text().splitlines()
 
     with ImportDatabase(args.db) as db:
-        newly_added = _import_references(db, oci_refs)
+        ingest = OciIngest(db)
+        result = ingest.from_lines(lines)
 
-    _print_summary(total=len(oci_refs), newly_added=newly_added)
+    _print_summary(result)
     return 0
 
 
-def _read_oci_references(file_path: Path) -> list[str]:
-    """Read OCI references from a text file, skipping blank lines and comments."""
-    lines = file_path.read_text().splitlines()
-    return [line.strip() for line in lines if _is_oci_reference(line)]
-
-
-def _is_oci_reference(line: str) -> bool:
-    """Return True if the line contains an OCI reference (not blank or a comment)."""
-    stripped = line.strip()
-    return stripped != "" and not stripped.startswith("#")
-
-
-def _import_references(db: ImportDatabase, oci_refs: list[str]) -> int:
-    """Add each OCI reference to the database. Returns the count of newly added entries."""
-    newly_added = 0
-    for ref in oci_refs:
-        _, was_inserted = db.add_oci_reference(ref)
-        if was_inserted:
-            newly_added += 1
-    return newly_added
-
-
-def _print_summary(total: int, newly_added: int) -> None:
+def _print_summary(result) -> None:
     """Print a human-readable summary of the import results to stderr."""
-    if total == 0:
+    if result.total == 0:
         print("No OCI references found in file", file=sys.stderr)
-    elif newly_added == 0:
+    elif result.newly_added == 0:
         print(
-            f"Read {total} OCI reference(s) from file, all already in database",
+            f"Read {result.total} OCI reference(s) from file, all already in database",
             file=sys.stderr,
         )
-    elif newly_added == total:
-        print(f"Added {newly_added} new OCI reference(s) to database", file=sys.stderr)
+    elif result.newly_added == result.total:
+        print(f"Added {result.newly_added} new OCI reference(s) to database", file=sys.stderr)
     else:
         print(
-            f"Read {total} OCI reference(s) from file: {newly_added} new, {total - newly_added} already in database",
+            f"Read {result.total} OCI reference(s) from file: {result.newly_added} new, {result.duplicates} already in database",  # noqa: E501
             file=sys.stderr,
         )

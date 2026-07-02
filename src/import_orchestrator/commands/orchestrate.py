@@ -28,8 +28,8 @@ from import_orchestrator.constants import (
     NAMESPACE,
 )
 from import_orchestrator.database import ImportDatabase
+from import_orchestrator.engine import ImportOrchestrator, ImportTrigger, PipelineMonitor, ReleaseMonitor
 from import_orchestrator.kube import KubeClient
-from import_orchestrator.orchestrator import ImportOrchestrator
 from import_orchestrator.utils import get_build_definitions_scripts_dir
 
 
@@ -103,11 +103,23 @@ def run(args: argparse.Namespace) -> int:
             )
 
         kube = KubeClient(NAMESPACE, CLUSTER_API)
-        orchestrator = ImportOrchestrator(
+
+        # Construct the specialized components
+        trigger = ImportTrigger(
             db=db,
-            kube=kube,
             trigger_script=args.trigger_script,
             max_parallel=args.max_parallel,
+            max_retries=args.max_retries,
+        )
+        pipeline_monitor = PipelineMonitor(db=db, kube=kube)
+        release_monitor = ReleaseMonitor(db=db, kube=kube, max_parallel=args.max_parallel)
+
+        # Construct the coordinator
+        orchestrator = ImportOrchestrator(
+            db=db,
+            trigger=trigger,
+            pipeline_monitor=pipeline_monitor,
+            release_monitor=release_monitor,
             poll_interval=args.poll_interval,
             max_retries=args.max_retries,
         )

@@ -21,9 +21,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from import_orchestrator.database import ImportDatabase
+from import_orchestrator.engine import ImportOrchestrator, ImportTrigger, PipelineMonitor, ReleaseMonitor
 from import_orchestrator.kube import KubeClient
 from import_orchestrator.models import ImportStatus, PipelineRunStatus
-from import_orchestrator.orchestrator import ImportOrchestrator
 
 
 @pytest.fixture
@@ -44,101 +44,24 @@ def mock_kube():
 def orchestrator(db: ImportDatabase, mock_kube: MagicMock, tmp_path: Path):
     trigger_script = tmp_path / "trigger.sh"
     trigger_script.touch()
-    return ImportOrchestrator(
+
+    trigger = ImportTrigger(
         db=db,
-        kube=mock_kube,
         trigger_script=trigger_script,
         max_parallel=5,
+        max_retries=3,
+    )
+    pipeline_monitor = PipelineMonitor(db=db, kube=mock_kube)
+    release_monitor = ReleaseMonitor(db=db, kube=mock_kube, max_parallel=5)
+
+    return ImportOrchestrator(
+        db=db,
+        trigger=trigger,
+        pipeline_monitor=pipeline_monitor,
+        release_monitor=release_monitor,
         poll_interval=1,
         max_retries=3,
     )
-
-
-class TestFetchAndStoreOciRefs:
-    @patch("import_orchestrator.orchestrator.subprocess.run")
-    def test_stores_fetched_refs(self, mock_run, orchestrator: ImportOrchestrator, tmp_path: Path):
-        fetch_script = tmp_path / "fetch.sh"
-        fetch_script.touch()
-
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[],
-            returncode=0,
-            stdout="quay.io/repo:tag1@sha256:aaa\nquay.io/repo:tag2@sha256:bbb\n",
-            stderr="",
-        )
-
-        total, newly_added = orchestrator.fetch_and_store_oci_refs(fetch_script)
-        assert total == 2
-        assert newly_added == 2
-
-    @patch("import_orchestrator.orchestrator.subprocess.run")
-    def test_handles_duplicates(self, mock_run, orchestrator: ImportOrchestrator, tmp_path: Path):
-        fetch_script = tmp_path / "fetch.sh"
-        fetch_script.touch()
-
-        # Pre-populate one reference
-        orchestrator.db.add_oci_reference("quay.io/repo:tag1@sha256:aaa")
-
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[],
-            returncode=0,
-            stdout="quay.io/repo:tag1@sha256:aaa\nquay.io/repo:tag2@sha256:bbb\n",
-            stderr="",
-        )
-
-        total, newly_added = orchestrator.fetch_and_store_oci_refs(fetch_script)
-        assert total == 2
-        assert newly_added == 1
-
-    @patch("import_orchestrator.orchestrator.subprocess.run")
-    def test_empty_output_returns_zero(self, mock_run, orchestrator: ImportOrchestrator, tmp_path: Path):
-        fetch_script = tmp_path / "fetch.sh"
-        fetch_script.touch()
-
-        mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
-
-        total, newly_added = orchestrator.fetch_and_store_oci_refs(fetch_script)
-        assert total == 0
-        assert newly_added == 0
-
-    @patch("import_orchestrator.orchestrator.subprocess.run")
-    def test_script_failure_raises(self, mock_run, orchestrator: ImportOrchestrator, tmp_path: Path):
-        fetch_script = tmp_path / "fetch.sh"
-        fetch_script.touch()
-
-        mock_run.side_effect = subprocess.CalledProcessError(1, "fetch", stderr="error")
-
-        with pytest.raises(subprocess.CalledProcessError):
-            orchestrator.fetch_and_store_oci_refs(fetch_script)
-
-
-class TestTriggerImport:
-    @patch("import_orchestrator.orchestrator.subprocess.run")
-    def test_extracts_pipelinerun_name(self, mock_run, orchestrator: ImportOrchestrator):
-        from import_orchestrator.models import OCIReference
-
-        oci_ref = OCIReference(id=1, oci_ref="quay.io/repo:tag@sha256:abc", status=ImportStatus.PENDING)
-
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[],
-            returncode=0,
-            stdout="",
-            stderr="pipelinerun.tekton.dev/pnc-import-12345 created\n",
-        )
-
-        name = orchestrator.trigger_import(oci_ref)
-        assert name == "pnc-import-12345"
-
-    @patch("import_orchestrator.orchestrator.subprocess.run")
-    def test_returns_none_when_name_not_found(self, mock_run, orchestrator: ImportOrchestrator):
-        from import_orchestrator.models import OCIReference
-
-        oci_ref = OCIReference(id=1, oci_ref="quay.io/repo:tag@sha256:abc", status=ImportStatus.PENDING)
-
-        mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="some output", stderr="")
-
-        name = orchestrator.trigger_import(oci_ref)
-        assert name is None
 
 
 class TestUpdatePipelineRunStatuses:
@@ -205,7 +128,7 @@ class TestUpdatePipelineRunStatuses:
 
 
 class TestTriggerNextBatch:
-    @patch("import_orchestrator.orchestrator.subprocess.run")
+    @patch("import_orchestrator.engine.trigger.subprocess.run")
     def test_triggers_up_to_available_slots(self, mock_run, orchestrator: ImportOrchestrator, mock_kube: MagicMock):
         # Add 3 already in-flight imports (simulating running/triggered)
         for i in range(3):
@@ -242,7 +165,7 @@ class TestTriggerNextBatch:
         triggered = orchestrator.trigger_next_batch()
         assert triggered == 0
 
-    @patch("import_orchestrator.orchestrator.subprocess.run")
+    @patch("import_orchestrator.engine.trigger.subprocess.run")
     def test_handles_trigger_failure(self, mock_run, orchestrator: ImportOrchestrator, mock_kube: MagicMock):
         orchestrator.db.add_oci_reference("quay.io/repo:tag@sha256:abc")
 
@@ -290,7 +213,7 @@ class TestIsComplete:
 
 
 class TestRunUntilComplete:
-    @patch("import_orchestrator.orchestrator.subprocess.run")
+    @patch("import_orchestrator.engine.trigger.subprocess.run")
     def test_completes_with_success(self, mock_run, orchestrator: ImportOrchestrator, mock_kube: MagicMock):
         ref, _ = orchestrator.db.add_oci_reference("quay.io/repo:tag@sha256:abc")
         assert ref.id is not None

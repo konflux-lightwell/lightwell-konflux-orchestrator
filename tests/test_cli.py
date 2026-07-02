@@ -153,7 +153,7 @@ class TestMainOrchestrate:
         )
 
         with patch.object(
-            __import__("import_orchestrator.orchestrator", fromlist=["ImportOrchestrator"]).ImportOrchestrator,
+            __import__("import_orchestrator.engine.orchestrator", fromlist=["ImportOrchestrator"]).ImportOrchestrator,
             "run_until_complete",
             return_value=0,
         ):
@@ -179,7 +179,7 @@ class TestMainOrchestrate:
         )
 
         with patch.object(
-            __import__("import_orchestrator.orchestrator", fromlist=["ImportOrchestrator"]).ImportOrchestrator,
+            __import__("import_orchestrator.engine.orchestrator", fromlist=["ImportOrchestrator"]).ImportOrchestrator,
             "run_until_complete",
             return_value=0,
         ):
@@ -206,7 +206,7 @@ class TestMainFetch:
         exit_code = main()
         assert exit_code == 2
 
-    @patch("import_orchestrator.orchestrator.subprocess.run")
+    @patch("import_orchestrator.engine.ingest.subprocess.run")
     def test_fetch_stores_refs_and_returns_0(self, mock_run, monkeypatch, tmp_path: Path):
         fetch_script = tmp_path / "fetch.sh"
         fetch_script.touch()
@@ -233,7 +233,7 @@ class TestMainFetch:
         exit_code = main()
         assert exit_code == 0
 
-    @patch("import_orchestrator.orchestrator.subprocess.run")
+    @patch("import_orchestrator.engine.ingest.subprocess.run")
     def test_fetch_returns_empty_exits_0(self, mock_run, monkeypatch, tmp_path: Path):
         fetch_script = tmp_path / "fetch.sh"
         fetch_script.touch()
