@@ -70,6 +70,6 @@ def _print_summary(result) -> None:
         print(f"Added {result.newly_added} new OCI reference(s) to database", file=sys.stderr)
     else:
         print(
-            f"Read {result.total} OCI reference(s) from file: {result.newly_added} new, {result.duplicates} already in database",
+            f"Read {result.total} OCI reference(s) from file: {result.newly_added} new, {result.duplicates} already in database",  # noqa: E501
             file=sys.stderr,
         )
