@@ -17,29 +17,27 @@ limitations under the License.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
-from pathlib import Path
 
 from import_orchestrator.database import ImportDatabase
 from import_orchestrator.engine import OciIngest
-from import_orchestrator.utils import get_build_definitions_scripts_dir
+from import_orchestrator.quay import QuayClient
 
 
 def register(subparsers: argparse._SubParsersAction) -> None:
     """Register the 'fetch' subcommand with the given subparsers."""
-    scripts_dir = get_build_definitions_scripts_dir()
-
     parser = subparsers.add_parser(
         "fetch",
-        help="Fetch OCI references and store them in the database",
-        description="Fetch OCI references and store them in the database",
+        help="Fetch OCI references from Quay and store them in the database",
+        description="Fetch OCI references from Quay and store them in the database",
     )
 
     parser.add_argument(
-        "--fetch-script",
-        type=Path,
-        default=scripts_dir / "fetch_pnc_oci_references.sh",
-        help="Path to fetch_pnc_oci_references.sh",
+        "--artifact-type",
+        choices=["REBUILD", "REMEDIATED"],
+        default=os.environ.get("LIGHTWELL_ARTIFACT_TYPE", "REBUILD"),
+        help="Artifact type to fetch (default: REBUILD, or LIGHTWELL_ARTIFACT_TYPE env var)",
     )
 
     parser.set_defaults(func=run)
@@ -47,15 +45,17 @@ def register(subparsers: argparse._SubParsersAction) -> None:
 
 def run(args: argparse.Namespace) -> int:
     """Execute the fetch subcommand."""
-    if not args.fetch_script.exists():
-        print(f"ERROR: fetch script not found: {args.fetch_script}", file=sys.stderr)
-        return 2
+    print(f"Fetching OCI references (artifact_type={args.artifact_type})...", file=sys.stderr)
 
-    print("Fetching OCI references...", file=sys.stderr)
+    try:
+        client = QuayClient()
+    except ValueError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 2
 
     with ImportDatabase(args.db) as db:
         ingest = OciIngest(db)
-        result = ingest.from_script(args.fetch_script)
+        result = ingest.from_quay(client, args.artifact_type)
 
         _print_summary(result)
 

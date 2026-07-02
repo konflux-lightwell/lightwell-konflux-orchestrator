@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from import_orchestrator.database import ImportDatabase
+from import_orchestrator.quay import QuayClient
 
 
 @dataclass(frozen=True)
@@ -83,6 +84,22 @@ class OciIngest:
         except subprocess.CalledProcessError as e:
             print(f"ERROR: Fetch script failed: {e.stderr}", file=sys.stderr)
             raise
+
+    def from_quay(self, client: QuayClient, artifact_type: str = "REBUILD") -> IngestResult:
+        """Fetch OCI references from Quay and ingest them into the database.
+
+        Args:
+            client: A configured QuayClient instance.
+            artifact_type: REBUILD or REMEDIATED.
+
+        Returns:
+            IngestResult with counts of total and newly_added references.
+        """
+        refs = client.fetch_oci_references(artifact_type)
+        if not refs:
+            print("WARNING: No OCI references returned from Quay", file=sys.stderr)
+            return IngestResult(total=0, newly_added=0)
+        return self.from_lines(refs)
 
     def from_lines(self, lines: Iterable[str]) -> IngestResult:
         """Ingest OCI references from an iterable of strings.

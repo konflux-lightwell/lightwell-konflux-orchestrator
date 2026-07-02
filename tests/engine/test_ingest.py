@@ -22,6 +22,7 @@ import pytest
 
 from import_orchestrator.database import ImportDatabase
 from import_orchestrator.engine import IngestResult, OciIngest
+from import_orchestrator.quay import QuayClient
 
 
 @pytest.fixture
@@ -198,3 +199,56 @@ class TestFromLines:
 
         assert result.total == 2
         assert result.newly_added == 2
+
+
+class TestFromQuay:
+    """Test the from_quay method."""
+
+    def test_ingests_refs_from_quay(self, ingest: OciIngest):
+        """Verify that OCI references from QuayClient are stored in the database."""
+        mock_client = MagicMock(spec=QuayClient)
+        mock_client.fetch_oci_references.return_value = [
+            "quay.io/ns/repo:lw-build-1@sha256:aaa",
+            "quay.io/ns/repo:lw-build-2@sha256:bbb",
+        ]
+
+        result = ingest.from_quay(mock_client, "REBUILD")
+
+        assert result.total == 2
+        assert result.newly_added == 2
+        mock_client.fetch_oci_references.assert_called_once_with("REBUILD")
+
+    def test_handles_empty_response(self, ingest: OciIngest):
+        """Verify that an empty Quay response returns zero counts."""
+        mock_client = MagicMock(spec=QuayClient)
+        mock_client.fetch_oci_references.return_value = []
+
+        result = ingest.from_quay(mock_client)
+
+        assert result.total == 0
+        assert result.newly_added == 0
+
+    def test_handles_duplicates(self, ingest: OciIngest):
+        """Verify that refs already in the database are counted as duplicates."""
+        ingest.db.add_oci_reference("quay.io/ns/repo:lw-build-1@sha256:aaa")
+
+        mock_client = MagicMock(spec=QuayClient)
+        mock_client.fetch_oci_references.return_value = [
+            "quay.io/ns/repo:lw-build-1@sha256:aaa",
+            "quay.io/ns/repo:lw-build-2@sha256:bbb",
+        ]
+
+        result = ingest.from_quay(mock_client, "REBUILD")
+
+        assert result.total == 2
+        assert result.newly_added == 1
+        assert result.duplicates == 1
+
+    def test_passes_artifact_type(self, ingest: OciIngest):
+        """Verify that artifact_type is forwarded to the client."""
+        mock_client = MagicMock(spec=QuayClient)
+        mock_client.fetch_oci_references.return_value = ["quay.io/ns/repo:lw-x@sha256:abc"]
+
+        ingest.from_quay(mock_client, "REMEDIATED")
+
+        mock_client.fetch_oci_references.assert_called_once_with("REMEDIATED")
