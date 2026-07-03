@@ -14,7 +14,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
-import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
@@ -86,18 +85,18 @@ class TestMakeParser:
 
 
 class TestMakeParserFetch:
-    def test_default_values(self):
+    def test_default_values(self, monkeypatch):
+        monkeypatch.delenv("LIGHTWELL_ARTIFACT_TYPE", raising=False)
         parser = make_parser()
         args = parser.parse_args(["fetch"])
         assert args.db == Path(DEFAULT_DB_PATH)
         assert args.command == "fetch"
-        # fetch_script has a default path derived from project root
-        assert args.fetch_script.name == "fetch_pnc_oci_references.sh"
+        assert args.artifact_type == "REBUILD"
 
-    def test_custom_fetch_script(self):
+    def test_custom_artifact_type(self):
         parser = make_parser()
-        args = parser.parse_args(["fetch", "--fetch-script", "/tmp/my_fetch.sh"])
-        assert args.fetch_script == Path("/tmp/my_fetch.sh")
+        args = parser.parse_args(["fetch", "--artifact-type", "REMEDIATED"])
+        assert args.artifact_type == "REMEDIATED"
 
     def test_custom_db_path(self):
         parser = make_parser()
@@ -191,65 +190,36 @@ class TestMainOrchestrate:
 
 
 class TestMainFetch:
-    def test_missing_fetch_script_returns_2(self, monkeypatch, tmp_path: Path):
+    def test_missing_quay_token_returns_2(self, monkeypatch, tmp_path: Path):
+        monkeypatch.delenv("QUAY_TOKEN", raising=False)
         monkeypatch.setattr(
             "sys.argv",
-            [
-                "prog",
-                "--db",
-                str(tmp_path / "test.db"),
-                "fetch",
-                "--fetch-script",
-                "/nonexistent/fetch.sh",
-            ],
+            ["prog", "--db", str(tmp_path / "test.db"), "fetch"],
         )
         exit_code = main()
         assert exit_code == 2
 
-    @patch("import_orchestrator.engine.ingest.subprocess.run")
-    def test_fetch_stores_refs_and_returns_0(self, mock_run, monkeypatch, tmp_path: Path):
-        fetch_script = tmp_path / "fetch.sh"
-        fetch_script.touch()
-
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[],
-            returncode=0,
-            stdout="quay.io/repo:tag1@sha256:aaa\n",
-            stderr="",
-        )
+    @patch("import_orchestrator.commands.fetch.QuayClient")
+    def test_fetch_stores_refs_and_returns_0(self, mock_client_cls, monkeypatch, tmp_path: Path):
+        mock_client = mock_client_cls.return_value
+        mock_client.fetch_oci_references.return_value = ["quay.io/repo:tag1@sha256:aaa"]
 
         monkeypatch.setattr(
             "sys.argv",
-            [
-                "prog",
-                "--db",
-                str(tmp_path / "test.db"),
-                "fetch",
-                "--fetch-script",
-                str(fetch_script),
-            ],
+            ["prog", "--db", str(tmp_path / "test.db"), "fetch"],
         )
 
         exit_code = main()
         assert exit_code == 0
 
-    @patch("import_orchestrator.engine.ingest.subprocess.run")
-    def test_fetch_returns_empty_exits_0(self, mock_run, monkeypatch, tmp_path: Path):
-        fetch_script = tmp_path / "fetch.sh"
-        fetch_script.touch()
-
-        mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+    @patch("import_orchestrator.commands.fetch.QuayClient")
+    def test_fetch_returns_empty_exits_0(self, mock_client_cls, monkeypatch, tmp_path: Path):
+        mock_client = mock_client_cls.return_value
+        mock_client.fetch_oci_references.return_value = []
 
         monkeypatch.setattr(
             "sys.argv",
-            [
-                "prog",
-                "--db",
-                str(tmp_path / "test.db"),
-                "fetch",
-                "--fetch-script",
-                str(fetch_script),
-            ],
+            ["prog", "--db", str(tmp_path / "test.db"), "fetch"],
         )
 
         exit_code = main()
