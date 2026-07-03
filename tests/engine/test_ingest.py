@@ -20,9 +20,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from import_orchestrator.clients import QuayClient
 from import_orchestrator.database import ImportDatabase
 from import_orchestrator.engine import IngestResult, OciIngest
-from import_orchestrator.quay import QuayClient
 
 
 @pytest.fixture

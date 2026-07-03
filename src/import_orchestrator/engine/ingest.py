@@ -22,8 +22,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
+from import_orchestrator.clients import QuayClient
 from import_orchestrator.database import ImportDatabase
-from import_orchestrator.quay import QuayClient
 
 
 @dataclass(frozen=True)

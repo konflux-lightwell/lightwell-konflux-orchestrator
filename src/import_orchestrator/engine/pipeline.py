@@ -19,8 +19,8 @@ from __future__ import annotations
 import sys
 from datetime import datetime
 
+from import_orchestrator.clients import KubeClient
 from import_orchestrator.database import ImportDatabase
-from import_orchestrator.kube import KubeClient
 from import_orchestrator.models import ImportStatus
 from import_orchestrator.utils import extract_tag
 

@@ -14,6 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
+from import_orchestrator.clients import KubeClient
 from import_orchestrator.database import ImportDatabase
 from import_orchestrator.engine import (
     ImportOrchestrator,
@@ -23,7 +24,6 @@ from import_orchestrator.engine import (
     PipelineMonitor,
     ReleaseMonitor,
 )
-from import_orchestrator.kube import KubeClient
 from import_orchestrator.models import ImportStatus, OCIReference, PipelineRunStatus
 
 __version__ = "0.1.0"

@@ -18,7 +18,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from import_orchestrator.quay import QuayClient
+from import_orchestrator.clients import QuayClient
 
 
 def _make_response(tags, status_code=200):
@@ -106,7 +106,7 @@ class TestFetchOciReferences:
     def client(self):
         return QuayClient(token="test-token")
 
-    @patch("import_orchestrator.quay.requests.get")
+    @patch("import_orchestrator.clients.quay.requests.get")
     def test_single_page(self, mock_get, client):
         tags = [_make_tag("lw-build-1", "sha256:aaa"), _make_tag("lw-build-2", "sha256:bbb")]
         mock_get.return_value = _make_response(tags)
@@ -119,7 +119,7 @@ class TestFetchOciReferences:
         ]
         mock_get.assert_called_once()
 
-    @patch("import_orchestrator.quay.requests.get")
+    @patch("import_orchestrator.clients.quay.requests.get")
     def test_pagination(self, mock_get, client):
         page1_tags = [_make_tag(f"lw-build-{i}", f"sha256:{i:03d}") for i in range(100)]
         page2_tags = [_make_tag("lw-build-100", "sha256:100")]
@@ -131,7 +131,7 @@ class TestFetchOciReferences:
         assert len(refs) == 101
         assert mock_get.call_count == 2
 
-    @patch("import_orchestrator.quay.requests.get")
+    @patch("import_orchestrator.clients.quay.requests.get")
     def test_filters_non_lw_tags(self, mock_get, client):
         tags = [
             _make_tag("lw-build-1", "sha256:aaa"),
@@ -146,7 +146,7 @@ class TestFetchOciReferences:
         assert len(refs) == 2
         assert all("lw-" in ref for ref in refs)
 
-    @patch("import_orchestrator.quay.requests.get")
+    @patch("import_orchestrator.clients.quay.requests.get")
     def test_filters_tags_without_digest(self, mock_get, client):
         tags = [
             _make_tag("lw-build-1", "sha256:aaa"),
@@ -159,7 +159,7 @@ class TestFetchOciReferences:
 
         assert refs == ["quay.io/light-castle/rebuild-pnc:lw-build-1@sha256:aaa"]
 
-    @patch("import_orchestrator.quay.requests.get")
+    @patch("import_orchestrator.clients.quay.requests.get")
     def test_deduplicates(self, mock_get, client):
         tags = [
             _make_tag("lw-build-1", "sha256:aaa"),
@@ -171,7 +171,7 @@ class TestFetchOciReferences:
 
         assert refs == ["quay.io/light-castle/rebuild-pnc:lw-build-1@sha256:aaa"]
 
-    @patch("import_orchestrator.quay.requests.get")
+    @patch("import_orchestrator.clients.quay.requests.get")
     def test_sorted_output(self, mock_get, client):
         tags = [
             _make_tag("lw-build-c", "sha256:ccc"),
@@ -184,7 +184,7 @@ class TestFetchOciReferences:
 
         assert refs == sorted(refs)
 
-    @patch("import_orchestrator.quay.requests.get")
+    @patch("import_orchestrator.clients.quay.requests.get")
     def test_remediated_uses_correct_repo(self, mock_get, client):
         tags = [_make_tag("lw-build-1", "sha256:aaa")]
         mock_get.return_value = _make_response(tags)
@@ -199,7 +199,7 @@ class TestFetchOciReferences:
         with pytest.raises(ValueError, match="artifact_type must be one of"):
             client.fetch_oci_references("INVALID")
 
-    @patch("import_orchestrator.quay.requests.get")
+    @patch("import_orchestrator.clients.quay.requests.get")
     def test_empty_response(self, mock_get, client):
         mock_get.return_value = _make_response([])
 
@@ -207,7 +207,7 @@ class TestFetchOciReferences:
 
         assert refs == []
 
-    @patch("import_orchestrator.quay.requests.get")
+    @patch("import_orchestrator.clients.quay.requests.get")
     def test_passes_timeout_to_request(self, mock_get):
         client = QuayClient(token="t", timeout=30)
         mock_get.return_value = _make_response([_make_tag("lw-x", "sha256:abc")])
@@ -217,7 +217,7 @@ class TestFetchOciReferences:
         _, kwargs = mock_get.call_args
         assert kwargs["timeout"] == 30
 
-    @patch("import_orchestrator.quay.requests.get")
+    @patch("import_orchestrator.clients.quay.requests.get")
     def test_passes_default_timeout_to_request(self, mock_get):
         client = QuayClient(token="t")
         mock_get.return_value = _make_response([_make_tag("lw-x", "sha256:abc")])
@@ -227,7 +227,7 @@ class TestFetchOciReferences:
         _, kwargs = mock_get.call_args
         assert kwargs["timeout"] == 30
 
-    @patch("import_orchestrator.quay.requests.get")
+    @patch("import_orchestrator.clients.quay.requests.get")
     def test_strips_https_from_host(self, mock_get):
         client = QuayClient(token="t", host="https://my-quay.example.com")
         mock_get.return_value = _make_response([_make_tag("lw-x", "sha256:abc")])
