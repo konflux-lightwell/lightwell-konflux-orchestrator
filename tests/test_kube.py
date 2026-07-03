@@ -19,7 +19,7 @@ from unittest.mock import patch
 
 import pytest
 
-from import_orchestrator.kube import KubeClient
+from import_orchestrator.clients import KubeClient
 
 
 @pytest.fixture
@@ -51,7 +51,7 @@ class TestKubeClientInit:
 
 
 class TestGetRunningPipelineRuns:
-    @patch("import_orchestrator.kube.subprocess.run")
+    @patch("import_orchestrator.clients.kube.subprocess.run")
     def test_returns_only_running(self, mock_run, kube: KubeClient):
         mock_run.return_value = subprocess.CompletedProcess(
             args=[],
@@ -65,21 +65,21 @@ class TestGetRunningPipelineRuns:
         assert result[0].name == "pr-1"
         assert result[1].name == "pr-4"
 
-    @patch("import_orchestrator.kube.subprocess.run")
+    @patch("import_orchestrator.clients.kube.subprocess.run")
     def test_returns_empty_on_error(self, mock_run, kube: KubeClient):
         mock_run.side_effect = subprocess.CalledProcessError(1, "kubectl", stderr="connection refused")
 
         result = kube.get_running_pipelineruns()
         assert result == []
 
-    @patch("import_orchestrator.kube.subprocess.run")
+    @patch("import_orchestrator.clients.kube.subprocess.run")
     def test_handles_empty_output(self, mock_run, kube: KubeClient):
         mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
         result = kube.get_running_pipelineruns()
         assert result == []
 
-    @patch("import_orchestrator.kube.subprocess.run")
+    @patch("import_orchestrator.clients.kube.subprocess.run")
     def test_skips_malformed_lines(self, mock_run, kube: KubeClient):
         mock_run.return_value = subprocess.CompletedProcess(
             args=[],
@@ -94,7 +94,7 @@ class TestGetRunningPipelineRuns:
 
 
 class TestGetPipelineRunStatus:
-    @patch("import_orchestrator.kube.subprocess.run")
+    @patch("import_orchestrator.clients.kube.subprocess.run")
     def test_returns_status(self, mock_run, kube: KubeClient):
         mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="True", stderr="")
 
@@ -103,14 +103,14 @@ class TestGetPipelineRunStatus:
         assert result.name == "my-pr"
         assert result.is_successful is True
 
-    @patch("import_orchestrator.kube.subprocess.run")
+    @patch("import_orchestrator.clients.kube.subprocess.run")
     def test_returns_none_on_error(self, mock_run, kube: KubeClient):
         mock_run.side_effect = subprocess.CalledProcessError(1, "kubectl")
 
         result = kube.get_pipelinerun_status("missing-pr")
         assert result is None
 
-    @patch("import_orchestrator.kube.subprocess.run")
+    @patch("import_orchestrator.clients.kube.subprocess.run")
     def test_returns_none_for_unknown_status_string(self, mock_run, kube: KubeClient):
         mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
@@ -119,7 +119,7 @@ class TestGetPipelineRunStatus:
 
 
 class TestCountRunningImports:
-    @patch("import_orchestrator.kube.subprocess.run")
+    @patch("import_orchestrator.clients.kube.subprocess.run")
     def test_counts_only_pnc_import_prefix(self, mock_run, kube: KubeClient):
         mock_run.return_value = subprocess.CompletedProcess(
             args=[],

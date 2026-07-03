@@ -20,9 +20,9 @@ import argparse
 import os
 import sys
 
+from import_orchestrator.clients import QuayClient
 from import_orchestrator.database import ImportDatabase
 from import_orchestrator.engine import OciIngest
-from import_orchestrator.quay import QuayClient
 
 
 def register(subparsers: argparse._SubParsersAction) -> None:

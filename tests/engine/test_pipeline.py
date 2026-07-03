@@ -19,9 +19,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from import_orchestrator.clients import KubeClient
 from import_orchestrator.database import ImportDatabase
 from import_orchestrator.engine import PipelineMonitor
-from import_orchestrator.kube import KubeClient
 from import_orchestrator.models import ImportStatus, PipelineRunStatus
 
 
