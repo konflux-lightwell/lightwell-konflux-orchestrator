@@ -1,0 +1,296 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  annotations:
+    tekton.dev/pipelines.minVersion: 0.12.1
+    tekton.dev/tags: image-build, konflux
+  labels:
+    app.kubernetes.io/version: "0.1"
+    build.appstudio.redhat.com/build_type: oci-verify-import
+  name: oci-verify-import
+spec:
+  description: >-
+    Verify the cosign signature on an externally-built OCI artifact and mirror it
+    to the target registry, carrying the signature, SBOM, and attestation intact.
+    Source image must be digest-pinned. Git source coordinates are extracted from
+    the attached SLSA attestation for Tekton Chains provenance generation.
+    The inner CycloneDX SBOM is attached directly for Conforma compatibility, and
+    the build sources are exposed as a trusted artifact for downstream SAST scans.
+  params:
+    - name: SOURCE_IMAGE
+      description: >-
+        Source OCI artifact reference. Must be digest-pinned (contain @sha256:)
+        to guarantee the verified artifact is what gets mirrored.
+      type: string
+    - name: IMAGE
+      description: >-
+        Destination image reference where the artifact will be mirrored.
+      type: string
+    - name: ociStorage
+      description: >-
+        OCI reference for the source trusted artifact. Use a distinct tag suffix
+        to avoid overwriting the mirrored image, e.g. IMAGE.src — following the
+        same convention as other oci-ta pipelines.
+      type: string
+    - name: ociArtifactExpiresAfter
+      description: Expiration date for the trusted artifact. Empty string means no expiry.
+      type: string
+      default: ""
+    - name: caTrustConfigMapName
+      description: The name of the ConfigMap to read CA bundle data from.
+      type: string
+      default: trusted-ca
+    - name: caTrustConfigMapKey
+      description: The name of the key in the ConfigMap that contains the CA bundle data.
+      type: string
+      default: ca-bundle.crt
+  results:
+    - name: IMAGE_DIGEST
+      description: Digest of the mirrored artifact.
+    - name: IMAGE_URL
+      description: Repository where the artifact was mirrored.
+    - name: IMAGE_REF
+      description: Image reference of the mirrored artifact (repo@digest).
+    - name: SBOM_BLOB_URL
+      description: Link to the SBOM blob in the target registry.
+    - name: CHAINS-GIT_URL
+      description: Source repository URL extracted from the PNC SLSA attestation.
+    - name: CHAINS-GIT_COMMIT
+      description: Source commit extracted from the PNC SLSA attestation.
+    - name: SOURCE_ARTIFACT
+      description: The Trusted Artifact URI pointing to the build source tree.
+  stepTemplate:
+    env:
+      - name: SOURCE_IMAGE
+        value: $(params.SOURCE_IMAGE)
+      - name: IMAGE
+        value: $(params.IMAGE)
+    volumeMounts:
+      - mountPath: /mnt/trusted-ca
+        name: trusted-ca
+        readOnly: true
+  steps:
+    - name: verify
+      image: quay.io/konflux-ci/task-runner:2.0.0@sha256:4b01fbf98fa7155f5c21443c285f88853864ae7cc66981cf6b543fc6ba16b81b
+      computeResources:
+        limits:
+          memory: 256Mi
+        requests:
+          cpu: 100m
+          memory: 256Mi
+      script: |
+        #!/bin/bash
+        set -euo pipefail
+
+        ca_bundle=/mnt/trusted-ca/ca-bundle.crt
+        if [ -f "$ca_bundle" ]; then
+          export SSL_CERT_FILE="$ca_bundle"
+        fi
+
+        if [[ "$SOURCE_IMAGE" != *@sha256:* ]]; then
+          echo "ERROR: SOURCE_IMAGE must be digest-pinned (contain @sha256:)" >&2
+          exit 1
+        fi
+
+        printf '%s\n' \
+          '-----BEGIN PUBLIC KEY-----' \
+          'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEYFyYXLNpOXF46lNdwKgOthCsOZ0W' \
+          '5Uc29eO5IQzw2PKVkdpb781AZ/sUh7dSpe3hjjTu2brbjtOH1FWhO2Mmrg==' \
+          '-----END PUBLIC KEY-----' \
+          > /tmp/cosign.pub
+
+        mkdir -p /tmp/auth
+        select-oci-auth "$SOURCE_IMAGE" > /tmp/auth/config.json
+        export DOCKER_CONFIG=/tmp/auth
+
+        # Try OCI referrer signatures first (cosign v2+ IEEE_P1363 encoding via --experimental-oci11).
+        # Fall back to tag-based (.sig tag) for images signed with cosign v1 (ASN.1 DER encoding).
+        if cosign verify --key /tmp/cosign.pub --insecure-ignore-tlog=true \
+              --experimental-oci11=true "$SOURCE_IMAGE" 2>/tmp/verify-oci11.log; then
+          echo "Signature verified (OCI referrer)"
+        elif cosign verify --key /tmp/cosign.pub --insecure-ignore-tlog=true \
+              "$SOURCE_IMAGE" 2>/tmp/verify-tag.log; then
+          echo "Signature verified (tag-based)"
+        else
+          echo "ERROR: could not verify signature via OCI referrer or tag-based lookup" >&2
+          echo "--- OCI referrer error ---" >&2
+          cat /tmp/verify-oci11.log >&2
+          echo "--- tag-based error ---" >&2
+          cat /tmp/verify-tag.log >&2
+          exit 12
+        fi
+    - name: mirror
+      image: quay.io/konflux-ci/task-runner:2.0.0@sha256:4b01fbf98fa7155f5c21443c285f88853864ae7cc66981cf6b543fc6ba16b81b
+      computeResources:
+        limits:
+          memory: 512Mi
+        requests:
+          cpu: 100m
+          memory: 512Mi
+      script: |
+        #!/bin/bash
+        set -euo pipefail
+
+        ca_bundle=/mnt/trusted-ca/ca-bundle.crt
+        if [ -f "$ca_bundle" ]; then
+          export SSL_CERT_FILE="$ca_bundle"
+        fi
+
+        # Tekton injects all SA credentials into $HOME/.docker/config.json;
+        # use it directly so cosign copy has access to both source and destination
+        # credentials without the select-oci-auth merge overwriting one with the other.
+        export DOCKER_CONFIG="$HOME/.docker"
+
+        # --force ensures referrers (sig/sbom/att) are copied even if destination exists
+        cosign copy --force "$SOURCE_IMAGE" "$IMAGE"
+        echo "Mirrored $SOURCE_IMAGE -> $IMAGE"
+    - name: results
+      image: quay.io/konflux-ci/task-runner:2.0.0@sha256:4b01fbf98fa7155f5c21443c285f88853864ae7cc66981cf6b543fc6ba16b81b
+      computeResources:
+        limits:
+          memory: 512Mi
+        requests:
+          cpu: 100m
+          memory: 512Mi
+      volumeMounts:
+        - mountPath: /var/workdir
+          name: workdir
+      script: |
+        #!/bin/bash
+        set -euo pipefail
+
+        ca_bundle=/mnt/trusted-ca/ca-bundle.crt
+        if [ -f "$ca_bundle" ]; then
+          export SSL_CERT_FILE="$ca_bundle"
+        fi
+
+        export DOCKER_CONFIG="$HOME/.docker"
+
+        # cosign copy preserves manifest content, so source and destination digests match
+        SOURCE_DIGEST="${SOURCE_IMAGE##*@}"
+        SOURCE_DIGEST_HEX="${SOURCE_DIGEST#sha256:}"
+        DEST_REPO="${IMAGE%%:*}"
+        DEST_REPO="${DEST_REPO%%@*}"
+
+        echo -n "$IMAGE" | tee "$(results.IMAGE_URL.path)"
+        echo -n "$SOURCE_DIGEST" | tee "$(results.IMAGE_DIGEST.path)"
+        echo -n "${DEST_REPO}@${SOURCE_DIGEST}" | tee "$(results.IMAGE_REF.path)"
+
+        # Download the source artifact to extract inner SBOM and sources.
+        # skopeo does not support tag+digest refs; use digest-only.
+        SOURCE_DIGEST_REF="${SOURCE_IMAGE%%:*}@${SOURCE_DIGEST}"
+        skopeo copy --override-os linux "docker://$SOURCE_DIGEST_REF" oci:/tmp/source-oci:artifact
+        MANIFEST_DIGEST=$(jq -r '.manifests[0].digest | ltrimstr("sha256:")' /tmp/source-oci/index.json)
+        LAYER_DIGEST=$(jq -r '.layers[0].digest | ltrimstr("sha256:")' \
+          "/tmp/source-oci/blobs/sha256/$MANIFEST_DIGEST")
+
+        # Extract inner CycloneDX SBOM. Newer PNC artifacts embed it in the OCI layer;
+        # older ones attach it as a Sigstore bundle attestation. Try both.
+        mkdir -p /var/workdir/sbom
+        if unzip -p "/tmp/source-oci/blobs/sha256/$LAYER_DIGEST" \
+              build-output/cyclonedx.json > /var/workdir/sbom/cyclonedx.json 2>/dev/null \
+            && [ -s /var/workdir/sbom/cyclonedx.json ]; then
+          echo "Extracted CycloneDX SBOM from OCI layer"
+        else
+          echo "CycloneDX SBOM not in OCI layer, checking attestations..."
+          while IFS= read -r envelope; do
+            predtype=$(echo "$envelope" \
+              | jq -r '(.dsseEnvelope.payload // .payload) | @base64d | fromjson | .predicateType' \
+              2>/dev/null)
+            if [[ "$predtype" == "https://cyclonedx.org/bom" ]]; then
+              echo "$envelope" \
+                | jq -r '(.dsseEnvelope.payload // .payload) | @base64d | fromjson | .predicate'
+              break
+            fi
+          done < <(cosign download attestation "$SOURCE_IMAGE" 2>/tmp/cosign-att.log) \
+            > /var/workdir/sbom/cyclonedx.json
+          if [ -s /tmp/cosign-att.log ]; then
+            echo "cosign download attestation stderr:" >&2
+            cat /tmp/cosign-att.log >&2
+          fi
+          if [ -s /var/workdir/sbom/cyclonedx.json ]; then
+            echo "Extracted CycloneDX SBOM from attestation"
+          else
+            echo "WARNING: no CycloneDX SBOM found; skipping SBOM attachment" >&2
+          fi
+        fi
+
+        select-oci-auth "$IMAGE" > /tmp/dst-auth.json
+        mkdir -p /tmp/dst-auth && cp /tmp/dst-auth.json /tmp/dst-auth/config.json
+        if [ -s /var/workdir/sbom/cyclonedx.json ]; then
+          DOCKER_CONFIG=/tmp/dst-auth retry cosign attach sbom \
+            --sbom /var/workdir/sbom/cyclonedx.json \
+            --type cyclonedx \
+            "${DEST_REPO}@${SOURCE_DIGEST}"
+          sbom_digest=$(sha256sum /var/workdir/sbom/cyclonedx.json | cut -d' ' -f1)
+          echo -n "${DEST_REPO}@sha256:${sbom_digest}" | tee "$(results.SBOM_BLOB_URL.path)"
+        else
+          echo -n "" | tee "$(results.SBOM_BLOB_URL.path)"
+        fi
+
+        # Extract sources.tar.gz and unpack for the trusted artifact step
+        mkdir -p /var/workdir/source
+        unzip -p "/tmp/source-oci/blobs/sha256/$LAYER_DIGEST" \
+          build-output/sources/sources.tar.gz \
+          | tar -xzf - -C /var/workdir/source/ --strip-components=1
+
+        # Extract git source coordinates from the PNC SLSA attestation.
+        # Handles both old DSSE envelope (.payload) and Sigstore bundle v0.3
+        # (.dsseEnvelope.payload) using jq's // fallback operator.
+        ATT_PAYLOAD=""
+        while IFS= read -r envelope; do
+          decoded=$(echo "$envelope" \
+            | jq -r '(.dsseEnvelope.payload // .payload) | @base64d' 2>/dev/null)
+          if echo "$decoded" \
+              | jq -e '.predicateType == "https://slsa.dev/provenance/v1"' >/dev/null 2>&1; then
+            ATT_PAYLOAD="$decoded"
+            break
+          fi
+        done < <(cosign download attestation "$SOURCE_IMAGE" 2>/dev/null)
+
+        if [ -z "$ATT_PAYLOAD" ]; then
+          echo "ERROR: SLSA provenance v1 attestation not found on $SOURCE_IMAGE" >&2
+          exit 1
+        fi
+
+        CHAINS_GIT_URL=$(echo "$ATT_PAYLOAD" \
+          | jq -r '.predicate.buildDefinition.externalParameters.repository.uri')
+        CHAINS_GIT_COMMIT=$(echo "$ATT_PAYLOAD" \
+          | jq -r '.predicate.buildDefinition.resolvedDependencies[]
+                   | select(.name == "repository") | .digest.gitCommit' \
+          | head -1)
+        echo -n "$CHAINS_GIT_URL" | tee "$(results.CHAINS-GIT_URL.path)"
+        echo -n "$CHAINS_GIT_COMMIT" | tee "$(results.CHAINS-GIT_COMMIT.path)"
+    - name: store-source-artifact
+      image: quay.io/konflux-ci/build-trusted-artifacts:latest@sha256:9bd32f6bafb517b309e11a2d89365052b4ab3f1c9c23c4ffd45aff6f03960476
+      env:
+        - name: IMAGE_EXPIRES_AFTER
+          value: $(params.ociArtifactExpiresAfter)
+      computeResources:
+        limits:
+          memory: 3Gi
+        requests:
+          cpu: "1"
+          memory: 3Gi
+      volumeMounts:
+        - mountPath: /var/workdir
+          name: workdir
+        - mountPath: /etc/pki/tls/certs/ca-custom-bundle.crt
+          name: trusted-ca
+          readOnly: true
+          subPath: ca-bundle.crt
+      args:
+        - create
+        - --store
+        - $(params.ociStorage)
+        - $(results.SOURCE_ARTIFACT.path)=/var/workdir/source
+  volumes:
+    - configMap:
+        items:
+          - key: $(params.caTrustConfigMapKey)
+            path: ca-bundle.crt
+        name: $(params.caTrustConfigMapName)
+        optional: true
+      name: trusted-ca
+    - emptyDir: {}
+      name: workdir
