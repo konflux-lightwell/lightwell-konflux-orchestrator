@@ -132,6 +132,8 @@ import-orchestrator orchestrate [OPTIONS]
 | `QUAY_TOKEN` | Yes (for `fetch`) | Authentication token for Quay.io API |
 | `KONFLUX_TOKEN` or `KUBECONFIG` | Yes (for `orchestrate`) | Kubectl authentication |
 | `LIGHTWELL_ARTIFACT_TYPE` | No | `REBUILD` (default) or `REMEDIATED` |
+| `TEKTON_PIPELINE_DIR` | No | Path to directory containing Tekton pipeline definitions (defaults to `tekton/` in repository root) |
+| `TASK_BUNDLE_PULLSPEC` | No | Override for oci-verify-import task bundle (defaults to resolving floating tag via skopeo) |
 
 ### Operation Flow
 

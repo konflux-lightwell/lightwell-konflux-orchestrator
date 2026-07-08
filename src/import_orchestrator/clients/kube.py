@@ -240,6 +240,26 @@ class KubeClient:
             print(f"ERROR: Failed to create release for {snapshot_name}: {e.stderr}", file=sys.stderr)
             return None
 
+    def create_pipelinerun(self, manifest_yaml: str) -> str | None:
+        """Create a PipelineRun from a YAML manifest and return its generated name.
+
+        Returns None if the PipelineRun name could not be parsed from kubectl output.
+        """
+        try:
+            result = subprocess.run(
+                ["kubectl", *self._kubectl_base_args, "create", "-f", "-"],
+                input=manifest_yaml,
+                capture_output=True,
+                check=True,
+                text=True,
+            )
+            output = result.stdout + result.stderr
+            match = re.search(r"pipelinerun\.tekton\.dev/(\S+)\s+created", output)
+            return match.group(1) if match else None
+        except subprocess.CalledProcessError as e:
+            print(f"ERROR: Failed to create PipelineRun: {e.stderr}", file=sys.stderr)
+            return None
+
     def find_release_for_snapshot(self, snapshot_name: str) -> str | None:
         """Find an active (non-terminally-failed) Release for the given snapshot."""
         try:

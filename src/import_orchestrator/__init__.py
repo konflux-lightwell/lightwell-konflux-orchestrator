@@ -22,7 +22,9 @@ from import_orchestrator.engine import (
     IngestResult,
     OciIngest,
     PipelineMonitor,
+    PipelineRunBuilder,
     ReleaseMonitor,
+    TriggerError,
 )
 from import_orchestrator.models import ImportStatus, OCIReference, PipelineRunStatus
 
@@ -38,6 +40,8 @@ __all__ = [
     "OCIReference",
     "OciIngest",
     "PipelineMonitor",
+    "PipelineRunBuilder",
     "PipelineRunStatus",
     "ReleaseMonitor",
+    "TriggerError",
 ]

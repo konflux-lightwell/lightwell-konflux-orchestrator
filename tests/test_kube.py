@@ -129,3 +129,113 @@ class TestCountRunningImports:
         )
 
         assert kube.count_running_imports() == 2
+
+
+class TestCreatePipelinerun:
+    """Test the create_pipelinerun method."""
+
+    @patch("import_orchestrator.clients.kube.subprocess.run")
+    def test_returns_generated_name(self, mock_run, kube: KubeClient):
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout="pipelinerun.tekton.dev/pnc-import-abcde created\n",
+            stderr="",
+        )
+
+        result = kube.create_pipelinerun("apiVersion: tekton.dev/v1\nkind: PipelineRun\n")
+        assert result == "pnc-import-abcde"
+
+    @patch("import_orchestrator.clients.kube.subprocess.run")
+    def test_passes_manifest_as_stdin(self, mock_run, kube: KubeClient):
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout="pipelinerun.tekton.dev/pnc-import-xyz created\n",
+            stderr="",
+        )
+
+        manifest = "apiVersion: tekton.dev/v1\nkind: PipelineRun\n"
+        kube.create_pipelinerun(manifest)
+
+        call_kwargs = mock_run.call_args
+        assert call_kwargs[1]["input"] == manifest
+
+    @patch("import_orchestrator.clients.kube.subprocess.run")
+    def test_uses_kubectl_create_with_stdin(self, mock_run, kube: KubeClient):
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout="pipelinerun.tekton.dev/pnc-import-xyz created\n",
+            stderr="",
+        )
+
+        kube.create_pipelinerun("manifest")
+
+        cmd = mock_run.call_args[0][0]
+        assert cmd[0] == "kubectl"
+        assert "create" in cmd
+        assert "-f" in cmd
+        assert "-" in cmd
+
+    @patch("import_orchestrator.clients.kube.subprocess.run")
+    def test_returns_none_on_subprocess_error(self, mock_run, kube: KubeClient):
+        error = subprocess.CalledProcessError(1, "kubectl")
+        error.stderr = "forbidden"
+        mock_run.side_effect = error
+
+        result = kube.create_pipelinerun("manifest")
+        assert result is None
+
+    @patch("import_orchestrator.clients.kube.subprocess.run")
+    def test_returns_none_when_name_not_parseable(self, mock_run, kube: KubeClient):
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout="some unexpected output\n",
+            stderr="",
+        )
+
+        result = kube.create_pipelinerun("manifest")
+        assert result is None
+
+    @patch("import_orchestrator.clients.kube.subprocess.run")
+    def test_parses_name_from_stderr(self, mock_run, kube: KubeClient):
+        """kubectl sometimes writes the 'created' line to stderr."""
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout="",
+            stderr="pipelinerun.tekton.dev/pnc-import-stderr created\n",
+        )
+
+        result = kube.create_pipelinerun("manifest")
+        assert result == "pnc-import-stderr"
+
+    @patch("import_orchestrator.clients.kube.subprocess.run")
+    def test_includes_namespace_args(self, mock_run, kube: KubeClient):
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout="pipelinerun.tekton.dev/pnc-import-ns created\n",
+            stderr="",
+        )
+
+        kube.create_pipelinerun("manifest")
+        cmd = mock_run.call_args[0][0]
+        assert "-n" in cmd
+        assert "test-ns" in cmd
+
+    @patch("import_orchestrator.clients.kube.subprocess.run")
+    def test_includes_token_args_when_set(self, mock_run, kube_with_token: KubeClient):
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout="pipelinerun.tekton.dev/pnc-import-tok created\n",
+            stderr="",
+        )
+
+        kube_with_token.create_pipelinerun("manifest")
+        cmd = mock_run.call_args[0][0]
+        assert "--token" in cmd
+        assert "test-token-123" in cmd

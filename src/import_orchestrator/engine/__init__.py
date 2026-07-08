@@ -17,6 +17,7 @@ limitations under the License.
 from import_orchestrator.engine.ingest import IngestResult, OciIngest
 from import_orchestrator.engine.orchestrator import ImportOrchestrator
 from import_orchestrator.engine.pipeline import PipelineMonitor
+from import_orchestrator.engine.pipelinerun import PipelineRunBuilder, TriggerError
 from import_orchestrator.engine.release import ReleaseMonitor
 from import_orchestrator.engine.trigger import ImportTrigger
 
@@ -26,5 +27,7 @@ __all__ = [
     "IngestResult",
     "OciIngest",
     "PipelineMonitor",
+    "PipelineRunBuilder",
     "ReleaseMonitor",
+    "TriggerError",
 ]
