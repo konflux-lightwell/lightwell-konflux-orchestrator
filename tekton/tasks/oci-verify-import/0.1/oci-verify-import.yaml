@@ -106,7 +106,7 @@ spec:
         fi
 
         key_file=/mnt/verification-public-key/cosign.pub
-        key_count=$(grep -c '-----BEGIN PUBLIC KEY-----' "$key_file" || true)
+        key_count=$(grep -cF -- '-----BEGIN PUBLIC KEY-----' "$key_file" || true)
         if [ "$key_count" -ne 1 ]; then
           echo "ERROR: secret must contain exactly one public key, found ${key_count}" >&2
           exit 1
