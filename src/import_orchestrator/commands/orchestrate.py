@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-from pathlib import Path
 
 from import_orchestrator.clients import KubeClient
 from import_orchestrator.constants import (
@@ -30,24 +29,15 @@ from import_orchestrator.constants import (
 )
 from import_orchestrator.database import ImportDatabase
 from import_orchestrator.engine import ImportOrchestrator, ImportTrigger, PipelineMonitor, ReleaseMonitor
-from import_orchestrator.utils import get_build_definitions_scripts_dir
+from import_orchestrator.engine.pipelinerun import PipelineRunBuilder
 
 
 def register(subparsers: argparse._SubParsersAction) -> None:
     """Register the 'orchestrate' subcommand with the given subparsers."""
-    scripts_dir = get_build_definitions_scripts_dir()
-
     parser = subparsers.add_parser(
         "orchestrate",
         help="Orchestrate batch PNC import PipelineRuns",
         description="Orchestrate batch PNC import PipelineRuns",
-    )
-
-    parser.add_argument(
-        "--trigger-script",
-        type=Path,
-        default=scripts_dir / "trigger-pnc-import.sh",
-        help="Path to trigger-pnc-import.sh",
     )
 
     parser.add_argument(
@@ -74,15 +64,6 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     parser.set_defaults(func=run)
 
 
-def _validate_trigger_script(args: argparse.Namespace) -> int | None:
-    """Validate that the trigger script exists. Returns an exit code on failure, None on success."""
-    if not args.trigger_script.exists():
-        print(f"ERROR: trigger script not found: {args.trigger_script}", file=sys.stderr)
-        return 2
-
-    return None
-
-
 def _is_database_empty(db: ImportDatabase) -> bool:
     """Check whether the database has any OCI references at all."""
     stats = db.get_statistics()
@@ -91,10 +72,6 @@ def _is_database_empty(db: ImportDatabase) -> bool:
 
 def run(args: argparse.Namespace) -> int:
     """Execute the orchestrate subcommand."""
-    validation_error = _validate_trigger_script(args)
-    if validation_error is not None:
-        return validation_error
-
     with ImportDatabase(args.db) as db:
         if _is_database_empty(db):
             print(
@@ -103,11 +80,12 @@ def run(args: argparse.Namespace) -> int:
             )
 
         kube = KubeClient(NAMESPACE, CLUSTER_API)
+        builder = PipelineRunBuilder(kube=kube, artifact_type="REBUILD")
 
         # Construct the specialized components
         trigger = ImportTrigger(
             db=db,
-            trigger_script=args.trigger_script,
+            builder=builder,
             max_parallel=args.max_parallel,
             max_retries=args.max_retries,
         )

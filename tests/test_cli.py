@@ -117,26 +117,9 @@ class TestMain:
 
 
 class TestMainOrchestrate:
-    def test_missing_trigger_script_returns_2(self, monkeypatch, tmp_path: Path):
-        monkeypatch.setattr(
-            "sys.argv",
-            [
-                "prog",
-                "--db",
-                str(tmp_path / "test.db"),
-                "orchestrate",
-                "--trigger-script",
-                "/nonexistent/trigger.sh",
-            ],
-        )
-        exit_code = main()
-        assert exit_code == 2
-
     def test_reset_deletes_existing_db(self, monkeypatch, tmp_path: Path):
         db_path = tmp_path / "test.db"
         db_path.write_text("dummy data")
-        trigger_script = tmp_path / "trigger.sh"
-        trigger_script.touch()
 
         monkeypatch.setattr(
             "sys.argv",
@@ -146,8 +129,6 @@ class TestMainOrchestrate:
                 str(db_path),
                 "--reset",
                 "orchestrate",
-                "--trigger-script",
-                str(trigger_script),
             ],
         )
 
@@ -162,9 +143,6 @@ class TestMainOrchestrate:
         assert db_path.exists()
 
     def test_empty_database_prints_warning(self, monkeypatch, tmp_path: Path, capsys):
-        trigger_script = tmp_path / "trigger.sh"
-        trigger_script.touch()
-
         monkeypatch.setattr(
             "sys.argv",
             [
@@ -172,8 +150,6 @@ class TestMainOrchestrate:
                 "--db",
                 str(tmp_path / "test.db"),
                 "orchestrate",
-                "--trigger-script",
-                str(trigger_script),
             ],
         )
 
