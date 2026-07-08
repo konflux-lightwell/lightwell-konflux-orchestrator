@@ -1,3 +1,0 @@
-[submodule "build-definitions"]
-	path = build-definitions
-	url = git@gitlab.cee.redhat.com:lightwell/konflux-definitions/build-definitions

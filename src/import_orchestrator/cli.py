@@ -21,7 +21,7 @@ import sys
 import textwrap
 from pathlib import Path
 
-from import_orchestrator.commands import fetch, import_file, orchestrate
+from import_orchestrator.commands import fetch, import_file, orchestrate, trigger
 from import_orchestrator.constants import DEFAULT_DB_PATH
 
 
@@ -37,6 +37,8 @@ def make_parser() -> argparse.ArgumentParser:
           QUAY_TOKEN                Required for fetch
           KONFLUX_TOKEN or KUBECONFIG  Required for kubectl auth
           LIGHTWELL_ARTIFACT_TYPE   REBUILD or REMEDIATED (default: REBUILD)
+          TEKTON_PIPELINE_DIR   Path to the pipeline definitions (defaults to {repo_root}/tekton)
+          TASK_BUNDLE_PULLSPEC  Override for the oci-verify-import task bundle (defaults to 0.1)
 
         Examples:
           # Fetch OCI references into the database
@@ -47,6 +49,9 @@ def make_parser() -> argparse.ArgumentParser:
 
           # Orchestrate imports (up to 10 parallel)
           import-orchestrator orchestrate --max-parallel 10
+
+          # Trigger a single PNC import PipelineRun
+          import-orchestrator trigger 'quay.io/example/image:tag@sha256:abc123...'
 
           # Full workflow
           import-orchestrator fetch && import-orchestrator orchestrate
@@ -71,6 +76,7 @@ def make_parser() -> argparse.ArgumentParser:
     fetch.register(subparsers)
     import_file.register(subparsers)
     orchestrate.register(subparsers)
+    trigger.register(subparsers)
 
     return parser
 

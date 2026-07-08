@@ -1,0 +1,87 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: pnc-import
+spec:
+  description: |
+    Verify a PNC-signed OCI artifact and mirror it to redhat-user-workloads.
+
+    Expects the source artifact to be digest-pinned. The oci-verify-import task
+    verifies the cosign signature, mirrors the artifact along with its SBOM and
+    attestation, attaches the inner CycloneDX SBOM for Conforma, exposes the
+    build source tree as a trusted artifact, and emits results for Tekton Chains
+    provenance generation.
+
+  params:
+    - name: SOURCE_IMAGE
+      description: >-
+        PNC artifact reference, must be digest-pinned (contain @sha256:).
+      type: string
+    - name: IMAGE
+      description: >-
+        Destination image reference in redhat-user-workloads.
+      type: string
+  results:
+    - name: IMAGE_URL
+      value: $(tasks.verify-and-mirror.results.IMAGE_URL)
+    - name: IMAGE_DIGEST
+      value: $(tasks.verify-and-mirror.results.IMAGE_DIGEST)
+    - name: IMAGE_REF
+      value: $(tasks.verify-and-mirror.results.IMAGE_REF)
+    - name: SBOM_BLOB_URL
+      value: $(tasks.verify-and-mirror.results.SBOM_BLOB_URL)
+    - name: CHAINS-GIT_URL
+      value: $(tasks.verify-and-mirror.results.CHAINS-GIT_URL)
+    - name: CHAINS-GIT_COMMIT
+      value: $(tasks.verify-and-mirror.results.CHAINS-GIT_COMMIT)
+    - name: SOURCE_ARTIFACT
+      value: $(tasks.verify-and-mirror.results.SOURCE_ARTIFACT)
+  tasks:
+    - name: verify-and-mirror
+      params:
+        - name: SOURCE_IMAGE
+          value: $(params.SOURCE_IMAGE)
+        - name: IMAGE
+          value: $(params.IMAGE)
+        - name: ociStorage
+          value: $(params.IMAGE).src
+      taskRef:
+        name: oci-verify-import
+        version: "0.1"
+    - name: clamav-scan
+      params:
+        - name: image-digest
+          value: $(tasks.verify-and-mirror.results.IMAGE_DIGEST)
+        - name: image-url
+          value: $(tasks.verify-and-mirror.results.IMAGE_URL)
+      runAfter:
+        - verify-and-mirror
+      taskRef:
+        name: clamav-scan
+        version: "0.3"
+    - name: sast-shell-check
+      params:
+        - name: SOURCE_ARTIFACT
+          value: $(tasks.verify-and-mirror.results.SOURCE_ARTIFACT)
+        - name: image-digest
+          value: $(tasks.verify-and-mirror.results.IMAGE_DIGEST)
+        - name: image-url
+          value: $(tasks.verify-and-mirror.results.IMAGE_URL)
+      runAfter:
+        - verify-and-mirror
+      taskRef:
+        name: sast-shell-check-oci-ta
+        version: "0.1"
+    - name: sast-unicode-check
+      params:
+        - name: SOURCE_ARTIFACT
+          value: $(tasks.verify-and-mirror.results.SOURCE_ARTIFACT)
+        - name: image-digest
+          value: $(tasks.verify-and-mirror.results.IMAGE_DIGEST)
+        - name: image-url
+          value: $(tasks.verify-and-mirror.results.IMAGE_URL)
+      runAfter:
+        - verify-and-mirror
+      taskRef:
+        name: sast-unicode-check-oci-ta
+        version: "0.4"

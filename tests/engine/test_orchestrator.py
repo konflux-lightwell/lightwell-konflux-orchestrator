@@ -14,15 +14,15 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
-import subprocess
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 from import_orchestrator.clients import KubeClient
 from import_orchestrator.database import ImportDatabase
 from import_orchestrator.engine import ImportOrchestrator, ImportTrigger, PipelineMonitor, ReleaseMonitor
+from import_orchestrator.engine.pipelinerun import TriggerError
 from import_orchestrator.models import ImportStatus, PipelineRunStatus
 
 
@@ -41,13 +41,16 @@ def mock_kube():
 
 
 @pytest.fixture
-def orchestrator(db: ImportDatabase, mock_kube: MagicMock, tmp_path: Path):
-    trigger_script = tmp_path / "trigger.sh"
-    trigger_script.touch()
+def mock_builder():
+    """Create a mock PipelineRunBuilder."""
+    return MagicMock()
 
+
+@pytest.fixture
+def orchestrator(db: ImportDatabase, mock_kube: MagicMock, mock_builder: MagicMock):
     trigger = ImportTrigger(
         db=db,
-        trigger_script=trigger_script,
+        builder=mock_builder,
         max_parallel=5,
         max_retries=3,
     )
@@ -128,8 +131,9 @@ class TestUpdatePipelineRunStatuses:
 
 
 class TestTriggerNextBatch:
-    @patch("import_orchestrator.engine.trigger.subprocess.run")
-    def test_triggers_up_to_available_slots(self, mock_run, orchestrator: ImportOrchestrator, mock_kube: MagicMock):
+    def test_triggers_up_to_available_slots(
+        self, orchestrator: ImportOrchestrator, mock_kube: MagicMock, mock_builder: MagicMock
+    ):
         # Add 3 already in-flight imports (simulating running/triggered)
         for i in range(3):
             ref, _ = orchestrator.db.add_oci_reference(f"quay.io/repo:inflight{i}@sha256:bbb{i}")
@@ -140,12 +144,7 @@ class TestTriggerNextBatch:
         for i in range(5):
             orchestrator.db.add_oci_reference(f"quay.io/repo:tag{i}@sha256:aaa{i}")
 
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[],
-            returncode=0,
-            stdout="",
-            stderr="pipelinerun.tekton.dev/pnc-import-xxx created\n",
-        )
+        mock_builder.trigger.return_value = "pnc-import-xxx"
 
         # 5 max - 3 in-flight = 2 slots available
         triggered = orchestrator.trigger_next_batch()
@@ -165,13 +164,12 @@ class TestTriggerNextBatch:
         triggered = orchestrator.trigger_next_batch()
         assert triggered == 0
 
-    @patch("import_orchestrator.engine.trigger.subprocess.run")
-    def test_handles_trigger_failure(self, mock_run, orchestrator: ImportOrchestrator, mock_kube: MagicMock):
+    def test_handles_trigger_failure(
+        self, orchestrator: ImportOrchestrator, mock_kube: MagicMock, mock_builder: MagicMock
+    ):
         orchestrator.db.add_oci_reference("quay.io/repo:tag@sha256:abc")
 
-        error = subprocess.CalledProcessError(1, "trigger")
-        error.stderr = "connection refused"
-        mock_run.side_effect = error
+        mock_builder.trigger.side_effect = TriggerError("connection refused")
 
         triggered = orchestrator.trigger_next_batch()
         assert triggered == 0
@@ -213,18 +211,14 @@ class TestIsComplete:
 
 
 class TestRunUntilComplete:
-    @patch("import_orchestrator.engine.trigger.subprocess.run")
-    def test_completes_with_success(self, mock_run, orchestrator: ImportOrchestrator, mock_kube: MagicMock):
+    def test_completes_with_success(
+        self, orchestrator: ImportOrchestrator, mock_kube: MagicMock, mock_builder: MagicMock
+    ):
         ref, _ = orchestrator.db.add_oci_reference("quay.io/repo:tag@sha256:abc")
         assert ref.id is not None
 
-        # First call: trigger import
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[],
-            returncode=0,
-            stdout="",
-            stderr="pipelinerun.tekton.dev/pnc-import-abc created\n",
-        )
+        # Mock builder to return PipelineRun name
+        mock_builder.trigger.return_value = "pnc-import-abc"
 
         # After trigger, the status check will show success
         call_count = 0

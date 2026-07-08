@@ -16,64 +16,45 @@ limitations under the License.
 
 from __future__ import annotations
 
-import re
-import subprocess
 import sys
 from datetime import datetime
-from pathlib import Path
 
 from import_orchestrator.database import ImportDatabase
+from import_orchestrator.engine.pipelinerun import PipelineRunBuilder, TriggerError
 from import_orchestrator.models import ImportStatus, OCIReference
-from import_orchestrator.utils import extract_tag, should_retry
+from import_orchestrator.utils import extract_tag
 
 
 class ImportTrigger:
-    """Executes trigger scripts and manages the PENDING -> TRIGGERED transition.
+    """Triggers PNC import PipelineRuns and manages the PENDING -> TRIGGERED transition.
 
-    Handles triggering imports via external scripts, including retry logic
+    Handles triggering imports via PipelineRunBuilder, including retry logic
     and capacity management.
     """
 
     def __init__(
         self,
         db: ImportDatabase,
-        trigger_script: Path,
+        builder: PipelineRunBuilder,
         max_parallel: int,
         max_retries: int,
     ):
         self.db = db
-        self.trigger_script = trigger_script
+        self.builder = builder
         self.max_parallel = max_parallel
         self.max_retries = max_retries
 
-    def trigger_import(self, oci_ref: OCIReference) -> str | None:
-        """Trigger an import via the trigger script, returning the PipelineRun name.
+    def trigger_import(self, oci_ref: OCIReference, tag: str) -> str | None:
+        """Trigger an import via PipelineRunBuilder, returning the PipelineRun name.
 
         Returns:
-            The PipelineRun name extracted from the trigger script output,
+            The PipelineRun name from the created PipelineRun,
             or None if the name could not be parsed.
 
         Raises:
-            subprocess.CalledProcessError: If the trigger script exits with a non-zero code.
+            TriggerError: If the PipelineRun creation fails.
         """
-        result = subprocess.run(
-            [str(self.trigger_script), oci_ref.oci_ref],
-            capture_output=True,
-            check=True,
-            text=True,
-        )
-
-        combined_output = result.stdout + result.stderr
-        match = re.search(r"pipelinerun\.tekton\.dev/(\S+)\s+created", combined_output)
-
-        if match:
-            return match.group(1)
-
-        print(
-            f"WARNING: Could not extract PipelineRun name from trigger output for {oci_ref.oci_ref}",
-            file=sys.stderr,
-        )
-        return None
+        return self.builder.trigger(source_image=oci_ref.oci_ref, tag=tag)
 
     def trigger_next_batch(self) -> int:
         """Trigger imports up to the max_parallel limit, counting all in-flight stages.
@@ -106,7 +87,7 @@ class ImportTrigger:
         assert oci_ref.id is not None
 
         try:
-            pr_name = self.trigger_import(oci_ref)
+            pr_name = self.trigger_import(oci_ref, tag)
             new_retry_count = oci_ref.retry_count + 1 if oci_ref.status == ImportStatus.FAILED else 0
 
             self.db.update_status(
@@ -123,35 +104,27 @@ class ImportTrigger:
             print(f"  Triggered: {tag}{retry_indicator}", file=sys.stderr)
             return 1
 
-        except subprocess.CalledProcessError as e:
-            error_msg = e.stderr.decode() if isinstance(e.stderr, bytes) else str(e.stderr)
-            self._handle_trigger_failure(oci_ref, tag, e, error_msg)
+        except TriggerError as e:
+            self._handle_trigger_failure(oci_ref, tag, str(e))
             return 0
 
     def _handle_trigger_failure(
         self,
         oci_ref: OCIReference,
         tag: str,
-        error: subprocess.CalledProcessError,
         error_msg: str,
     ) -> None:
         """Record a trigger failure in the database with appropriate retry semantics."""
         assert oci_ref.id is not None
 
-        if should_retry(error):
-            self.db.update_status(
-                oci_ref.id,
-                ImportStatus.FAILED,
-                error_message=f"Trigger script failed (will retry): {error_msg}",
-                retry_count=oci_ref.retry_count + 1,
-            )
-        else:
-            self.db.update_status(
-                oci_ref.id,
-                ImportStatus.FAILED,
-                error_message=f"Trigger script failed (permanent): {error_msg}",
-                retry_count=self.max_retries,
-            )
+        # TriggerError failures are generally transient (network, credentials)
+        # so we allow retries unless max_retries is already reached
+        self.db.update_status(
+            oci_ref.id,
+            ImportStatus.FAILED,
+            error_message=f"PipelineRun trigger failed: {error_msg}",
+            retry_count=oci_ref.retry_count + 1,
+        )
 
         print(
             f"  ERROR: Failed to trigger {tag}: {error_msg[:100]}",
