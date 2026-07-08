@@ -15,7 +15,7 @@ _unknown_source := "quay.io/some-other-registry/image:tag@sha256:000000"
 _allowed_rebuild := ["quay.io/light-castle/rebuild-pnc"]
 _allowed_secure := ["quay.io/light-castle/secure-pnc"]
 
-_pnc_fingerprint := "SHA256:YFyYXLNpOXF46lNdwKgOthCsOZ0W5Uc29eO5IQzw2PKVkdpb781AZ"
+_pnc_fingerprint := "SHA256:LEMzGGdveXznXBtjkbiSPIwR2NxdsNbBL6m5FyW9dOI"
 _other_fingerprint := "SHA256:HHTvfqOgdrdt9TXDyYDMYlwZ8r8rAsiNjiVlB"
 _allowed_keys := [_pnc_fingerprint]
 
@@ -70,8 +70,14 @@ test_source_registry_denied_wrong_repo_v1 if {
 }
 
 # ---------------------------------------------------------------------------
-# Signing key fingerprint
+# Signing key fingerprint — read from task results (v0.2)
 # ---------------------------------------------------------------------------
+
+test_signing_key_permitted_v02 if {
+	count(pnc_import.deny) == 0 with input.attestations as [_mock_v02(_rebuild_source, _pnc_fingerprint)]
+		with data.rule_data_custom.oci_verify_import_allowed_source_registries as _allowed_rebuild
+		with data.rule_data_custom.oci_verify_import_allowed_signing_keys as _allowed_keys
+}
 
 test_signing_key_denied_wrong_key_v02 if {
 	deny := pnc_import.deny with input.attestations as [_mock_v02(_rebuild_source, _other_fingerprint)]
@@ -87,6 +93,14 @@ test_signing_key_denied_wrong_key_v1 if {
 		with data.rule_data_custom.oci_verify_import_allowed_signing_keys as _allowed_keys
 	some r in deny
 	r.code == "pnc_import.signing_key_permitted"
+}
+
+test_signing_key_result_absent_is_denied if {
+	deny := pnc_import.deny with input.attestations as [_mock_v02_no_fingerprint(_rebuild_source)]
+		with data.rule_data_custom.oci_verify_import_allowed_source_registries as _allowed_rebuild
+		with data.rule_data_custom.oci_verify_import_allowed_signing_keys as _allowed_keys
+	some r in deny
+	r.code == "pnc_import.signing_key_result_present"
 }
 
 # ---------------------------------------------------------------------------
@@ -125,24 +139,40 @@ test_empty_signing_key_rule_data if {
 # Mock attestation builders
 # ---------------------------------------------------------------------------
 
+# v0.2: SOURCE_IMAGE in invocation.parameters; VERIFICATION_KEY_FINGERPRINT in task result
 _mock_v02(source_image, key_fingerprint) := {"statement": {
 	"predicateType": "https://slsa.dev/provenance/v0.2",
 	"predicate": {
 		"buildType": "tekton.dev/v1/PipelineRun",
-		"invocation": {"parameters": {
-			"SOURCE_IMAGE": source_image,
-			"COSIGN_KEY_FINGERPRINT": key_fingerprint,
-		}},
+		"invocation": {"parameters": {"SOURCE_IMAGE": source_image}},
+		"buildConfig": {"tasks": [{"name": "verify-and-mirror", "results": [
+			{"name": "VERIFICATION_KEY_FINGERPRINT", "value": key_fingerprint},
+		]}]},
 	},
 }}
 
+# v0.2 without VERIFICATION_KEY_FINGERPRINT result — simulates old task or missing step
+_mock_v02_no_fingerprint(source_image) := {"statement": {
+	"predicateType": "https://slsa.dev/provenance/v0.2",
+	"predicate": {
+		"buildType": "tekton.dev/v1/PipelineRun",
+		"invocation": {"parameters": {"SOURCE_IMAGE": source_image}},
+		"buildConfig": {"tasks": [{"name": "verify-and-mirror", "results": []}]},
+	},
+}}
+
+# v1: SOURCE_IMAGE in runSpec params; VERIFICATION_KEY_FINGERPRINT in byProducts
 _mock_v1(source_image, key_fingerprint) := {"statement": {
 	"predicateType": "https://slsa.dev/provenance/v1",
-	"predicate": {"buildDefinition": {
-		"buildType": "https://tekton.dev/chains/v2/slsa-tekton",
-		"externalParameters": {"runSpec": {"params": [
-			{"name": "SOURCE_IMAGE", "value": source_image},
-			{"name": "COSIGN_KEY_FINGERPRINT", "value": key_fingerprint},
-		]}},
-	}},
+	"predicate": {
+		"buildDefinition": {
+			"buildType": "https://tekton.dev/chains/v2/slsa-tekton",
+			"externalParameters": {"runSpec": {"params": [
+				{"name": "SOURCE_IMAGE", "value": source_image},
+			]}},
+		},
+		"runDetails": {"byProducts": [
+			{"name": "VERIFICATION_KEY_FINGERPRINT", "content": key_fingerprint},
+		]},
+	},
 }}

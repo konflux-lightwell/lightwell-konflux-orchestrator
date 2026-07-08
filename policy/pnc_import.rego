@@ -66,18 +66,34 @@ deny contains result if {
 # METADATA
 # title: Signing key permitted
 # description: >-
-#   Verify the COSIGN_KEY_FINGERPRINT input parameter of the oci-verify-import
-#   task is in the approved set. Chains records it in the SLSA attestation.
+#   Verify the VERIFICATION_KEY_FINGERPRINT result of the oci-verify-import task
+#   is in the approved set. The task computes this from the key it actually used.
 # custom:
 #   short_name: signing_key_permitted
 #   failure_msg: >-
-#     COSIGN_KEY_FINGERPRINT %q is not in the allowed set. Allowed: %v
+#     VERIFICATION_KEY_FINGERPRINT %q is not in the allowed set. Allowed: %v
 #   collections:
 #     - lightwell
 deny contains result if {
 	some fingerprint in _signing_key_fingerprints
 	not fingerprint in _allowed_signing_keys
 	result := metadata.result_helper(rego.metadata.chain(), [fingerprint, _allowed_signing_keys])
+}
+
+# METADATA
+# title: Signing key result present
+# description: >-
+#   Confirm the oci-verify-import task emitted a VERIFICATION_KEY_FINGERPRINT result.
+#   Absence means the task did not run the key check, which is a policy violation.
+# custom:
+#   short_name: signing_key_result_present
+#   failure_msg: 'VERIFICATION_KEY_FINGERPRINT result not found in any oci-verify-import task'
+#   collections:
+#     - lightwell
+deny contains result if {
+	count(_signing_key_fingerprints) == 0
+	count(_pipelinerun_attestations) > 0
+	result := metadata.result_helper(rego.metadata.chain(), [])
 }
 
 # METADATA
@@ -114,18 +130,23 @@ _source_images contains img if {
 	img := p.value
 }
 
+# SLSA v0.2: task result from buildConfig.tasks[*].results
 _signing_key_fingerprints contains fp if {
 	some att in _pipelinerun_attestations
 	att.statement.predicateType == "https://slsa.dev/provenance/v0.2"
-	fp := att.statement.predicate.invocation.parameters.COSIGN_KEY_FINGERPRINT
+	some task in att.statement.predicate.buildConfig.tasks
+	some r in task.results
+	r.name == "VERIFICATION_KEY_FINGERPRINT"
+	fp := r.value
 }
 
+# SLSA v1.0: byProducts from runDetails
 _signing_key_fingerprints contains fp if {
 	some att in _pipelinerun_attestations
 	att.statement.predicateType == "https://slsa.dev/provenance/v1"
-	some p in att.statement.predicate.buildDefinition.externalParameters.runSpec.params
-	p.name == "COSIGN_KEY_FINGERPRINT"
-	fp := p.value
+	some bp in att.statement.predicate.runDetails.byProducts
+	bp.name == "VERIFICATION_KEY_FINGERPRINT"
+	fp := bp.content
 }
 
 # Filter to PipelineRun SLSA attestations only.
