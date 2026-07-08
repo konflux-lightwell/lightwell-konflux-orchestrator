@@ -21,6 +21,11 @@ spec:
       description: >-
         Destination image reference in redhat-user-workloads.
       type: string
+    - name: VERIFICATION_PUBLIC_KEY_SECRET
+      description: >-
+        Name of the Kubernetes Secret containing the cosign public key (cosign.pub)
+        used to verify SOURCE_IMAGE. Must contain exactly one PEM-encoded public key.
+      type: string
   results:
     - name: IMAGE_URL
       value: $(tasks.verify-and-mirror.results.IMAGE_URL)
@@ -45,6 +50,8 @@ spec:
           value: $(params.IMAGE)
         - name: ociStorage
           value: $(params.IMAGE).src
+        - name: VERIFICATION_PUBLIC_KEY_SECRET
+          value: $(params.VERIFICATION_PUBLIC_KEY_SECRET)
       taskRef:
         name: oci-verify-import
         version: "0.1"
