@@ -21,7 +21,7 @@ import os
 import sys
 
 from import_orchestrator.clients import KubeClient
-from import_orchestrator.constants import CLUSTER_API, NAMESPACE
+from import_orchestrator.constants import ARTIFACT_CONFIGS, CLUSTER_API, NAMESPACE
 from import_orchestrator.engine.pipelinerun import PipelineRunBuilder, TriggerError
 
 
@@ -49,7 +49,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     )
     parser.add_argument(
         "--artifact-type",
-        choices=["REBUILD", "REMEDIATED"],
+        choices=list(ARTIFACT_CONFIGS),
         default=os.environ.get("LIGHTWELL_ARTIFACT_TYPE", "REBUILD"),
         help="Artifact type (default: REBUILD, or LIGHTWELL_ARTIFACT_TYPE env var)",
     )

@@ -44,6 +44,11 @@ spec:
       description: The name of the key in the ConfigMap that contains the CA bundle data.
       type: string
       default: ca-bundle.crt
+    - name: VERIFICATION_PUBLIC_KEY_SECRET
+      description: >-
+        Name of the Kubernetes Secret containing the cosign public key as
+        cosign.pub. The secret must contain exactly one PEM-encoded public key.
+      type: string
   results:
     - name: IMAGE_DIGEST
       description: Digest of the mirrored artifact.
@@ -59,6 +64,10 @@ spec:
       description: Source commit extracted from the PNC SLSA attestation.
     - name: SOURCE_ARTIFACT
       description: The Trusted Artifact URI pointing to the build source tree.
+    - name: VERIFICATION_KEY_FINGERPRINT
+      description: >-
+        SHA256 fingerprint of the cosign public key used to verify SOURCE_IMAGE,
+        in the format SHA256:<base64>. Derived from the key in VERIFICATION_PUBLIC_KEY_SECRET.
   stepTemplate:
     env:
       - name: SOURCE_IMAGE
@@ -78,6 +87,10 @@ spec:
         requests:
           cpu: 100m
           memory: 256Mi
+      volumeMounts:
+        - mountPath: /mnt/verification-public-key
+          name: verification-public-key
+          readOnly: true
       script: |
         #!/bin/bash
         set -euo pipefail
@@ -92,12 +105,19 @@ spec:
           exit 1
         fi
 
-        printf '%s\n' \
-          '-----BEGIN PUBLIC KEY-----' \
-          'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEYFyYXLNpOXF46lNdwKgOthCsOZ0W' \
-          '5Uc29eO5IQzw2PKVkdpb781AZ/sUh7dSpe3hjjTu2brbjtOH1FWhO2Mmrg==' \
-          '-----END PUBLIC KEY-----' \
-          > /tmp/cosign.pub
+        key_file=/mnt/verification-public-key/cosign.pub
+        key_count=$(grep -cF -- '-----BEGIN PUBLIC KEY-----' "$key_file" || true)
+        if [ "$key_count" -ne 1 ]; then
+          echo "ERROR: secret must contain exactly one public key, found ${key_count}" >&2
+          exit 1
+        fi
+
+        fingerprint=$(openssl pkey -pubin -in "$key_file" -outform DER 2>/dev/null \
+          | openssl dgst -sha256 -binary \
+          | base64 | tr -d '=' \
+          | awk '{print "SHA256:"$1}')
+        echo "Key fingerprint: ${fingerprint}"
+        echo -n "$fingerprint" > "$(results.VERIFICATION_KEY_FINGERPRINT.path)"
 
         mkdir -p /tmp/auth
         select-oci-auth "$SOURCE_IMAGE" > /tmp/auth/config.json
@@ -105,10 +125,10 @@ spec:
 
         # Try OCI referrer signatures first (cosign v2+ IEEE_P1363 encoding via --experimental-oci11).
         # Fall back to tag-based (.sig tag) for images signed with cosign v1 (ASN.1 DER encoding).
-        if cosign verify --key /tmp/cosign.pub --insecure-ignore-tlog=true \
+        if cosign verify --key "$key_file" --insecure-ignore-tlog=true \
               --experimental-oci11=true "$SOURCE_IMAGE" 2>/tmp/verify-oci11.log; then
           echo "Signature verified (OCI referrer)"
-        elif cosign verify --key /tmp/cosign.pub --insecure-ignore-tlog=true \
+        elif cosign verify --key "$key_file" --insecure-ignore-tlog=true \
               "$SOURCE_IMAGE" 2>/tmp/verify-tag.log; then
           echo "Signature verified (tag-based)"
         else
@@ -294,3 +314,6 @@ spec:
       name: trusted-ca
     - emptyDir: {}
       name: workdir
+    - secret:
+        secretName: $(params.VERIFICATION_PUBLIC_KEY_SECRET)
+      name: verification-public-key

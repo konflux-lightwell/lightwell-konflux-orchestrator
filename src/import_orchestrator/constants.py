@@ -34,6 +34,10 @@ RELEASE_PLAN = "pnc-import-java-pulp-validated-prod"
 TASK_BUNDLE_BASE = "quay.io/konflux-ci/tekton-catalog/task-oci-verify-import"
 TASK_BUNDLE_FLOATING_TAG = "0.1"
 
+# Name of the K8s Secret containing the cosign public key (cosign.pub) used
+# to verify PNC artifacts. Must exist in NAMESPACE before imports can run.
+VERIFICATION_PUBLIC_KEY_SECRET = "verification-public-key"
+
 # Digest-pinned bundle references for catalog tasks embedded in the PipelineRun.
 CATALOG_BUNDLE_REFS: dict[str, str] = {
     "clamav-scan": (
@@ -61,5 +65,10 @@ ARTIFACT_CONFIGS: dict[str, dict[str, str]] = {
         "app": "pnc-import-remediated",
         "service_account": "build-pipeline-pnc-import-remediated",
         "dest_repo": ("quay.io/redhat-user-workloads/lightwell-poc-tenant/pnc-import-remediated/pnc-import-remediated"),
+    },
+    "STAGE": {
+        "app": "pnc-import-stage",
+        "service_account": "build-pipeline-pnc-import-stage",
+        "dest_repo": "quay.io/redhat-user-workloads/lightwell-poc-tenant/pnc-import-stage/pnc-import-stage",
     },
 }

@@ -40,6 +40,7 @@ from import_orchestrator.constants import (
     NAMESPACE,
     TASK_BUNDLE_BASE,
     TASK_BUNDLE_FLOATING_TAG,
+    VERIFICATION_PUBLIC_KEY_SECRET,
 )
 
 
@@ -235,6 +236,7 @@ def build_pipelinerun_manifest(
             "params": [
                 {"name": "SOURCE_IMAGE", "value": source_image},
                 {"name": "IMAGE", "value": dest_image},
+                {"name": "VERIFICATION_PUBLIC_KEY_SECRET", "value": VERIFICATION_PUBLIC_KEY_SECRET},
             ],
         },
     }
