@@ -50,8 +50,8 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     parser.add_argument(
         "--artifact-type",
         choices=list(ARTIFACT_CONFIGS),
-        default=os.environ.get("LIGHTWELL_ARTIFACT_TYPE", "REBUILD"),
-        help="Artifact type (default: REBUILD, or LIGHTWELL_ARTIFACT_TYPE env var)",
+        default=os.environ.get("LIGHTWELL_ARTIFACT_TYPE", "STAGE"),
+        help="Artifact type (default: STAGE, or LIGHTWELL_ARTIFACT_TYPE env var)",
     )
 
     parser.set_defaults(func=run)

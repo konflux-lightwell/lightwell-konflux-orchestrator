@@ -91,7 +91,7 @@ class TestMakeParserFetch:
         args = parser.parse_args(["fetch"])
         assert args.db == Path(DEFAULT_DB_PATH)
         assert args.command == "fetch"
-        assert args.artifact_type == "REBUILD"
+        assert args.artifact_type == "STAGE"
 
     def test_custom_artifact_type(self):
         parser = make_parser()
