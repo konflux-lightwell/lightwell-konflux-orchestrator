@@ -21,6 +21,9 @@ import os
 import sys
 
 from import_orchestrator.clients import QuayClient
+from import_orchestrator.constants import (
+    ARTIFACT_CONFIGS,
+)
 from import_orchestrator.database import ImportDatabase
 from import_orchestrator.engine import OciIngest
 
@@ -35,11 +38,10 @@ def register(subparsers: argparse._SubParsersAction) -> None:
 
     parser.add_argument(
         "--artifact-type",
-        choices=["REBUILD", "REMEDIATED"],
-        default=os.environ.get("LIGHTWELL_ARTIFACT_TYPE", "REBUILD"),
-        help="Artifact type to fetch (default: REBUILD, or LIGHTWELL_ARTIFACT_TYPE env var)",
+        choices=list(ARTIFACT_CONFIGS),
+        default=os.environ.get("LIGHTWELL_ARTIFACT_TYPE", "STAGE"),
+        help="Artifact type (default: STAGE, or LIGHTWELL_ARTIFACT_TYPE env var)",
     )
-
     parser.set_defaults(func=run)
 
 
@@ -47,15 +49,21 @@ def run(args: argparse.Namespace) -> int:
     """Execute the fetch subcommand."""
     print(f"Fetching OCI references (artifact_type={args.artifact_type})...", file=sys.stderr)
 
-    try:
-        client = QuayClient()
-    except ValueError as e:
-        print(f"ERROR: {e}", file=sys.stderr)
+    token = os.environ.get("QUAY_TOKEN")
+    if not token:
+        print(
+            "ERROR: QUAY_TOKEN is required. Export QUAY_TOKEN='your-token-here'.",
+            file=sys.stderr,
+        )
         return 2
+
+    config = ARTIFACT_CONFIGS[args.artifact_type]
+
+    client = QuayClient(token=token, repo=config["source_repo"])
 
     with ImportDatabase(args.db) as db:
         ingest = OciIngest(db)
-        result = ingest.from_quay(client, args.artifact_type)
+        result = ingest.from_quay(client)
 
         _print_summary(result)
 

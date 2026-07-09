@@ -91,7 +91,7 @@ class TestMakeParserFetch:
         args = parser.parse_args(["fetch"])
         assert args.db == Path(DEFAULT_DB_PATH)
         assert args.command == "fetch"
-        assert args.artifact_type == "REBUILD"
+        assert args.artifact_type == "STAGE"
 
     def test_custom_artifact_type(self):
         parser = make_parser()
@@ -177,6 +177,7 @@ class TestMainFetch:
 
     @patch("import_orchestrator.commands.fetch.QuayClient")
     def test_fetch_stores_refs_and_returns_0(self, mock_client_cls, monkeypatch, tmp_path: Path):
+        monkeypatch.setenv("QUAY_TOKEN", "test-token")
         mock_client = mock_client_cls.return_value
         mock_client.fetch_oci_references.return_value = ["quay.io/repo:tag1@sha256:aaa"]
 
@@ -190,6 +191,7 @@ class TestMainFetch:
 
     @patch("import_orchestrator.commands.fetch.QuayClient")
     def test_fetch_returns_empty_exits_0(self, mock_client_cls, monkeypatch, tmp_path: Path):
+        monkeypatch.setenv("QUAY_TOKEN", "test-token")
         mock_client = mock_client_cls.return_value
         mock_client.fetch_oci_references.return_value = []
 
@@ -200,6 +202,24 @@ class TestMainFetch:
 
         exit_code = main()
         assert exit_code == 0
+
+    @patch("import_orchestrator.commands.fetch.QuayClient")
+    def test_fetch_passes_quay_args_to_client(self, mock_client_cls, monkeypatch, tmp_path: Path):
+        monkeypatch.setenv("QUAY_TOKEN", "test-token")
+        mock_client = mock_client_cls.return_value
+        mock_client.fetch_oci_references.return_value = []
+
+        monkeypatch.setattr(
+            "sys.argv",
+            ["prog", "--db", str(tmp_path / "test.db"), "fetch"],
+        )
+
+        main()
+
+        mock_client_cls.assert_called_once_with(
+            token="test-token",
+            repo="quay.io/light-castle/rebuild-pnc",
+        )
 
 
 class TestMakeParserImportFile:

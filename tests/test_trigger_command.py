@@ -63,11 +63,11 @@ class TestTriggerArgParsing:
         args = parser.parse_args(["trigger", "--artifact-type", "REMEDIATED", "quay.io/repo:tag@sha256:abc"])
         assert args.artifact_type == "REMEDIATED"
 
-    def test_artifact_type_defaults_to_rebuild(self, monkeypatch):
+    def test_artifact_type_default(self, monkeypatch):
         monkeypatch.delenv("LIGHTWELL_ARTIFACT_TYPE", raising=False)
         parser = make_parser()
         args = parser.parse_args(["trigger", "quay.io/repo:tag@sha256:abc"])
-        assert args.artifact_type == "REBUILD"
+        assert args.artifact_type == "STAGE"
 
     def test_artifact_type_from_env_var(self, monkeypatch):
         monkeypatch.setenv("LIGHTWELL_ARTIFACT_TYPE", "REMEDIATED")

@@ -16,18 +16,11 @@ limitations under the License.
 
 from __future__ import annotations
 
-import os
+from urllib.parse import urlsplit
 
 import requests
 
-_VALID_ARTIFACT_TYPES = ("REBUILD", "REMEDIATED")
-
-_DEFAULT_HOST = "https://quay.io"
-_DEFAULT_NAMESPACE = "light-castle"
-_DEFAULT_REBUILD_REPO = "rebuild-pnc"
-_DEFAULT_REMEDIATED_REPO = "secure-pnc"
 _DEFAULT_TIMEOUT = 30
-
 _PAGE_SIZE = 100
 
 
@@ -36,69 +29,49 @@ class QuayClient:
 
     def __init__(
         self,
-        token: str | None = None,
-        host: str | None = None,
-        namespace: str | None = None,
-        rebuild_repo: str | None = None,
-        remediated_repo: str | None = None,
-        timeout: int | None = None,
+        token: str,
+        ref: str,
+        timeout: int = _DEFAULT_TIMEOUT,
     ):
-        resolved_token = token or os.environ.get("QUAY_TOKEN")
-        if not resolved_token:
-            raise ValueError(
-                "QUAY_TOKEN is required. Create a Quay API token, then either pass it "
-                "as the 'token' parameter or export QUAY_TOKEN='your-token-here'."
-            )
-        self.token = resolved_token
-        self.host = host or os.environ.get("QUAY_HOST", _DEFAULT_HOST)
-        self.namespace = namespace or os.environ.get("QUAY_NAMESPACE", _DEFAULT_NAMESPACE)
-        self.rebuild_repo = rebuild_repo or os.environ.get("QUAY_REBUILD_REPO", _DEFAULT_REBUILD_REPO)
-        self.remediated_repo = remediated_repo or os.environ.get("QUAY_REMEDIATED_REPO", _DEFAULT_REMEDIATED_REPO)
-        self.timeout = timeout or os.environ.get("QUAY_TIMEOUT", _DEFAULT_TIMEOUT)
+        self.token = token
+        self.ref = ref
+        self.timeout = timeout
 
-    def fetch_oci_references(self, artifact_type: str = "REBUILD") -> list[str]:
-        """Fetch OCI references from Quay for the given artifact type.
+    def fetch_oci_references(self) -> list[str]:
+        """Fetch OCI references from Quay from a given repository.
 
         Paginates through active tags prefixed with "lw-", builds OCI reference
         strings, and returns them sorted and deduplicated.
-
-        Args:
-            artifact_type: REBUILD or REMEDIATED. Determines which Quay repo to query.
 
         Returns:
             Sorted list of unique OCI reference strings.
 
         Raises:
-            ValueError: If artifact_type is not REBUILD or REMEDIATED.
             requests.HTTPError: If the Quay API returns an error response.
         """
-        if artifact_type not in _VALID_ARTIFACT_TYPES:
-            raise ValueError(f"artifact_type must be one of: {', '.join(_VALID_ARTIFACT_TYPES)}. Got: {artifact_type}")
-
-        repo = self.rebuild_repo if artifact_type == "REBUILD" else self.remediated_repo
-        image_ref = f"{self.host.removeprefix('https://').removeprefix('http://')}/{self.namespace}/{repo}"
-
-        tags = self._fetch_all_tags(repo)
+        tags = self._fetch_all_tags()
 
         refs: set[str] = set()
         for tag in tags:
             name = tag.get("name", "")
             digest = tag.get("manifest_digest")
             if name.startswith("lw-") and digest:
-                refs.add(f"{image_ref}:{name}@{digest}")
+                refs.add(f"{self.ref}:{name}@{digest}")
 
         return sorted(refs)
 
-    def _fetch_all_tags(self, repo: str) -> list[dict]:
+    def _fetch_all_tags(self) -> list[dict]:
         """Paginate through the Quay tag listing API and return all tags."""
         all_tags: list[dict] = []
         page = 1
 
+        # Adding the scheme here is necessary for proper URL parsing
+        url_parts = urlsplit(f"https://{self.ref}")
+        host = url_parts.netloc
+        repo = url_parts.path.lstrip("/")
+
         while True:
-            url = (
-                f"{self.host}/api/v1/repository/{self.namespace}/{repo}/tag/"
-                f"?onlyActiveTags=true&limit={_PAGE_SIZE}&page={page}"
-            )
+            url = f"{host}/api/v1/repository/{repo}/tag/?onlyActiveTags=true&limit={_PAGE_SIZE}&page={page}"
             response = requests.get(
                 url,
                 headers={

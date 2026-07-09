@@ -59,16 +59,19 @@ ARTIFACT_CONFIGS: dict[str, dict[str, str]] = {
     "REBUILD": {
         "app": "pnc-import",
         "service_account": "build-pipeline-pnc-import",
+        "source_repo": "quay.io/light-castle/rebuild-pnc",
         "dest_repo": "quay.io/redhat-user-workloads/lightwell-poc-tenant/pnc-import/pnc-import",
     },
     "REMEDIATED": {
         "app": "pnc-import-remediated",
         "service_account": "build-pipeline-pnc-import-remediated",
-        "dest_repo": ("quay.io/redhat-user-workloads/lightwell-poc-tenant/pnc-import-remediated/pnc-import-remediated"),
+        "source_repo": "quay.io/light-castle/secure-pnc",
+        "dest_repo": "quay.io/redhat-user-workloads/lightwell-poc-tenant/pnc-import-remediated/pnc-import-remediated",
     },
     "STAGE": {
         "app": "pnc-import-stage",
         "service_account": "build-pipeline-pnc-import-stage",
+        "source_repo": "quay.io/light-castle/rebuild-pnc",
         "dest_repo": "quay.io/redhat-user-workloads/lightwell-poc-tenant/pnc-import-stage/pnc-import-stage",
     },
 }
