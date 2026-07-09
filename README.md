@@ -17,9 +17,7 @@ This tool provides batch orchestration for importing PNC (Project Newcastle) bui
 
 - Python 3.11+
 - `kubectl` authenticated to the target cluster (kubeconfig or `KONFLUX_TOKEN`)
-- Companion scripts (from `build-definitions` submodule):
-  - `build-definitions/docs/examples/fetch_pnc_oci_references.sh` — fetches OCI references from Quay
-  - `build-definitions/docs/examples/trigger-pnc-import.sh` — triggers individual PipelineRuns
+- `skopeo` for resolving OCI image digests (used by the trigger command)
 
 ## Installation
 
@@ -45,6 +43,7 @@ import-orchestrator --help
 import-orchestrator fetch --help
 import-orchestrator import-file --help
 import-orchestrator orchestrate --help
+import-orchestrator trigger --help
 
 # Typical workflow: fetch then orchestrate
 QUAY_TOKEN=<token> import-orchestrator fetch
@@ -54,14 +53,17 @@ import-orchestrator orchestrate --max-parallel 10
 import-orchestrator import-file refs.txt
 import-orchestrator orchestrate --max-parallel 10
 
+# Trigger a single PNC import PipelineRun
+import-orchestrator trigger 'quay.io/light-castle/rebuild-pnc:tag@sha256:abc123...'
+
 # Fetch only (populate database for inspection)
 QUAY_TOKEN=<token> import-orchestrator fetch
 
 # Resume interrupted orchestration from existing database
 import-orchestrator orchestrate
 
-# Import remediated builds instead of rebuilds
-QUAY_TOKEN=<token> LIGHTWELL_ARTIFACT_TYPE=REMEDIATED import-orchestrator fetch
+# Fetch REMEDIATED builds instead of STAGE (default)
+QUAY_TOKEN=<token> import-orchestrator fetch --artifact-type REMEDIATED
 import-orchestrator orchestrate --max-parallel 5
 
 # Reset database and start fresh
@@ -83,12 +85,12 @@ import-orchestrator orchestrate
 Fetches OCI references from Quay and stores them in the database.
 
 ```bash
-import-orchestrator fetch [--fetch-script SCRIPT]
+import-orchestrator fetch [--artifact-type {STAGE,REBUILD,REMEDIATED}]
 ```
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--fetch-script` | `build-definitions/docs/examples/fetch_pnc_oci_references.sh` | Path to fetch script |
+| `--artifact-type` | `STAGE` (or `LIGHTWELL_ARTIFACT_TYPE` env var) | Artifact type: STAGE, REBUILD, or REMEDIATED |
 
 #### `import-file` Subcommand
 
@@ -120,33 +122,47 @@ import-orchestrator orchestrate [OPTIONS]
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--trigger-script` | `build-definitions/docs/examples/trigger-pnc-import.sh` | Path to trigger script |
 | `--max-parallel` | `1` | Maximum parallel PipelineRuns |
 | `--poll-interval` | `30` | Seconds between status checks |
 | `--max-retries` | `3` | Max retry attempts for failed imports |
+
+#### `trigger` Subcommand
+
+Triggers a single PNC import PipelineRun for manual or ad-hoc imports.
+
+```bash
+import-orchestrator trigger <source_image> [tag] [OPTIONS]
+```
+
+| Argument/Option | Description |
+|-----------------|-------------|
+| `source_image` | OCI image reference to import (digest-pinned or with tag) |
+| `tag` | Optional destination tag override (default: derived from source image) |
+| `--artifact-type` | Artifact type: STAGE (default), REBUILD, or REMEDIATED |
+| `--dry-run` | Print the PipelineRun YAML without submitting it |
 
 ### Environment Variables
 
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `QUAY_TOKEN` | Yes (for `fetch`) | Authentication token for Quay.io API |
-| `KONFLUX_TOKEN` or `KUBECONFIG` | Yes (for `orchestrate`) | Kubectl authentication |
-| `LIGHTWELL_ARTIFACT_TYPE` | No | `REBUILD` (default) or `REMEDIATED` |
+| `KONFLUX_TOKEN` or `KUBECONFIG` | Yes (for `orchestrate` and `trigger`) | Kubectl authentication |
+| `LIGHTWELL_ARTIFACT_TYPE` | No | `STAGE` (default), `REBUILD`, or `REMEDIATED` |
 | `TEKTON_PIPELINE_DIR` | No | Path to directory containing Tekton pipeline definitions (defaults to `tekton/` in repository root) |
-| `TASK_BUNDLE_PULLSPEC` | No | Override for oci-verify-import task bundle (defaults to resolving floating tag via skopeo) |
+| `TASK_BUNDLE_PULLSPEC` | No | Override for oci-verify-import task bundle (defaults to resolving floating tag `0.1` via skopeo) |
 
 ### Operation Flow
 
 #### `fetch` subcommand
 
-1. Runs `fetch_pnc_oci_references.sh` to get OCI references from Quay
+1. Uses the integrated `QuayClient` to query OCI references from Quay.io based on the selected artifact type
 2. Stores references in SQLite with `status='pending'`
 3. Reports newly added vs. already tracked references
 4. Prints database statistics
 
 **Exit codes:**
 - `0` — Fetch successful (even if no new references found)
-- `2` — Fetch script not found
+- `1` — API errors or authentication failures
 
 #### `import-file` subcommand
 
@@ -164,16 +180,26 @@ import-orchestrator orchestrate [OPTIONS]
 
 1. Checks if database has any OCI references (warns if empty but continues)
 2. **Orchestration loop:**
-   - Checks status of triggered/running imports via kubectl
+   - Checks status of triggered/running imports via `KubeClient`
    - Updates database with current PipelineRun statuses
-   - Triggers new imports up to `--max-parallel` limit
+   - Triggers new imports up to `--max-parallel` limit using `PipelineRunBuilder`
    - Sleeps for `--poll-interval` seconds
    - Repeats until all imports are complete (success or retry-exhausted)
 
 **Exit codes:**
 - `0` — All imports successful or no work to do
 - `1` — Some imports failed after exhausting retries
-- `2` — Trigger script not found
+
+#### `trigger` subcommand
+
+1. Resolves the source image digest if not already pinned (using `skopeo`)
+2. Loads the base PipelineRun definition from `tekton/pipelines/pnc-import/`
+3. Patches it with the source and destination image references
+4. Submits the PipelineRun to Konflux via `kubectl`
+
+**Exit codes:**
+- `0` — PipelineRun triggered successfully
+- `1` — Image resolution or submission errors
 
 ### Database Inspection
 
@@ -212,6 +238,22 @@ sqlite3 pnc_import_state.db \
 | `retry_count` | INTEGER | Number of retry attempts |
 | `created_at` | TIMESTAMP | When reference was first added |
 
+## Project Structure
+
+```
+import-orchestrator/
+├── src/import_orchestrator/
+│   ├── clients/           # Quay and Kubernetes API clients
+│   ├── commands/          # CLI subcommand implementations
+│   ├── engine/            # Core logic
+│   ├── database.py        # SQLite state persistence
+│   ├── models.py          # Data models
+│   └── constants.py       # Configuration constants
+├── tekton/                # Tekton Pipeline definitions
+├── policy/                # Conforma policy definitions
+└── tests/                 # Pytest test suite
+```
+
 ## Development
 
 ### Running Tests
@@ -231,8 +273,6 @@ tox -e py311
 The project enforces the following standards, all configured with a **120-character line length** and targeting **Python 3.11**:
 
 - **Ruff** -- Linter with rules: `E` (pycodestyle errors), `F` (pyflakes), `W` (pycodestyle warnings), `I` (import sorting)
-- **Bandit** -- Security vulnerability scanning
-- **pip-audit** -- Dependency vulnerability scanning
 
 ### Linting and Formatting
 
@@ -251,20 +291,13 @@ To automatically format the code:
 ruff format src/ tests/
 ```
 
-### Security Checks
-
-```bash
-tox -e bandit
-tox -e pip-audit
-```
-
 ### Running All Checks
 
 ```bash
 tox
 ```
 
-This runs all environments: `py311`, `ruff`, `bandit`, `pip-audit`.
+This runs all test and linting environments.
 
 ## License
 
