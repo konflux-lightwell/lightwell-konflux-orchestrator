@@ -85,17 +85,16 @@ class OciIngest:
             print(f"ERROR: Fetch script failed: {e.stderr}", file=sys.stderr)
             raise
 
-    def from_quay(self, client: QuayClient, artifact_type: str = "REBUILD") -> IngestResult:
+    def from_quay(self, client: QuayClient) -> IngestResult:
         """Fetch OCI references from Quay and ingest them into the database.
 
         Args:
             client: A configured QuayClient instance.
-            artifact_type: REBUILD or REMEDIATED.
 
         Returns:
             IngestResult with counts of total and newly_added references.
         """
-        refs = client.fetch_oci_references(artifact_type)
+        refs = client.fetch_oci_references()
         if not refs:
             print("WARNING: No OCI references returned from Quay", file=sys.stderr)
             return IngestResult(total=0, newly_added=0)

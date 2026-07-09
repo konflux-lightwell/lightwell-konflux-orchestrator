@@ -212,11 +212,11 @@ class TestFromQuay:
             "quay.io/ns/repo:lw-build-2@sha256:bbb",
         ]
 
-        result = ingest.from_quay(mock_client, "REBUILD")
+        result = ingest.from_quay(mock_client)
 
         assert result.total == 2
         assert result.newly_added == 2
-        mock_client.fetch_oci_references.assert_called_once_with("REBUILD")
+        mock_client.fetch_oci_references.assert_called_once_with()
 
     def test_handles_empty_response(self, ingest: OciIngest):
         """Verify that an empty Quay response returns zero counts."""
@@ -238,17 +238,8 @@ class TestFromQuay:
             "quay.io/ns/repo:lw-build-2@sha256:bbb",
         ]
 
-        result = ingest.from_quay(mock_client, "REBUILD")
+        result = ingest.from_quay(mock_client)
 
         assert result.total == 2
         assert result.newly_added == 1
         assert result.duplicates == 1
-
-    def test_passes_artifact_type(self, ingest: OciIngest):
-        """Verify that artifact_type is forwarded to the client."""
-        mock_client = MagicMock(spec=QuayClient)
-        mock_client.fetch_oci_references.return_value = ["quay.io/ns/repo:lw-x@sha256:abc"]
-
-        ingest.from_quay(mock_client, "REMEDIATED")
-
-        mock_client.fetch_oci_references.assert_called_once_with("REMEDIATED")
