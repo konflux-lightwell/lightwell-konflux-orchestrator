@@ -17,10 +17,12 @@ limitations under the License.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 from import_orchestrator.clients import KubeClient
 from import_orchestrator.constants import (
+    ARTIFACT_CONFIGS,
     CLUSTER_API,
     DEFAULT_MAX_PARALLEL,
     DEFAULT_MAX_RETRIES,
@@ -61,6 +63,13 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         help=f"Max retry attempts for failed imports (default: {DEFAULT_MAX_RETRIES})",
     )
 
+    parser.add_argument(
+        "--artifact-type",
+        choices=list(ARTIFACT_CONFIGS),
+        default=os.environ.get("LIGHTWELL_ARTIFACT_TYPE", "STAGE"),
+        help="Artifact type (default: STAGE, or LIGHTWELL_ARTIFACT_TYPE env var)",
+    )
+
     parser.set_defaults(func=run)
 
 
@@ -80,7 +89,7 @@ def run(args: argparse.Namespace) -> int:
             )
 
         kube = KubeClient(NAMESPACE, CLUSTER_API)
-        builder = PipelineRunBuilder(kube=kube, artifact_type="REBUILD")
+        builder = PipelineRunBuilder(kube=kube, artifact_type=args.artifact_type)
 
         # Construct the specialized components
         trigger = ImportTrigger(

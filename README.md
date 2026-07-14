@@ -152,6 +152,7 @@ import-orchestrator orchestrate [OPTIONS]
 | `--max-parallel` | `1` | Maximum parallel PipelineRuns |
 | `--poll-interval` | `30` | Seconds between status checks |
 | `--max-retries` | `3` | Max retry attempts for failed imports |
+| `--artifact-type` | `STAGE` (or `LIGHTWELL_ARTIFACT_TYPE` env var) | Artifact type: STAGE, REBUILD, or REMEDIATED |
 
 #### `trigger` Subcommand
 

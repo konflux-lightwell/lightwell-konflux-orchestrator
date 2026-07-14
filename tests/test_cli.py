@@ -17,6 +17,8 @@ limitations under the License.
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from import_orchestrator.cli import main, make_parser
 from import_orchestrator.constants import (
     DEFAULT_DB_PATH,
@@ -29,13 +31,15 @@ from import_orchestrator.models import ImportStatus
 
 
 class TestMakeParser:
-    def test_default_values(self):
+    def test_default_values(self, monkeypatch):
+        monkeypatch.delenv("LIGHTWELL_ARTIFACT_TYPE", raising=False)
         parser = make_parser()
         args = parser.parse_args(["orchestrate"])
         assert args.db == Path(DEFAULT_DB_PATH)
         assert args.max_parallel == DEFAULT_MAX_PARALLEL
         assert args.poll_interval == DEFAULT_POLL_INTERVAL
         assert args.max_retries == DEFAULT_MAX_RETRIES
+        assert args.artifact_type == "STAGE"
         assert args.reset is False
 
     def test_custom_db_path(self):
@@ -82,6 +86,37 @@ class TestMakeParser:
         assert args.max_parallel == 8
         assert args.poll_interval == 15
         assert args.max_retries == 2
+
+
+class TestMakeParserOrchestrateArtifactType:
+    def test_artifact_type_default_is_stage(self, monkeypatch):
+        monkeypatch.delenv("LIGHTWELL_ARTIFACT_TYPE", raising=False)
+        parser = make_parser()
+        args = parser.parse_args(["orchestrate"])
+        assert args.artifact_type == "STAGE"
+
+    def test_artifact_type_flag(self, monkeypatch):
+        monkeypatch.delenv("LIGHTWELL_ARTIFACT_TYPE", raising=False)
+        parser = make_parser()
+        args = parser.parse_args(["orchestrate", "--artifact-type", "REBUILD"])
+        assert args.artifact_type == "REBUILD"
+
+    def test_artifact_type_from_env_var(self, monkeypatch):
+        monkeypatch.setenv("LIGHTWELL_ARTIFACT_TYPE", "REMEDIATED")
+        parser = make_parser()
+        args = parser.parse_args(["orchestrate"])
+        assert args.artifact_type == "REMEDIATED"
+
+    def test_artifact_type_flag_overrides_env_var(self, monkeypatch):
+        monkeypatch.setenv("LIGHTWELL_ARTIFACT_TYPE", "REMEDIATED")
+        parser = make_parser()
+        args = parser.parse_args(["orchestrate", "--artifact-type", "REBUILD"])
+        assert args.artifact_type == "REBUILD"
+
+    def test_invalid_artifact_type_rejected(self):
+        parser = make_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(["orchestrate", "--artifact-type", "INVALID"])
 
 
 class TestMakeParserFetch:
