@@ -198,7 +198,11 @@ spec:
 
         # Download the source artifact to extract inner SBOM and sources.
         # skopeo does not support tag+digest refs; use digest-only.
-        SOURCE_DIGEST_REF="${SOURCE_IMAGE%%:*}@${SOURCE_DIGEST}"
+        # Split on @ first to isolate repo:tag, then strip :tag — works for both
+        # "repo:tag@sha256:hex" and "repo@sha256:hex" (digest-only) inputs.
+        _src_repo="${SOURCE_IMAGE%%@*}"
+        _src_repo="${_src_repo%:*}"
+        SOURCE_DIGEST_REF="${_src_repo}@${SOURCE_DIGEST}"
         skopeo copy --override-os linux "docker://$SOURCE_DIGEST_REF" oci:/tmp/source-oci:artifact
         MANIFEST_DIGEST=$(jq -r '.manifests[0].digest | ltrimstr("sha256:")' /tmp/source-oci/index.json)
         LAYER_DIGEST=$(jq -r '.layers[0].digest | ltrimstr("sha256:")' \
