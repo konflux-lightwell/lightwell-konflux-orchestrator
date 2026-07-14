@@ -96,16 +96,21 @@ def digest_pin_image(source_image: str) -> str:
 
 
 def extract_tag_from_image(source_image: str) -> str:
-    """Extract the tag portion from a digest-pinned OCI reference.
+    """Extract the destination tag from a digest-pinned OCI reference.
 
     From ``repo:tag@sha256:...`` returns ``tag``.
+    From ``repo@sha256:<hex>`` returns the full digest hex (without ``sha256:``
+    prefix) so the caller can construct a valid push destination.
 
     Raises:
-        TriggerError: If no tag can be parsed from the reference.
+        TriggerError: If no digest can be parsed from the reference.
     """
     match = re.search(r":([^@]+)@", source_image)
     if match:
         return match.group(1)
+    digest_match = re.search(r"@sha256:([a-f0-9]+)", source_image)
+    if digest_match:
+        return digest_match.group(1)
     raise TriggerError(f"could not extract tag from {source_image}")
 
 

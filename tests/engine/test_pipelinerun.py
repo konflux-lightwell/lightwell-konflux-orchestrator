@@ -229,10 +229,9 @@ class TestExtractTagFromImage:
         # Actual behavior: the greedy match captures everything between first : and @
         assert extract_tag_from_image(image) == "5000/repo:mytag"
 
-    def test_raises_trigger_error_for_digest_only(self):
-        image = "quay.io/repo@sha256:abc123"
-        with pytest.raises(TriggerError, match="could not extract tag"):
-            extract_tag_from_image(image)
+    def test_digest_only_returns_hex(self):
+        image = "quay.io/repo@sha256:52400dbd9569ac3d25281b9f10edb680b947291ecedf6321681bcaec9749364f"
+        assert extract_tag_from_image(image) == "52400dbd9569ac3d25281b9f10edb680b947291ecedf6321681bcaec9749364f"
 
     def test_raises_trigger_error_for_no_digest(self):
         image = "quay.io/repo:tag"

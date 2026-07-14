@@ -31,6 +31,9 @@ def extract_tag(oci_ref: str) -> str:
     match = re.search(r":([^@]+)@", oci_ref)
     if match:
         return match.group(1)
+    digest_match = re.search(r"@sha256:([a-f0-9]+)", oci_ref)
+    if digest_match:
+        return digest_match.group(1)
     return oci_ref[-40:]
 
 
