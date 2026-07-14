@@ -21,7 +21,7 @@ import sys
 import textwrap
 from pathlib import Path
 
-from import_orchestrator.commands import fetch, import_file, orchestrate, trigger
+from import_orchestrator.commands import fetch, import_file, import_manifest, orchestrate, trigger
 from import_orchestrator.constants import DEFAULT_DB_PATH
 
 
@@ -46,6 +46,9 @@ def make_parser() -> argparse.ArgumentParser:
 
           # Import OCI references from a text file
           import-orchestrator import-file refs.txt
+
+          # Import OCI references from a consolidated build manifest
+          import-orchestrator import-manifest consolidated.yaml
 
           # Orchestrate imports (up to 10 parallel)
           import-orchestrator orchestrate --max-parallel 10
@@ -75,6 +78,7 @@ def make_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command")
     fetch.register(subparsers)
     import_file.register(subparsers)
+    import_manifest.register(subparsers)
     orchestrate.register(subparsers)
     trigger.register(subparsers)
 

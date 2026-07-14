@@ -201,6 +201,166 @@ class TestFromLines:
         assert result.newly_added == 2
 
 
+class TestFromManifest:
+    """Test the from_manifest method."""
+
+    def test_combines_tag_and_digest(self, ingest: OciIngest, tmp_path: Path):
+        manifest = tmp_path / "manifest.yaml"
+        manifest.write_text(
+            "libraries:\n"
+            "  - output:\n"
+            "      artifact:\n"
+            '        tag: "quay.io/ns/repo:build-100"\n'
+            '        digest: "quay.io/ns/repo@sha256:abcdef"\n'
+        )
+
+        result = ingest.from_manifest(manifest)
+
+        assert result.total == 1
+        assert result.newly_added == 1
+
+    def test_combined_ref_format(self, ingest: OciIngest, tmp_path: Path, db: ImportDatabase):
+        manifest = tmp_path / "manifest.yaml"
+        manifest.write_text(
+            "libraries:\n"
+            "  - output:\n"
+            "      artifact:\n"
+            '        tag: "quay.io/ns/repo:build-100"\n'
+            '        digest: "quay.io/ns/repo@sha256:abcdef"\n'
+        )
+
+        ingest.from_manifest(manifest)
+
+        from import_orchestrator.models import ImportStatus
+
+        pending = db.get_by_status(ImportStatus.PENDING)
+        assert len(pending) == 1
+        assert pending[0].oci_ref == "quay.io/ns/repo:build-100@sha256:abcdef"
+
+    def test_digest_only(self, ingest: OciIngest, tmp_path: Path, db: ImportDatabase):
+        manifest = tmp_path / "manifest.yaml"
+        manifest.write_text(
+            'libraries:\n  - output:\n      artifact:\n        digest: "quay.io/ns/repo@sha256:abcdef"\n'
+        )
+
+        result = ingest.from_manifest(manifest)
+
+        assert result.total == 1
+        assert result.newly_added == 1
+
+        from import_orchestrator.models import ImportStatus
+
+        pending = db.get_by_status(ImportStatus.PENDING)
+        assert pending[0].oci_ref == "quay.io/ns/repo@sha256:abcdef"
+
+    def test_tag_only(self, ingest: OciIngest, tmp_path: Path, db: ImportDatabase):
+        manifest = tmp_path / "manifest.yaml"
+        manifest.write_text('libraries:\n  - output:\n      artifact:\n        tag: "quay.io/ns/repo:build-100"\n')
+
+        result = ingest.from_manifest(manifest)
+
+        assert result.total == 1
+        assert result.newly_added == 1
+
+        from import_orchestrator.models import ImportStatus
+
+        pending = db.get_by_status(ImportStatus.PENDING)
+        assert pending[0].oci_ref == "quay.io/ns/repo:build-100"
+
+    def test_skips_entries_with_no_tag_or_digest(self, ingest: OciIngest, tmp_path: Path):
+        manifest = tmp_path / "manifest.yaml"
+        manifest.write_text("libraries:\n  - output:\n      artifact: {}\n  - output:\n      other_field: value\n")
+
+        result = ingest.from_manifest(manifest)
+
+        assert result.total == 0
+        assert result.newly_added == 0
+
+    def test_empty_libraries_returns_zero(self, ingest: OciIngest, tmp_path: Path):
+        manifest = tmp_path / "manifest.yaml"
+        manifest.write_text("libraries: []\n")
+
+        result = ingest.from_manifest(manifest)
+
+        assert result.total == 0
+        assert result.newly_added == 0
+
+    def test_no_libraries_key_returns_zero(self, ingest: OciIngest, tmp_path: Path):
+        manifest = tmp_path / "manifest.yaml"
+        manifest.write_text("other_key: value\n")
+
+        result = ingest.from_manifest(manifest)
+
+        assert result.total == 0
+        assert result.newly_added == 0
+
+    def test_multiple_libraries(self, ingest: OciIngest, tmp_path: Path):
+        manifest = tmp_path / "manifest.yaml"
+        manifest.write_text(
+            "libraries:\n"
+            "  - output:\n"
+            "      artifact:\n"
+            '        tag: "quay.io/ns/repo:build-1"\n'
+            '        digest: "quay.io/ns/repo@sha256:aaa"\n'
+            "  - output:\n"
+            "      artifact:\n"
+            '        tag: "quay.io/ns/repo:build-2"\n'
+            '        digest: "quay.io/ns/repo@sha256:bbb"\n'
+            "  - output:\n"
+            "      artifact:\n"
+            '        digest: "quay.io/ns/repo@sha256:ccc"\n'
+        )
+
+        result = ingest.from_manifest(manifest)
+
+        assert result.total == 3
+        assert result.newly_added == 3
+
+    def test_handles_duplicates(self, ingest: OciIngest, tmp_path: Path):
+        ingest.db.add_oci_reference("quay.io/ns/repo:build-1@sha256:aaa")
+
+        manifest = tmp_path / "manifest.yaml"
+        manifest.write_text(
+            "libraries:\n"
+            "  - output:\n"
+            "      artifact:\n"
+            '        tag: "quay.io/ns/repo:build-1"\n'
+            '        digest: "quay.io/ns/repo@sha256:aaa"\n'
+            "  - output:\n"
+            "      artifact:\n"
+            '        tag: "quay.io/ns/repo:build-2"\n'
+            '        digest: "quay.io/ns/repo@sha256:bbb"\n'
+        )
+
+        result = ingest.from_manifest(manifest)
+
+        assert result.total == 2
+        assert result.newly_added == 1
+        assert result.duplicates == 1
+
+    def test_warns_on_no_refs_found(self, ingest: OciIngest, tmp_path: Path, capsys):
+        manifest = tmp_path / "manifest.yaml"
+        manifest.write_text("libraries: []\n")
+
+        ingest.from_manifest(manifest)
+
+        captured = capsys.readouterr()
+        assert "No OCI references found in manifest" in captured.err
+
+    def test_digest_without_at_sign_raises(self, ingest: OciIngest, tmp_path: Path):
+        manifest = tmp_path / "manifest.yaml"
+        manifest.write_text(
+            "libraries:\n"
+            "  - output:\n"
+            "      artifact:\n"
+            '        tag: "quay.io/ns/repo:build-100"\n'
+            '        digest: "sha256:abcdef"\n'
+        )
+
+        with pytest.raises(ValueError, match="Malformed digest reference"):
+            ingest.from_manifest(manifest)
+
+
 class TestFromQuay:
     """Test the from_quay method."""
 
