@@ -43,6 +43,7 @@ import-orchestrator --help
 import-orchestrator fetch --help
 import-orchestrator import-file --help
 import-orchestrator orchestrate --help
+import-orchestrator import-manifest --help
 import-orchestrator trigger --help
 
 # Typical workflow: fetch then orchestrate
@@ -51,6 +52,10 @@ import-orchestrator orchestrate --max-parallel 10
 
 # Alternative: import from file then orchestrate
 import-orchestrator import-file refs.txt
+import-orchestrator orchestrate --max-parallel 10
+
+# Alternative: import from a consolidated build manifest
+import-orchestrator import-manifest consolidated.yaml
 import-orchestrator orchestrate --max-parallel 10
 
 # Trigger a single PNC import PipelineRun
@@ -112,6 +117,28 @@ quay.io/namespace/repo:tag2@sha256:def456...
 quay.io/namespace/repo:tag3@sha256:789abc...
 ```
 
+#### `import-manifest` Subcommand
+
+Imports OCI references from a consolidated build manifest (YAML) into the database.
+
+```bash
+import-orchestrator import-manifest <file>
+```
+
+Each library entry's `output.artifact.tag` and `output.artifact.digest` are combined into a `tag@digest` reference when both are present, falling back to digest-only or tag-only. Entries missing both fields are skipped. A malformed digest (missing `@` separator) is treated as an error and aborts processing.
+
+**Manifest format:**
+```yaml
+libraries:
+  - output:
+      artifact:
+        tag: "quay.io/namespace/repo:build-100"
+        digest: "quay.io/namespace/repo@sha256:abc123..."
+  - output:
+      artifact:
+        digest: "quay.io/namespace/repo@sha256:def456..."
+```
+
 #### `orchestrate` Subcommand
 
 Orchestrates the import process by triggering PipelineRuns and monitoring their status.
@@ -125,6 +152,7 @@ import-orchestrator orchestrate [OPTIONS]
 | `--max-parallel` | `1` | Maximum parallel PipelineRuns |
 | `--poll-interval` | `30` | Seconds between status checks |
 | `--max-retries` | `3` | Max retry attempts for failed imports |
+| `--artifact-type` | `STAGE` (or `LIGHTWELL_ARTIFACT_TYPE` env var) | Artifact type: STAGE, REBUILD, or REMEDIATED |
 
 #### `trigger` Subcommand
 
@@ -171,6 +199,19 @@ import-orchestrator trigger <source_image> [tag] [OPTIONS]
 3. Adds each reference to the database with `status='pending'`
 4. Skips duplicates (already in database)
 5. Prints summary of how many were added
+
+**Exit codes:**
+- `0` — Import successful (even if all duplicates)
+- `2` — File not found
+
+#### `import-manifest` subcommand
+
+1. Reads a consolidated build manifest (YAML)
+2. For each library entry, combines `output.artifact.tag` and `output.artifact.digest` into a `tag@digest` reference
+3. Falls back to digest-only or tag-only when one is missing; skips entries missing both
+4. Raises an error if a digest field is malformed (missing `@` separator)
+5. Adds each reference to the database with `status='pending'`
+6. Skips duplicates (already in database)
 
 **Exit codes:**
 - `0` — Import successful (even if all duplicates)
