@@ -715,9 +715,7 @@ class TestPipelineRunBuilderTrigger:
         assert result == "pnc-import-abcde"
         mock_kube.create_pipelinerun.assert_called_once()
 
-        # Verify the YAML manifest passed to create_pipelinerun
-        manifest_yaml = mock_kube.create_pipelinerun.call_args[0][0]
-        manifest = yaml.safe_load(manifest_yaml)
+        manifest = mock_kube.create_pipelinerun.call_args[0][0]
         assert manifest["kind"] == "PipelineRun"
 
         params = {p["name"]: p["value"] for p in manifest["spec"]["params"]}
@@ -750,8 +748,7 @@ class TestPipelineRunBuilderTrigger:
 
         assert result == "pnc-import-abcde"
 
-        manifest_yaml = mock_kube.create_pipelinerun.call_args[0][0]
-        manifest = yaml.safe_load(manifest_yaml)
+        manifest = mock_kube.create_pipelinerun.call_args[0][0]
 
         params = {p["name"]: p["value"] for p in manifest["spec"]["params"]}
         assert "pnc-import-remediated/pnc-import-remediated:v2.0" in params["IMAGE"]
@@ -780,8 +777,7 @@ class TestPipelineRunBuilderTrigger:
         builder = PipelineRunBuilder(kube=mock_kube, artifact_type="REBUILD")
         builder.trigger("quay.io/repo:v1.0", tag="custom-tag")
 
-        manifest_yaml = mock_kube.create_pipelinerun.call_args[0][0]
-        manifest = yaml.safe_load(manifest_yaml)
+        manifest = mock_kube.create_pipelinerun.call_args[0][0]
         params = {p["name"]: p["value"] for p in manifest["spec"]["params"]}
         assert params["IMAGE"].endswith(":custom-tag")
 
@@ -876,8 +872,7 @@ class TestPipelineRunBuilderTrigger:
         builder = PipelineRunBuilder(kube=mock_kube)
         builder.trigger("quay.io/repo:v1.0")
 
-        manifest_yaml = mock_kube.create_pipelinerun.call_args[0][0]
-        manifest = yaml.safe_load(manifest_yaml)
+        manifest = mock_kube.create_pipelinerun.call_args[0][0]
         tasks = manifest["spec"]["pipelineSpec"]["tasks"]
 
         bundle_tasks = [t for t in tasks if t["taskRef"].get("resolver") == "bundles"]
@@ -902,8 +897,7 @@ class TestPipelineRunBuilderTrigger:
         builder = PipelineRunBuilder(kube=mock_kube, artifact_type="REBUILD")
         builder.trigger("quay.io/repo:v1.0")
 
-        manifest_yaml = mock_kube.create_pipelinerun.call_args[0][0]
-        manifest = yaml.safe_load(manifest_yaml)
+        manifest = mock_kube.create_pipelinerun.call_args[0][0]
         params = {p["name"]: p["value"] for p in manifest["spec"]["params"]}
         expected = "quay.io/redhat-user-workloads/lightwell-poc-tenant/pnc-import/pnc-import:v1.0"
         assert params["IMAGE"] == expected
@@ -927,8 +921,7 @@ class TestPipelineRunBuilderTrigger:
         builder = PipelineRunBuilder(kube=mock_kube, artifact_type="REMEDIATED")
         builder.trigger("quay.io/repo:v1.0")
 
-        manifest_yaml = mock_kube.create_pipelinerun.call_args[0][0]
-        manifest = yaml.safe_load(manifest_yaml)
+        manifest = mock_kube.create_pipelinerun.call_args[0][0]
         params = {p["name"]: p["value"] for p in manifest["spec"]["params"]}
         expected = "quay.io/redhat-user-workloads/lightwell-poc-tenant/pnc-import-remediated/pnc-import-remediated:v1.0"
         assert params["IMAGE"] == expected

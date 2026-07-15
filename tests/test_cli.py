@@ -20,6 +20,7 @@ from unittest.mock import patch
 import pytest
 
 from import_orchestrator.cli import main, make_parser
+from import_orchestrator.clients.kube_api import KubeAuth
 from import_orchestrator.constants import (
     DEFAULT_DB_PATH,
     DEFAULT_MAX_PARALLEL,
@@ -152,6 +153,12 @@ class TestMain:
 
 
 class TestMainOrchestrate:
+    @pytest.fixture(autouse=True)
+    def _mock_kube_auth(self):
+        with patch("import_orchestrator.clients.kube.resolve_auth") as mock:
+            mock.return_value = KubeAuth(server="https://api.example.com:6443", token="fake", ca_cert=None)
+            yield
+
     def test_reset_deletes_existing_db(self, monkeypatch, tmp_path: Path):
         db_path = tmp_path / "test.db"
         db_path.write_text("dummy data")

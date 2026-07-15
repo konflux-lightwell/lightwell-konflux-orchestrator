@@ -257,7 +257,7 @@ class PipelineRunBuilder:
 
     Orchestrates the full workflow: digest-pin the source image, resolve
     the task bundle, load and patch the pipeline definition, build the
-    PipelineRun manifest, and submit it via kubectl.
+    PipelineRun manifest, and submit it via the K8s API.
     """
 
     def __init__(self, kube: KubeClient, artifact_type: str = "REBUILD"):
@@ -299,5 +299,4 @@ class PipelineRunBuilder:
             service_account=self._config["service_account"],
         )
 
-        manifest_yaml = yaml.dump(manifest, default_flow_style=False)
-        return self.kube.create_pipelinerun(manifest_yaml)
+        return self.kube.create_pipelinerun(manifest)

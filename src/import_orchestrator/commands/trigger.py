@@ -33,7 +33,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         description=(
             "Trigger a PNC import PipelineRun on the Konflux cluster. "
             "Resolves image digests, patches the pipeline definition, "
-            "and submits the PipelineRun via kubectl."
+            "and submits the PipelineRun via the K8s API."
         ),
     )
 
