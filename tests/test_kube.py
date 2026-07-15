@@ -15,25 +15,43 @@ limitations under the License.
 """
 
 import subprocess
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 from import_orchestrator.clients import KubeClient
+from import_orchestrator.clients.kube_api import KubeAuth
+
+
+def _make_kube_client(monkeypatch, token=None):
+    """Create a KubeClient with mocked auth and API layer."""
+    if token:
+        monkeypatch.setenv("KONFLUX_TOKEN", token)
+    else:
+        monkeypatch.delenv("KONFLUX_TOKEN", raising=False)
+
+    mock_api = MagicMock()
+    with patch("import_orchestrator.clients.kube.resolve_auth") as mock_resolve:
+        mock_resolve.return_value = KubeAuth(
+            server="https://api.example.com:6443", token=token or "test-token", ca_cert=None
+        )
+        with patch("import_orchestrator.clients.kube.KubeAPI", return_value=mock_api):
+            client = KubeClient(namespace="test-ns", cluster_api="https://api.example.com:6443")
+    client._mock_api = mock_api
+    return client
 
 
 @pytest.fixture
 def kube(monkeypatch):
     """Create a KubeClient with no KONFLUX_TOKEN set."""
-    monkeypatch.delenv("KONFLUX_TOKEN", raising=False)
-    return KubeClient(namespace="test-ns", cluster_api="https://api.example.com:6443")
+    return _make_kube_client(monkeypatch)
 
 
 @pytest.fixture
 def kube_with_token(monkeypatch):
     """Create a KubeClient with KONFLUX_TOKEN set."""
-    monkeypatch.setenv("KONFLUX_TOKEN", "test-token-123")
-    return KubeClient(namespace="test-ns", cluster_api="https://api.example.com:6443")
+    return _make_kube_client(monkeypatch, token="test-token-123")
 
 
 class TestKubeClientInit:
@@ -134,108 +152,39 @@ class TestCountRunningImports:
 class TestCreatePipelinerun:
     """Test the create_pipelinerun method."""
 
-    @patch("import_orchestrator.clients.kube.subprocess.run")
-    def test_returns_generated_name(self, mock_run, kube: KubeClient):
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[],
-            returncode=0,
-            stdout="pipelinerun.tekton.dev/pnc-import-abcde created\n",
-            stderr="",
-        )
+    def test_returns_generated_name(self, kube: KubeClient):
+        kube._mock_api.create.return_value = {"metadata": {"name": "pnc-import-abcde"}}
 
-        result = kube.create_pipelinerun("apiVersion: tekton.dev/v1\nkind: PipelineRun\n")
+        result = kube.create_pipelinerun({"apiVersion": "tekton.dev/v1", "kind": "PipelineRun"})
         assert result == "pnc-import-abcde"
 
-    @patch("import_orchestrator.clients.kube.subprocess.run")
-    def test_passes_manifest_as_stdin(self, mock_run, kube: KubeClient):
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[],
-            returncode=0,
-            stdout="pipelinerun.tekton.dev/pnc-import-xyz created\n",
-            stderr="",
-        )
+    def test_passes_manifest_as_body(self, kube: KubeClient):
+        kube._mock_api.create.return_value = {"metadata": {"name": "pnc-import-xyz"}}
 
-        manifest = "apiVersion: tekton.dev/v1\nkind: PipelineRun\n"
+        manifest = {"apiVersion": "tekton.dev/v1", "kind": "PipelineRun"}
         kube.create_pipelinerun(manifest)
 
-        call_kwargs = mock_run.call_args
-        assert call_kwargs[1]["input"] == manifest
-
-    @patch("import_orchestrator.clients.kube.subprocess.run")
-    def test_uses_kubectl_create_with_stdin(self, mock_run, kube: KubeClient):
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[],
-            returncode=0,
-            stdout="pipelinerun.tekton.dev/pnc-import-xyz created\n",
-            stderr="",
+        kube._mock_api.create.assert_called_once_with(
+            "/apis/tekton.dev/v1/namespaces/test-ns/pipelineruns",
+            manifest,
         )
 
-        kube.create_pipelinerun("manifest")
+    def test_returns_none_on_http_error(self, kube: KubeClient):
+        kube._mock_api.create.side_effect = requests.HTTPError("403 Forbidden")
 
-        cmd = mock_run.call_args[0][0]
-        assert cmd[0] == "kubectl"
-        assert "create" in cmd
-        assert "-f" in cmd
-        assert "-" in cmd
-
-    @patch("import_orchestrator.clients.kube.subprocess.run")
-    def test_returns_none_on_subprocess_error(self, mock_run, kube: KubeClient):
-        error = subprocess.CalledProcessError(1, "kubectl")
-        error.stderr = "forbidden"
-        mock_run.side_effect = error
-
-        result = kube.create_pipelinerun("manifest")
+        result = kube.create_pipelinerun({"kind": "PipelineRun"})
         assert result is None
 
-    @patch("import_orchestrator.clients.kube.subprocess.run")
-    def test_returns_none_when_name_not_parseable(self, mock_run, kube: KubeClient):
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[],
-            returncode=0,
-            stdout="some unexpected output\n",
-            stderr="",
-        )
+    def test_returns_none_when_name_missing(self, kube: KubeClient):
+        kube._mock_api.create.return_value = {"metadata": {}}
 
-        result = kube.create_pipelinerun("manifest")
+        result = kube.create_pipelinerun({"kind": "PipelineRun"})
         assert result is None
 
-    @patch("import_orchestrator.clients.kube.subprocess.run")
-    def test_parses_name_from_stderr(self, mock_run, kube: KubeClient):
-        """kubectl sometimes writes the 'created' line to stderr."""
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[],
-            returncode=0,
-            stdout="",
-            stderr="pipelinerun.tekton.dev/pnc-import-stderr created\n",
-        )
+    def test_uses_correct_namespace_in_path(self, kube: KubeClient):
+        kube._mock_api.create.return_value = {"metadata": {"name": "pnc-import-ns"}}
 
-        result = kube.create_pipelinerun("manifest")
-        assert result == "pnc-import-stderr"
+        kube.create_pipelinerun({"kind": "PipelineRun"})
 
-    @patch("import_orchestrator.clients.kube.subprocess.run")
-    def test_includes_namespace_args(self, mock_run, kube: KubeClient):
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[],
-            returncode=0,
-            stdout="pipelinerun.tekton.dev/pnc-import-ns created\n",
-            stderr="",
-        )
-
-        kube.create_pipelinerun("manifest")
-        cmd = mock_run.call_args[0][0]
-        assert "-n" in cmd
-        assert "test-ns" in cmd
-
-    @patch("import_orchestrator.clients.kube.subprocess.run")
-    def test_includes_token_args_when_set(self, mock_run, kube_with_token: KubeClient):
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[],
-            returncode=0,
-            stdout="pipelinerun.tekton.dev/pnc-import-tok created\n",
-            stderr="",
-        )
-
-        kube_with_token.create_pipelinerun("manifest")
-        cmd = mock_run.call_args[0][0]
-        assert "--token" in cmd
-        assert "test-token-123" in cmd
+        api_path = kube._mock_api.create.call_args[0][0]
+        assert "/namespaces/test-ns/" in api_path

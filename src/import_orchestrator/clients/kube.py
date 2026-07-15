@@ -23,11 +23,14 @@ import subprocess
 import sys
 from typing import Literal
 
+import requests
+
+from import_orchestrator.clients.kube_api import KubeAPI, resolve_auth
 from import_orchestrator.models import PipelineRunStatus
 
 
 class KubeClient:
-    """Wrapper for kubectl operations against a Kubernetes cluster.
+    """Client for Kubernetes API operations against a cluster.
 
     Authenticates using either a KUBECONFIG file or the KONFLUX_TOKEN environment variable.
     """
@@ -35,6 +38,7 @@ class KubeClient:
     def __init__(self, namespace: str, cluster_api: str):
         self.namespace = namespace
         self.cluster_api = cluster_api
+        self._api = KubeAPI(resolve_auth(cluster_api))
         self._kubectl_base_args = self._build_kubectl_args()
 
     def _build_kubectl_args(self) -> list[str]:
@@ -240,24 +244,16 @@ class KubeClient:
             print(f"ERROR: Failed to create release for {snapshot_name}: {e.stderr}", file=sys.stderr)
             return None
 
-    def create_pipelinerun(self, manifest_yaml: str) -> str | None:
-        """Create a PipelineRun from a YAML manifest and return its generated name.
-
-        Returns None if the PipelineRun name could not be parsed from kubectl output.
-        """
+    def create_pipelinerun(self, manifest: dict) -> str | None:
+        """Create a PipelineRun from a manifest dict and return its generated name."""
         try:
-            result = subprocess.run(
-                ["kubectl", *self._kubectl_base_args, "create", "-f", "-"],
-                input=manifest_yaml,
-                capture_output=True,
-                check=True,
-                text=True,
+            result = self._api.create(
+                f"/apis/tekton.dev/v1/namespaces/{self.namespace}/pipelineruns",
+                manifest,
             )
-            output = result.stdout + result.stderr
-            match = re.search(r"pipelinerun\.tekton\.dev/(\S+)\s+created", output)
-            return match.group(1) if match else None
-        except subprocess.CalledProcessError as e:
-            print(f"ERROR: Failed to create PipelineRun: {e.stderr}", file=sys.stderr)
+            return result["metadata"]["name"]
+        except (requests.RequestException, KeyError) as e:
+            print(f"ERROR: Failed to create PipelineRun: {e}", file=sys.stderr)
             return None
 
     def find_release_for_snapshot(self, snapshot_name: str) -> str | None:
