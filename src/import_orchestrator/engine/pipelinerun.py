@@ -36,7 +36,6 @@ import yaml
 from import_orchestrator.clients.kube import KubeClient
 from import_orchestrator.constants import (
     ARTIFACT_CONFIGS,
-    CATALOG_BUNDLE_REFS,
     NAMESPACE,
     TASK_BUNDLE_BASE,
     TASK_BUNDLE_FLOATING_TAG,
@@ -154,10 +153,10 @@ def load_and_patch_pipeline(pipeline_path: Path, task_bundle_ref: str) -> dict[s
     """Load the pipeline YAML and patch taskRefs to use bundle resolvers.
 
     - ``oci-verify-import`` is patched to use *task_bundle_ref*.
-    - Catalog tasks listed in ``CATALOG_BUNDLE_REFS`` are resolved to
-      their digest-pinned bundles.
-    - Any remaining tasks with a ``version`` field (not in the catalog)
-      have the ``version`` stripped.
+    - Catalog tasks are expected to already carry bundle-resolver refs
+      in the pipeline YAML and are left unchanged.
+    - Any remaining tasks with a ``version`` field have the ``version``
+      stripped.
 
     Returns:
         The patched ``spec`` dict from the Pipeline resource.
@@ -188,10 +187,7 @@ def _patch_task_ref(task: dict[str, Any], task_bundle_ref: str) -> None:
     if name == "oci-verify-import":
         task["taskRef"] = _make_bundle_resolver_ref(name, task_bundle_ref)
     elif "version" in ref:
-        if name in CATALOG_BUNDLE_REFS:
-            task["taskRef"] = _make_bundle_resolver_ref(name, CATALOG_BUNDLE_REFS[name])
-        else:
-            del ref["version"]
+        del ref["version"]
 
 
 def _make_bundle_resolver_ref(task_name: str, bundle_pullspec: str) -> dict[str, Any]:

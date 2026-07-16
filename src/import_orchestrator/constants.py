@@ -38,22 +38,6 @@ TASK_BUNDLE_FLOATING_TAG = "0.1"
 # to verify PNC artifacts. Must exist in NAMESPACE before imports can run.
 VERIFICATION_PUBLIC_KEY_SECRET = "verification-public-key"
 
-# Digest-pinned bundle references for catalog tasks embedded in the PipelineRun.
-CATALOG_BUNDLE_REFS: dict[str, str] = {
-    "clamav-scan": (
-        "quay.io/konflux-ci/tekton-catalog/task-clamav-scan:0.3"
-        "@sha256:567cb66bd2e1f4b58b9d4d756f3317fc62479e0b40aa0de66094b1f12d296cfc"
-    ),
-    "sast-shell-check-oci-ta": (
-        "quay.io/konflux-ci/tekton-catalog/task-sast-shell-check-oci-ta:0.1"
-        "@sha256:fc685d6f7dfb7c9ab2f2db38bbe2c8d383407847350ccd8b96352322c487b13c"
-    ),
-    "sast-unicode-check-oci-ta": (
-        "quay.io/konflux-ci/tekton-catalog/task-sast-unicode-check-oci-ta:0.4"
-        "@sha256:5807ffe3a0cca5cf970076bbc7a404642cc6e3eebe64e9e5e6a4f20da740bf73"
-    ),
-}
-
 # Artifact-type-specific configuration.
 ARTIFACT_CONFIGS: dict[str, dict[str, str]] = {
     "REBUILD": {
