@@ -23,7 +23,7 @@ import pytest
 import yaml
 
 from import_orchestrator.clients.kube import KubeClient
-from import_orchestrator.constants import ARTIFACT_CONFIGS, CATALOG_BUNDLE_REFS
+from import_orchestrator.constants import ARTIFACT_CONFIGS
 from import_orchestrator.engine.pipelinerun import (
     PipelineRunBuilder,
     TriggerError,
@@ -42,6 +42,18 @@ from import_orchestrator.engine.pipelinerun import (
 # ---------------------------------------------------------------------------
 # Sample pipeline YAML used by multiple test classes
 # ---------------------------------------------------------------------------
+
+
+def _bundle_resolver_ref(name, bundle):
+    return {
+        "resolver": "bundles",
+        "params": [
+            {"name": "name", "value": name},
+            {"name": "bundle", "value": bundle},
+            {"name": "kind", "value": "task"},
+        ],
+    }
+
 
 SAMPLE_PIPELINE_YAML = {
     "apiVersion": "tekton.dev/v1",
@@ -63,19 +75,28 @@ SAMPLE_PIPELINE_YAML = {
             },
             {
                 "name": "clamav-scan",
-                "taskRef": {"name": "clamav-scan", "version": "0.3"},
+                "taskRef": _bundle_resolver_ref(
+                    "clamav-scan",
+                    "quay.io/konflux-ci/tekton-catalog/task-clamav-scan:0.3@sha256:aaa",
+                ),
                 "runAfter": ["verify-and-mirror"],
                 "params": [],
             },
             {
                 "name": "sast-shell-check",
-                "taskRef": {"name": "sast-shell-check-oci-ta", "version": "0.1"},
+                "taskRef": _bundle_resolver_ref(
+                    "sast-shell-check-oci-ta",
+                    "quay.io/konflux-ci/tekton-catalog/task-sast-shell-check-oci-ta:0.1@sha256:bbb",
+                ),
                 "runAfter": ["verify-and-mirror"],
                 "params": [],
             },
             {
                 "name": "sast-unicode-check",
-                "taskRef": {"name": "sast-unicode-check-oci-ta", "version": "0.4"},
+                "taskRef": _bundle_resolver_ref(
+                    "sast-unicode-check-oci-ta",
+                    "quay.io/konflux-ci/tekton-catalog/task-sast-unicode-check-oci-ta:0.4@sha256:ccc",
+                ),
                 "runAfter": ["verify-and-mirror"],
                 "params": [],
             },
@@ -367,28 +388,15 @@ class TestPatchTaskRef:
         assert params["name"] == "oci-verify-import"
         assert params["kind"] == "Task"
 
-    def test_patches_catalog_task_clamav(self):
-        task = {"taskRef": {"name": "clamav-scan", "version": "0.3"}}
+    def test_leaves_preresolved_bundle_ref_unchanged(self):
+        bundle_ref = "quay.io/konflux-ci/tekton-catalog/task-clamav-scan:0.3@sha256:abc"
+        task = {
+            "taskRef": _bundle_resolver_ref("clamav-scan", bundle_ref),
+        }
+        original_ref = {k: v for k, v in task["taskRef"].items()}
         _patch_task_ref(task, TASK_BUNDLE_REF)
 
-        assert task["taskRef"]["resolver"] == "bundles"
-        params = {p["name"]: p["value"] for p in task["taskRef"]["params"]}
-        assert params["bundle"] == CATALOG_BUNDLE_REFS["clamav-scan"]
-        assert params["name"] == "clamav-scan"
-
-    def test_patches_catalog_task_sast_shell(self):
-        task = {"taskRef": {"name": "sast-shell-check-oci-ta", "version": "0.1"}}
-        _patch_task_ref(task, TASK_BUNDLE_REF)
-
-        params = {p["name"]: p["value"] for p in task["taskRef"]["params"]}
-        assert params["bundle"] == CATALOG_BUNDLE_REFS["sast-shell-check-oci-ta"]
-
-    def test_patches_catalog_task_sast_unicode(self):
-        task = {"taskRef": {"name": "sast-unicode-check-oci-ta", "version": "0.4"}}
-        _patch_task_ref(task, TASK_BUNDLE_REF)
-
-        params = {p["name"]: p["value"] for p in task["taskRef"]["params"]}
-        assert params["bundle"] == CATALOG_BUNDLE_REFS["sast-unicode-check-oci-ta"]
+        assert task["taskRef"] == original_ref
 
     def test_strips_version_from_unknown_task_with_version(self):
         task = {"taskRef": {"name": "some-other-task", "version": "1.0"}}
@@ -447,18 +455,17 @@ class TestLoadAndPatchPipeline:
         assert params["bundle"] == TASK_BUNDLE_REF
         assert params["name"] == "oci-verify-import"
 
-    def test_patches_all_catalog_tasks(self, pipeline_file: Path):
+    def test_preserves_preresolved_catalog_tasks(self, pipeline_file: Path):
         result = load_and_patch_pipeline(pipeline_file, TASK_BUNDLE_REF)
 
         for task_name in ["clamav-scan", "sast-shell-check-oci-ta", "sast-unicode-check-oci-ta"]:
-            # Find the task by looking for the bundle resolver param that has the task name
             matched = [
                 t
                 for t in result["tasks"]
                 if t["taskRef"].get("resolver") == "bundles"
                 and any(p["name"] == "name" and p["value"] == task_name for p in t["taskRef"]["params"])
             ]
-            assert len(matched) == 1, f"Expected exactly one patched task for {task_name}"
+            assert len(matched) == 1, f"Expected pre-resolved task for {task_name}"
 
     def test_all_four_tasks_become_bundle_resolvers(self, pipeline_file: Path):
         result = load_and_patch_pipeline(pipeline_file, TASK_BUNDLE_REF)
