@@ -13,6 +13,7 @@ stages:
   - security
   - secret-detection
   - unit-tests
+  - build
 
 unit-tests:
   extends: .common
@@ -37,6 +38,33 @@ pip-audit:
   stage: security
   script:
     - tox -e pip-audit
+
+container-build:
+  stage: build
+  image: registry.redhat.io/rhel10/buildah:latest
+  tags: [itup-alm-x86]
+  variables:
+    STORAGE_DRIVER: vfs
+    IMAGE_REGISTRY: "quay.io/light-castle/pnc-import-orchestrator"
+    IMAGE_WITH_COMMIT_SHA_TAG: "$IMAGE_REGISTRY:$CI_COMMIT_SHORT_SHA"
+    IMAGE_WITH_LATEST_TAG: "$IMAGE_REGISTRY:latest"
+  rules:
+    # Runs only on merges to main
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  script:
+    - buildah build-using-dockerfile
+      --tag "${IMAGE_WITH_COMMIT_SHA_TAG}"
+      -f "${CI_PROJECT_DIR}/Dockerfile"
+      "${CI_PROJECT_DIR}"
+    - buildah push
+      --creds "${CONTAINER_REGISTRY_USER}:${CONTAINER_REGISTRY_TOKEN}"
+      "${IMAGE_WITH_COMMIT_SHA_TAG}"
+      "docker://${IMAGE_WITH_COMMIT_SHA_TAG}"
+    - buildah push
+      --creds "${CONTAINER_REGISTRY_USER}:${CONTAINER_REGISTRY_TOKEN}"
+      "${IMAGE_WITH_COMMIT_SHA_TAG}"
+      "docker://${IMAGE_WITH_LATEST_TAG}"
+    - printf "Images pushed\n$IMAGE_WITH_COMMIT_SHA_TAG\n$IMAGE_WITH_LATEST_TAG"
 
 include:
   - template: Security/Secret-Detection.gitlab-ci.yml
