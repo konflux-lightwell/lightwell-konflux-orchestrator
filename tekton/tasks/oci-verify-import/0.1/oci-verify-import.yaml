@@ -64,6 +64,8 @@ spec:
       description: Source commit extracted from the PNC SLSA attestation.
     - name: SOURCE_ARTIFACT
       description: The Trusted Artifact URI pointing to the build source tree.
+    - name: INDEX_BUILD_JSON_ARTIFACT
+      description: The Trusted Artifact URI pointing to the build index JSON.
     - name: VERIFICATION_KEY_FINGERPRINT
       description: >-
         SHA256 fingerprint of the cosign public key used to verify SOURCE_IMAGE,
@@ -285,6 +287,15 @@ spec:
           | head -1)
         echo -n "$CHAINS_GIT_URL" | tee "$(results.CHAINS-GIT_URL.path)"
         echo -n "$CHAINS_GIT_COMMIT" | tee "$(results.CHAINS-GIT_COMMIT.path)"
+
+        # Pull the build index JSON image for trusted artifact storage.
+        mkdir -p /var/workdir/index
+        BUILD_PIPELINE_ID=$(oras manifest fetch "$SOURCE_IMAGE" | jq -r '.annotations."dev.lightwell.build-id" // empty')
+        if [ -n "$BUILD_PIPELINE_ID" ]; then
+          INDEX_IMAGE_REPO="$(echo "$SOURCE_IMAGE" | awk '{sub(/[:@].*/, ""); print}')"
+          INDEX_IMAGE_REF="${INDEX_IMAGE_REPO}:idx-${BUILD_PIPELINE_ID}"
+          oras pull --output /var/workdir/index "$INDEX_IMAGE_REF"
+        fi
     - name: store-source-artifact
       image: quay.io/konflux-ci/build-trusted-artifacts:latest@sha256:9bd32f6bafb517b309e11a2d89365052b4ab3f1c9c23c4ffd45aff6f03960476
       env:
@@ -308,6 +319,7 @@ spec:
         - --store
         - $(params.ociStorage)
         - $(results.SOURCE_ARTIFACT.path)=/var/workdir/source
+        - $(results.INDEX_BUILD_JSON_ARTIFACT.path)=/var/workdir/index
   volumes:
     - configMap:
         items:
