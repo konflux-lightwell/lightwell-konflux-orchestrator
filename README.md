@@ -17,7 +17,7 @@ This tool provides batch orchestration for importing PNC (Project Newcastle) bui
 
 - Python 3.11+
 - `kubectl` authenticated to the target cluster (kubeconfig or `KONFLUX_TOKEN`)
-- `skopeo` for resolving OCI image digests (used by the trigger command)
+
 
 ## Installation
 
@@ -164,7 +164,7 @@ import-orchestrator trigger <source_image> [tag] [OPTIONS]
 
 | Argument/Option | Description |
 |-----------------|-------------|
-| `source_image` | OCI image reference to import (digest-pinned or with tag) |
+| `source_image` | OCI image reference to import (must be digest-pinned with @sha256:) |
 | `tag` | Optional destination tag override (default: derived from source image) |
 | `--artifact-type` | Artifact type: STAGE (default), REBUILD, or REMEDIATED |
 | `--dry-run` | Print the PipelineRun YAML without submitting it |
@@ -177,7 +177,7 @@ import-orchestrator trigger <source_image> [tag] [OPTIONS]
 | `KONFLUX_TOKEN` or `KUBECONFIG` | Yes (for `orchestrate` and `trigger`) | Kubectl authentication |
 | `LIGHTWELL_ARTIFACT_TYPE` | No | `STAGE` (default), `REBUILD`, or `REMEDIATED` |
 | `TEKTON_PIPELINE_DIR` | No | Path to directory containing Tekton pipeline definitions (defaults to `tekton/` in repository root) |
-| `TASK_BUNDLE_PULLSPEC` | No | Override for oci-verify-import task bundle (defaults to resolving floating tag `0.1` via skopeo) |
+
 
 ### Operation Flow
 
@@ -233,14 +233,14 @@ import-orchestrator trigger <source_image> [tag] [OPTIONS]
 
 #### `trigger` subcommand
 
-1. Resolves the source image digest if not already pinned (using `skopeo`)
-2. Loads the base PipelineRun definition from `tekton/pipelines/pnc-import/`
-3. Patches it with the source and destination image references
-4. Submits the PipelineRun to Konflux via `kubectl`
+1. Validates that the source image is digest-pinned
+2. Loads the pipeline definition from `tekton/pipelines/pnc-import/`
+3. Builds the PipelineRun manifest with source and destination image references
+4. Submits the PipelineRun to Konflux via the K8s API
 
 **Exit codes:**
 - `0` — PipelineRun triggered successfully
-- `1` — Image resolution or submission errors
+- `1` — Validation or submission errors
 
 ### Database Inspection
 

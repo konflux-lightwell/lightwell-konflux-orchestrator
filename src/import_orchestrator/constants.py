@@ -30,10 +30,6 @@ RELEASE_PLAN = "pnc-import-java-pulp-validated-prod"
 # Tekton pipeline configuration
 # ---------------------------------------------------------------------------
 
-# oci-verify-import task bundle: floating tag resolved to digest at runtime.
-TASK_BUNDLE_BASE = "quay.io/konflux-ci/tekton-catalog/task-oci-verify-import"
-TASK_BUNDLE_FLOATING_TAG = "0.1"
-
 # Name of the K8s Secret containing the cosign public key (cosign.pub) used
 # to verify PNC artifacts. Must exist in NAMESPACE before imports can run.
 VERIFICATION_PUBLIC_KEY_SECRET = "verification-public-key"

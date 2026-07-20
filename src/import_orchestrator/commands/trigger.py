@@ -32,14 +32,14 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         help="Trigger a PNC import PipelineRun",
         description=(
             "Trigger a PNC import PipelineRun on the Konflux cluster. "
-            "Resolves image digests, patches the pipeline definition, "
+            "Patches the pipeline definition "
             "and submits the PipelineRun via the K8s API."
         ),
     )
 
     parser.add_argument(
         "source_image",
-        help="OCI image reference to import (digest-pinned or with tag)",
+        help="OCI image reference to import (must be digest-pinned with @sha256:)",
     )
     parser.add_argument(
         "tag",
