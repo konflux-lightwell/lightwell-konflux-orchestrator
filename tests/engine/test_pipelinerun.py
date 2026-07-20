@@ -14,8 +14,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
-import hashlib
-import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -27,16 +25,11 @@ from import_orchestrator.constants import ARTIFACT_CONFIGS
 from import_orchestrator.engine.pipelinerun import (
     PipelineRunBuilder,
     TriggerError,
-    _compute_sha256_digest,
-    _make_bundle_resolver_ref,
-    _patch_task_ref,
-    _skopeo_inspect_raw,
     build_pipelinerun_manifest,
     digest_pin_image,
     extract_tag_from_image,
     get_pipeline_definition_path,
-    load_and_patch_pipeline,
-    resolve_task_bundle,
+    load_pipeline,
 )
 
 # ---------------------------------------------------------------------------
@@ -67,7 +60,10 @@ SAMPLE_PIPELINE_YAML = {
         "tasks": [
             {
                 "name": "verify-and-mirror",
-                "taskRef": {"name": "oci-verify-import", "version": "0.1"},
+                "taskRef": _bundle_resolver_ref(
+                    "oci-verify-import",
+                    "quay.io/konflux-ci/tekton-catalog/task-oci-verify-import:0.1@sha256:PLACEHOLDER",
+                ),
                 "params": [
                     {"name": "SOURCE_IMAGE", "value": "$(params.SOURCE_IMAGE)"},
                     {"name": "IMAGE", "value": "$(params.IMAGE)"},
@@ -103,95 +99,6 @@ SAMPLE_PIPELINE_YAML = {
         ],
     },
 }
-
-FAKE_MANIFEST_BYTES = b'{"schemaVersion": 2, "mediaType": "application/vnd.oci.image.manifest.v1+json"}'
-FAKE_DIGEST = "sha256:" + hashlib.sha256(FAKE_MANIFEST_BYTES).hexdigest()
-
-TASK_BUNDLE_REF = f"quay.io/konflux-ci/tekton-catalog/task-oci-verify-import:0.1@{FAKE_DIGEST}"
-
-
-# ---------------------------------------------------------------------------
-# _compute_sha256_digest
-# ---------------------------------------------------------------------------
-
-
-class TestComputeSha256Digest:
-    """Test the _compute_sha256_digest helper."""
-
-    def test_returns_sha256_prefixed_hex(self):
-        data = b"hello world"
-        result = _compute_sha256_digest(data)
-        assert result.startswith("sha256:")
-        assert result == "sha256:" + hashlib.sha256(data).hexdigest()
-
-    def test_empty_input(self):
-        result = _compute_sha256_digest(b"")
-        assert result == "sha256:" + hashlib.sha256(b"").hexdigest()
-
-    def test_deterministic_for_same_input(self):
-        data = b"deterministic"
-        assert _compute_sha256_digest(data) == _compute_sha256_digest(data)
-
-    def test_different_inputs_produce_different_digests(self):
-        assert _compute_sha256_digest(b"aaa") != _compute_sha256_digest(b"bbb")
-
-
-# ---------------------------------------------------------------------------
-# _skopeo_inspect_raw
-# ---------------------------------------------------------------------------
-
-
-class TestSkopeoInspectRaw:
-    """Test the _skopeo_inspect_raw subprocess wrapper."""
-
-    @patch("import_orchestrator.engine.pipelinerun.subprocess.run")
-    def test_returns_stdout_bytes(self, mock_run):
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout=FAKE_MANIFEST_BYTES, stderr=b""
-        )
-
-        result = _skopeo_inspect_raw("quay.io/repo:tag")
-        assert result == FAKE_MANIFEST_BYTES
-
-        mock_run.assert_called_once_with(
-            ["skopeo", "inspect", "--raw", "docker://quay.io/repo:tag"],
-            capture_output=True,
-            check=True,
-        )
-
-    @patch("import_orchestrator.engine.pipelinerun.subprocess.run")
-    def test_raises_trigger_error_on_subprocess_failure(self, mock_run):
-        error = subprocess.CalledProcessError(1, "skopeo")
-        error.stderr = b"unauthorized: access denied"
-        mock_run.side_effect = error
-
-        with pytest.raises(TriggerError, match="could not inspect"):
-            _skopeo_inspect_raw("quay.io/private:latest")
-
-    @patch("import_orchestrator.engine.pipelinerun.subprocess.run")
-    def test_raises_trigger_error_on_empty_output(self, mock_run):
-        mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=b"", stderr=b"")
-
-        with pytest.raises(TriggerError, match="empty response"):
-            _skopeo_inspect_raw("quay.io/repo:tag")
-
-    @patch("import_orchestrator.engine.pipelinerun.subprocess.run")
-    def test_includes_stderr_in_error_message(self, mock_run):
-        error = subprocess.CalledProcessError(1, "skopeo")
-        error.stderr = b"network timeout"
-        mock_run.side_effect = error
-
-        with pytest.raises(TriggerError, match="network timeout"):
-            _skopeo_inspect_raw("quay.io/repo:tag")
-
-    @patch("import_orchestrator.engine.pipelinerun.subprocess.run")
-    def test_handles_none_stderr_in_error(self, mock_run):
-        error = subprocess.CalledProcessError(1, "skopeo")
-        error.stderr = None
-        mock_run.side_effect = error
-
-        with pytest.raises(TriggerError, match="could not inspect"):
-            _skopeo_inspect_raw("quay.io/repo:tag")
 
 
 # ---------------------------------------------------------------------------
@@ -267,49 +174,6 @@ class TestExtractTagFromImage:
 
 
 # ---------------------------------------------------------------------------
-# resolve_task_bundle
-# ---------------------------------------------------------------------------
-
-
-class TestResolveTaskBundle:
-    """Test the resolve_task_bundle function."""
-
-    def test_uses_env_var_when_set(self, monkeypatch):
-        pullspec = "quay.io/custom/bundle:latest@sha256:custom123"
-        monkeypatch.setenv("TASK_BUNDLE_PULLSPEC", pullspec)
-
-        result = resolve_task_bundle()
-        assert result == pullspec
-
-    @patch("import_orchestrator.engine.pipelinerun._skopeo_inspect_raw")
-    def test_resolves_via_skopeo_when_no_env_var(self, mock_inspect, monkeypatch):
-        monkeypatch.delenv("TASK_BUNDLE_PULLSPEC", raising=False)
-        mock_inspect.return_value = FAKE_MANIFEST_BYTES
-
-        result = resolve_task_bundle()
-        expected = f"quay.io/konflux-ci/tekton-catalog/task-oci-verify-import:0.1@{FAKE_DIGEST}"
-        assert result == expected
-        mock_inspect.assert_called_once_with("quay.io/konflux-ci/tekton-catalog/task-oci-verify-import:0.1")
-
-    @patch("import_orchestrator.engine.pipelinerun._skopeo_inspect_raw")
-    def test_propagates_skopeo_error(self, mock_inspect, monkeypatch):
-        monkeypatch.delenv("TASK_BUNDLE_PULLSPEC", raising=False)
-        mock_inspect.side_effect = TriggerError("skopeo failed")
-
-        with pytest.raises(TriggerError, match="skopeo failed"):
-            resolve_task_bundle()
-
-    def test_empty_env_var_falls_through(self, monkeypatch):
-        """An empty TASK_BUNDLE_PULLSPEC should trigger skopeo resolution."""
-        monkeypatch.setenv("TASK_BUNDLE_PULLSPEC", "")
-        with patch("import_orchestrator.engine.pipelinerun._skopeo_inspect_raw") as mock_inspect:
-            mock_inspect.return_value = FAKE_MANIFEST_BYTES
-            result = resolve_task_bundle()
-            assert "@" in result
-            mock_inspect.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
 # get_pipeline_definition_path
 # ---------------------------------------------------------------------------
 
@@ -335,95 +199,12 @@ class TestGetPipelineDefinitionPath:
 
 
 # ---------------------------------------------------------------------------
-# _make_bundle_resolver_ref
-# ---------------------------------------------------------------------------
-
-
-class TestMakeBundleResolverRef:
-    """Test the _make_bundle_resolver_ref helper."""
-
-    def test_structure(self):
-        result = _make_bundle_resolver_ref("my-task", "quay.io/bundle:v1@sha256:abc")
-
-        assert result["resolver"] == "bundles"
-        assert isinstance(result["params"], list)
-        assert len(result["params"]) == 3
-
-    def test_params_contain_bundle_name_kind(self):
-        bundle = "quay.io/bundle:v1@sha256:abc"
-        result = _make_bundle_resolver_ref("my-task", bundle)
-
-        params_dict = {p["name"]: p["value"] for p in result["params"]}
-        assert params_dict["bundle"] == bundle
-        assert params_dict["name"] == "my-task"
-        assert params_dict["kind"] == "Task"
-
-    def test_no_extra_keys(self):
-        result = _make_bundle_resolver_ref("t", "b")
-        assert set(result.keys()) == {"resolver", "params"}
-
-
-# ---------------------------------------------------------------------------
-# _patch_task_ref
-# ---------------------------------------------------------------------------
-
-
-class TestPatchTaskRef:
-    """Test the _patch_task_ref in-place patching logic."""
-
-    def test_patches_oci_verify_import(self):
-        task = {"taskRef": {"name": "oci-verify-import", "version": "0.1"}}
-        _patch_task_ref(task, TASK_BUNDLE_REF)
-
-        assert task["taskRef"]["resolver"] == "bundles"
-        params = {p["name"]: p["value"] for p in task["taskRef"]["params"]}
-        assert params["bundle"] == TASK_BUNDLE_REF
-        assert params["name"] == "oci-verify-import"
-        assert params["kind"] == "Task"
-
-    def test_leaves_preresolved_bundle_ref_unchanged(self):
-        bundle_ref = "quay.io/konflux-ci/tekton-catalog/task-clamav-scan:0.3@sha256:abc"
-        task = {
-            "taskRef": _bundle_resolver_ref("clamav-scan", bundle_ref),
-        }
-        original_ref = {k: v for k, v in task["taskRef"].items()}
-        _patch_task_ref(task, TASK_BUNDLE_REF)
-
-        assert task["taskRef"] == original_ref
-
-    def test_strips_version_from_unknown_task_with_version(self):
-        task = {"taskRef": {"name": "some-other-task", "version": "1.0"}}
-        _patch_task_ref(task, TASK_BUNDLE_REF)
-
-        assert "version" not in task["taskRef"]
-        assert task["taskRef"]["name"] == "some-other-task"
-        assert "resolver" not in task["taskRef"]
-
-    def test_leaves_task_without_version_unchanged(self):
-        task = {"taskRef": {"name": "no-version-task"}}
-        original = {"taskRef": {"name": "no-version-task"}}
-        _patch_task_ref(task, TASK_BUNDLE_REF)
-
-        assert task == original
-
-    def test_handles_empty_taskref(self):
-        task = {"taskRef": {}}
-        _patch_task_ref(task, TASK_BUNDLE_REF)
-        assert task == {"taskRef": {}}
-
-    def test_handles_missing_taskref(self):
-        task = {"name": "no-ref-task"}
-        _patch_task_ref(task, TASK_BUNDLE_REF)
-        assert task == {"name": "no-ref-task"}
-
-
-# ---------------------------------------------------------------------------
-# load_and_patch_pipeline
+# load_pipeline
 # ---------------------------------------------------------------------------
 
 
 class TestLoadAndPatchPipeline:
-    """Test the load_and_patch_pipeline function."""
+    """Test the load_pipeline function."""
 
     @pytest.fixture
     def pipeline_file(self, tmp_path: Path) -> Path:
@@ -434,22 +215,19 @@ class TestLoadAndPatchPipeline:
         return path
 
     def test_returns_spec_dict(self, pipeline_file: Path):
-        result = load_and_patch_pipeline(pipeline_file, TASK_BUNDLE_REF)
+        result = load_pipeline(pipeline_file)
         assert isinstance(result, dict)
         assert "tasks" in result
         assert "params" in result
 
-    def test_patches_oci_verify_import_task(self, pipeline_file: Path):
-        result = load_and_patch_pipeline(pipeline_file, TASK_BUNDLE_REF)
+    def test_all_four_tasks_have_bundle_resolvers(self, pipeline_file: Path):
+        result = load_pipeline(pipeline_file)
 
-        verify_task = next(t for t in result["tasks"] if t["name"] == "verify-and-mirror")
-        assert verify_task["taskRef"]["resolver"] == "bundles"
-        params = {p["name"]: p["value"] for p in verify_task["taskRef"]["params"]}
-        assert params["bundle"] == TASK_BUNDLE_REF
-        assert params["name"] == "oci-verify-import"
+        bundle_tasks = [t for t in result["tasks"] if t["taskRef"].get("resolver") == "bundles"]
+        assert len(bundle_tasks) == 4
 
-    def test_preserves_preresolved_catalog_tasks(self, pipeline_file: Path):
-        result = load_and_patch_pipeline(pipeline_file, TASK_BUNDLE_REF)
+    def test_preserves_catalog_task_refs(self, pipeline_file: Path):
+        result = load_pipeline(pipeline_file)
 
         for task_name in ["clamav-scan", "sast-shell-check-oci-ta", "sast-unicode-check-oci-ta"]:
             matched = [
@@ -460,33 +238,27 @@ class TestLoadAndPatchPipeline:
             ]
             assert len(matched) == 1, f"Expected pre-resolved task for {task_name}"
 
-    def test_all_four_tasks_become_bundle_resolvers(self, pipeline_file: Path):
-        result = load_and_patch_pipeline(pipeline_file, TASK_BUNDLE_REF)
-
-        bundle_tasks = [t for t in result["tasks"] if t["taskRef"].get("resolver") == "bundles"]
-        assert len(bundle_tasks) == 4
-
     def test_raises_trigger_error_for_missing_file(self, tmp_path: Path):
         missing = tmp_path / "nonexistent.yaml"
         with pytest.raises(TriggerError, match="pipeline definition not found"):
-            load_and_patch_pipeline(missing, TASK_BUNDLE_REF)
+            load_pipeline(missing)
 
     def test_raises_trigger_error_for_invalid_yaml(self, tmp_path: Path):
         bad_file = tmp_path / "bad.yaml"
         bad_file.write_text("{invalid: yaml: [")
         with pytest.raises(TriggerError, match="failed to load pipeline"):
-            load_and_patch_pipeline(bad_file, TASK_BUNDLE_REF)
+            load_pipeline(bad_file)
 
     def test_raises_trigger_error_for_missing_spec_key(self, tmp_path: Path):
         no_spec = tmp_path / "no-spec.yaml"
         with open(no_spec, "w") as f:
             yaml.dump({"apiVersion": "tekton.dev/v1", "kind": "Pipeline"}, f)
         with pytest.raises(TriggerError, match="failed to load pipeline"):
-            load_and_patch_pipeline(no_spec, TASK_BUNDLE_REF)
+            load_pipeline(no_spec)
 
     def test_preserves_task_params(self, pipeline_file: Path):
-        """Verify that patching does not remove task parameters."""
-        result = load_and_patch_pipeline(pipeline_file, TASK_BUNDLE_REF)
+        """Verify that task parameters are preserved."""
+        result = load_pipeline(pipeline_file)
 
         verify_task = next(t for t in result["tasks"] if t["name"] == "verify-and-mirror")
         assert "params" in verify_task
@@ -495,19 +267,19 @@ class TestLoadAndPatchPipeline:
         assert "IMAGE" in param_names
 
     def test_preserves_run_after(self, pipeline_file: Path):
-        """Verify that runAfter fields survive patching."""
-        result = load_and_patch_pipeline(pipeline_file, TASK_BUNDLE_REF)
+        """Verify that runAfter fields are preserved."""
+        result = load_pipeline(pipeline_file)
 
         clamav = next(t for t in result["tasks"] if t["name"] == "clamav-scan")
         assert clamav["runAfter"] == ["verify-and-mirror"]
 
     def test_loading_real_pipeline_file(self):
-        """Verify that the actual pipeline file in the repo loads and patches correctly."""
+        """Verify that the actual pipeline file in the repo loads correctly."""
         path = get_pipeline_definition_path()
         if not path.exists():
             pytest.skip("Pipeline file not available in test environment")
 
-        result = load_and_patch_pipeline(path, TASK_BUNDLE_REF)
+        result = load_pipeline(path)
         assert "tasks" in result
         assert len(result["tasks"]) == 4
 
@@ -694,19 +466,16 @@ class TestPipelineRunBuilderTrigger:
             yaml.dump(SAMPLE_PIPELINE_YAML, f)
         return path
 
-    @patch("import_orchestrator.engine.pipelinerun.resolve_task_bundle")
     @patch("import_orchestrator.engine.pipelinerun.get_pipeline_definition_path")
     @patch("import_orchestrator.engine.pipelinerun.digest_pin_image")
     def test_full_workflow_rebuild(
         self,
         mock_pin,
         mock_path,
-        mock_resolve,
         mock_kube,
         pipeline_file,
     ):
         mock_pin.return_value = "quay.io/repo:v1.0@sha256:abc123"
-        mock_resolve.return_value = TASK_BUNDLE_REF
         mock_path.return_value = pipeline_file
 
         builder = PipelineRunBuilder(kube=mock_kube, artifact_type="REBUILD")
@@ -728,19 +497,16 @@ class TestPipelineRunBuilderTrigger:
         sa = manifest["spec"]["taskRunTemplate"]["serviceAccountName"]
         assert sa == "build-pipeline-pnc-import"
 
-    @patch("import_orchestrator.engine.pipelinerun.resolve_task_bundle")
     @patch("import_orchestrator.engine.pipelinerun.get_pipeline_definition_path")
     @patch("import_orchestrator.engine.pipelinerun.digest_pin_image")
     def test_full_workflow_remediated(
         self,
         mock_pin,
         mock_path,
-        mock_resolve,
         mock_kube,
         pipeline_file,
     ):
         mock_pin.return_value = "quay.io/repo:v2.0@sha256:def456"
-        mock_resolve.return_value = TASK_BUNDLE_REF
         mock_path.return_value = pipeline_file
 
         builder = PipelineRunBuilder(kube=mock_kube, artifact_type="REMEDIATED")
@@ -759,19 +525,16 @@ class TestPipelineRunBuilderTrigger:
         sa = manifest["spec"]["taskRunTemplate"]["serviceAccountName"]
         assert sa == "build-pipeline-pnc-import-remediated"
 
-    @patch("import_orchestrator.engine.pipelinerun.resolve_task_bundle")
     @patch("import_orchestrator.engine.pipelinerun.get_pipeline_definition_path")
     @patch("import_orchestrator.engine.pipelinerun.digest_pin_image")
     def test_tag_override(
         self,
         mock_pin,
         mock_path,
-        mock_resolve,
         mock_kube,
         pipeline_file,
     ):
         mock_pin.return_value = "quay.io/repo:v1.0@sha256:abc123"
-        mock_resolve.return_value = TASK_BUNDLE_REF
         mock_path.return_value = pipeline_file
 
         builder = PipelineRunBuilder(kube=mock_kube, artifact_type="REBUILD")
@@ -781,20 +544,17 @@ class TestPipelineRunBuilderTrigger:
         params = {p["name"]: p["value"] for p in manifest["spec"]["params"]}
         assert params["IMAGE"].endswith(":custom-tag")
 
-    @patch("import_orchestrator.engine.pipelinerun.resolve_task_bundle")
     @patch("import_orchestrator.engine.pipelinerun.get_pipeline_definition_path")
     @patch("import_orchestrator.engine.pipelinerun.digest_pin_image")
     def test_already_pinned_image_skips_resolution(
         self,
         mock_pin,
         mock_path,
-        mock_resolve,
         mock_kube,
         pipeline_file,
     ):
         pinned = "quay.io/repo:v1.0@sha256:already_pinned"
         mock_pin.return_value = pinned
-        mock_resolve.return_value = TASK_BUNDLE_REF
         mock_path.return_value = pipeline_file
 
         builder = PipelineRunBuilder(kube=mock_kube)
@@ -810,41 +570,26 @@ class TestPipelineRunBuilderTrigger:
         with pytest.raises(TriggerError, match="must be digest-pinned"):
             builder.trigger("quay.io/bad:ref")
 
-    @patch("import_orchestrator.engine.pipelinerun.resolve_task_bundle")
-    @patch("import_orchestrator.engine.pipelinerun.digest_pin_image")
-    def test_raises_trigger_error_on_bundle_resolution_failure(self, mock_pin, mock_resolve, mock_kube):
-        mock_pin.return_value = "quay.io/repo:v1@sha256:abc"
-        mock_resolve.side_effect = TriggerError("bundle resolution failed")
-
-        builder = PipelineRunBuilder(kube=mock_kube)
-        with pytest.raises(TriggerError, match="bundle resolution failed"):
-            builder.trigger("quay.io/repo:v1")
-
-    @patch("import_orchestrator.engine.pipelinerun.resolve_task_bundle")
     @patch("import_orchestrator.engine.pipelinerun.get_pipeline_definition_path")
     @patch("import_orchestrator.engine.pipelinerun.digest_pin_image")
-    def test_raises_trigger_error_on_missing_pipeline(self, mock_pin, mock_path, mock_resolve, mock_kube, tmp_path):
+    def test_raises_trigger_error_on_missing_pipeline(self, mock_pin, mock_path, mock_kube, tmp_path):
         mock_pin.return_value = "quay.io/repo:v1@sha256:abc"
-        mock_resolve.return_value = TASK_BUNDLE_REF
         mock_path.return_value = tmp_path / "nonexistent.yaml"
 
         builder = PipelineRunBuilder(kube=mock_kube)
         with pytest.raises(TriggerError, match="pipeline definition not found"):
             builder.trigger("quay.io/repo:v1")
 
-    @patch("import_orchestrator.engine.pipelinerun.resolve_task_bundle")
     @patch("import_orchestrator.engine.pipelinerun.get_pipeline_definition_path")
     @patch("import_orchestrator.engine.pipelinerun.digest_pin_image")
     def test_returns_none_when_kube_returns_none(
         self,
         mock_pin,
         mock_path,
-        mock_resolve,
         mock_kube,
         pipeline_file,
     ):
         mock_pin.return_value = "quay.io/repo:v1.0@sha256:abc123"
-        mock_resolve.return_value = TASK_BUNDLE_REF
         mock_path.return_value = pipeline_file
         mock_kube.create_pipelinerun.return_value = None
 
@@ -853,20 +598,17 @@ class TestPipelineRunBuilderTrigger:
 
         assert result is None
 
-    @patch("import_orchestrator.engine.pipelinerun.resolve_task_bundle")
     @patch("import_orchestrator.engine.pipelinerun.get_pipeline_definition_path")
     @patch("import_orchestrator.engine.pipelinerun.digest_pin_image")
-    def test_manifest_pipeline_spec_has_patched_tasks(
+    def test_manifest_pipeline_spec_has_bundle_resolver_tasks(
         self,
         mock_pin,
         mock_path,
-        mock_resolve,
         mock_kube,
         pipeline_file,
     ):
-        """Verify that the embedded pipelineSpec has all tasks converted to bundle resolvers."""
+        """Verify that the embedded pipelineSpec has all tasks with bundle resolvers."""
         mock_pin.return_value = "quay.io/repo:v1.0@sha256:abc123"
-        mock_resolve.return_value = TASK_BUNDLE_REF
         mock_path.return_value = pipeline_file
 
         builder = PipelineRunBuilder(kube=mock_kube)
@@ -878,20 +620,17 @@ class TestPipelineRunBuilderTrigger:
         bundle_tasks = [t for t in tasks if t["taskRef"].get("resolver") == "bundles"]
         assert len(bundle_tasks) == 4
 
-    @patch("import_orchestrator.engine.pipelinerun.resolve_task_bundle")
     @patch("import_orchestrator.engine.pipelinerun.get_pipeline_definition_path")
     @patch("import_orchestrator.engine.pipelinerun.digest_pin_image")
     def test_rebuild_dest_repo(
         self,
         mock_pin,
         mock_path,
-        mock_resolve,
         mock_kube,
         pipeline_file,
     ):
         """Verify REBUILD uses the correct destination repo."""
         mock_pin.return_value = "quay.io/repo:v1.0@sha256:abc"
-        mock_resolve.return_value = TASK_BUNDLE_REF
         mock_path.return_value = pipeline_file
 
         builder = PipelineRunBuilder(kube=mock_kube, artifact_type="REBUILD")
@@ -902,20 +641,17 @@ class TestPipelineRunBuilderTrigger:
         expected = "quay.io/redhat-user-workloads/lightwell-poc-tenant/pnc-import/pnc-import:v1.0"
         assert params["IMAGE"] == expected
 
-    @patch("import_orchestrator.engine.pipelinerun.resolve_task_bundle")
     @patch("import_orchestrator.engine.pipelinerun.get_pipeline_definition_path")
     @patch("import_orchestrator.engine.pipelinerun.digest_pin_image")
     def test_remediated_dest_repo(
         self,
         mock_pin,
         mock_path,
-        mock_resolve,
         mock_kube,
         pipeline_file,
     ):
         """Verify REMEDIATED uses the correct destination repo."""
         mock_pin.return_value = "quay.io/repo:v1.0@sha256:abc"
-        mock_resolve.return_value = TASK_BUNDLE_REF
         mock_path.return_value = pipeline_file
 
         builder = PipelineRunBuilder(kube=mock_kube, artifact_type="REMEDIATED")

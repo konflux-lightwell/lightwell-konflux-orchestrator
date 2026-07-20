@@ -23,10 +23,8 @@ limitations under the License.
 
 from __future__ import annotations
 
-import hashlib
 import os
 import re
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -37,8 +35,6 @@ from import_orchestrator.clients.kube import KubeClient
 from import_orchestrator.constants import (
     ARTIFACT_CONFIGS,
     NAMESPACE,
-    TASK_BUNDLE_BASE,
-    TASK_BUNDLE_FLOATING_TAG,
     VERIFICATION_PUBLIC_KEY_SECRET,
 )
 
@@ -48,37 +44,8 @@ class TriggerError(Exception):
 
 
 # ---------------------------------------------------------------------------
-# Image digest resolution
+# Image validation
 # ---------------------------------------------------------------------------
-
-
-def _compute_sha256_digest(raw_bytes: bytes) -> str:
-    """Compute ``sha256:<hex>`` from raw manifest bytes."""
-    return "sha256:" + hashlib.sha256(raw_bytes).hexdigest()
-
-
-def _skopeo_inspect_raw(image_ref: str) -> bytes:
-    """Run ``skopeo inspect --raw`` and return the raw manifest bytes.
-
-    Raises:
-        TriggerError: If skopeo fails or returns empty output.
-    """
-    try:
-        result = subprocess.run(
-            ["skopeo", "inspect", "--raw", f"docker://{image_ref}"],
-            capture_output=True,
-            check=True,
-        )
-    except subprocess.CalledProcessError as e:
-        stderr_text = e.stderr.decode() if e.stderr else ""
-        raise TriggerError(
-            f"could not inspect {image_ref} -- check credentials and image reference: {stderr_text}"
-        ) from e
-
-    if not result.stdout:
-        raise TriggerError(f"could not inspect {image_ref} -- empty response from skopeo")
-
-    return result.stdout
 
 
 def digest_pin_image(source_image: str) -> str:
@@ -112,23 +79,8 @@ def extract_tag_from_image(source_image: str) -> str:
     raise TriggerError(f"could not extract tag from {source_image}")
 
 
-def resolve_task_bundle() -> str:
-    """Resolve the oci-verify-import task bundle to a digest-pinned pullspec.
-
-    Uses the ``TASK_BUNDLE_PULLSPEC`` environment variable if set; otherwise
-    resolves the floating tag via skopeo.
-    """
-    if pullspec := os.environ.get("TASK_BUNDLE_PULLSPEC"):
-        return pullspec
-
-    floating_ref = f"{TASK_BUNDLE_BASE}:{TASK_BUNDLE_FLOATING_TAG}"
-    raw = _skopeo_inspect_raw(floating_ref)
-    digest = _compute_sha256_digest(raw)
-    return f"{floating_ref}@{digest}"
-
-
 # ---------------------------------------------------------------------------
-# Pipeline loading and patching
+# Pipeline loading
 # ---------------------------------------------------------------------------
 
 
@@ -148,17 +100,13 @@ def get_pipeline_definition_path() -> Path:
     return project_root / "tekton" / "pipelines" / "pnc-import" / "pnc-import.yaml"
 
 
-def load_and_patch_pipeline(pipeline_path: Path, task_bundle_ref: str) -> dict[str, Any]:
-    """Load the pipeline YAML and patch taskRefs to use bundle resolvers.
+def load_pipeline(pipeline_path: Path) -> dict[str, Any]:
+    """Load the pipeline YAML and return its spec.
 
-    - ``oci-verify-import`` is patched to use *task_bundle_ref*.
-    - Catalog tasks are expected to already carry bundle-resolver refs
-      in the pipeline YAML and are left unchanged.
-    - Any remaining tasks with a ``version`` field have the ``version``
-      stripped.
+    All task bundle refs are expected to be pre-pinned in the pipeline YAML.
 
     Returns:
-        The patched ``spec`` dict from the Pipeline resource.
+        The ``spec`` dict from the Pipeline resource.
 
     Raises:
         TriggerError: If the pipeline file cannot be found or parsed.
@@ -170,35 +118,9 @@ def load_and_patch_pipeline(pipeline_path: Path, task_bundle_ref: str) -> dict[s
         with open(pipeline_path) as f:
             pipeline = yaml.safe_load(f)
 
-        for task in pipeline["spec"]["tasks"]:
-            _patch_task_ref(task, task_bundle_ref)
-
         return pipeline["spec"]
     except (yaml.YAMLError, KeyError, TypeError) as e:
         raise TriggerError(f"failed to load pipeline from {pipeline_path}: {e}") from e
-
-
-def _patch_task_ref(task: dict[str, Any], task_bundle_ref: str) -> None:
-    """Patch a single task's taskRef in-place to use the bundle resolver."""
-    ref = task.get("taskRef", {})
-    name = ref.get("name", "")
-
-    if name == "oci-verify-import":
-        task["taskRef"] = _make_bundle_resolver_ref(name, task_bundle_ref)
-    elif "version" in ref:
-        del ref["version"]
-
-
-def _make_bundle_resolver_ref(task_name: str, bundle_pullspec: str) -> dict[str, Any]:
-    """Build a Tekton ``bundles`` resolver taskRef dict."""
-    return {
-        "resolver": "bundles",
-        "params": [
-            {"name": "bundle", "value": bundle_pullspec},
-            {"name": "name", "value": task_name},
-            {"name": "kind", "value": "Task"},
-        ],
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -250,9 +172,9 @@ def build_pipelinerun_manifest(
 class PipelineRunBuilder:
     """Builds and submits PNC import PipelineRuns to a Konflux cluster.
 
-    Orchestrates the full workflow: digest-pin the source image, resolve
-    the task bundle, load and patch the pipeline definition, build the
-    PipelineRun manifest, and submit it via the K8s API.
+    Orchestrates the full workflow: validate the source image is
+    digest-pinned, load the pipeline definition, build the PipelineRun
+    manifest, and submit it via the K8s API.
     """
 
     def __init__(self, kube: KubeClient, artifact_type: str = "REBUILD"):
@@ -274,17 +196,15 @@ class PipelineRunBuilder:
         """
         source_image = digest_pin_image(source_image)
         tag = tag or extract_tag_from_image(source_image)
-        task_bundle_ref = resolve_task_bundle()
 
         dest_image = f"{self._config['dest_repo']}:{tag}"
 
         print(f"SOURCE_IMAGE:  {source_image}", file=sys.stderr)
         print(f"DEST_IMAGE:    {dest_image}", file=sys.stderr)
-        print(f"TASK_BUNDLE:   {task_bundle_ref}", file=sys.stderr)
         print("", file=sys.stderr)
 
         pipeline_path = get_pipeline_definition_path()
-        pipeline_spec = load_and_patch_pipeline(pipeline_path, task_bundle_ref)
+        pipeline_spec = load_pipeline(pipeline_path)
 
         manifest = build_pipelinerun_manifest(
             source_image=source_image,

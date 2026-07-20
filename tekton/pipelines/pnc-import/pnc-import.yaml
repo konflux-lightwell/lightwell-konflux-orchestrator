@@ -53,8 +53,14 @@ spec:
         - name: VERIFICATION_PUBLIC_KEY_SECRET
           value: $(params.VERIFICATION_PUBLIC_KEY_SECRET)
       taskRef:
-        name: oci-verify-import
-        version: "0.1"
+        params:
+          - name: name
+            value: oci-verify-import
+          - name: bundle
+            value: quay.io/konflux-ci/tekton-catalog/task-oci-verify-import:0.1@sha256:d3864b0f8b4c2c2541df36e7c036437efac64583f51f4adef94217bfbd8f294b
+          - name: kind
+            value: task
+        resolver: bundles
     - name: clamav-scan
       params:
         - name: image-digest
