@@ -206,20 +206,13 @@ class TestDigestPinImage:
         image = "quay.io/repo:tag@sha256:abc123"
         assert digest_pin_image(image) == image
 
-    @patch("import_orchestrator.engine.pipelinerun._skopeo_inspect_raw")
-    def test_resolves_unpinned_image(self, mock_inspect):
-        mock_inspect.return_value = FAKE_MANIFEST_BYTES
+    def test_raises_trigger_error_for_unpinned_tagged_image(self):
+        with pytest.raises(TriggerError, match="must be digest-pinned"):
+            digest_pin_image("quay.io/repo:tag")
 
-        result = digest_pin_image("quay.io/repo:tag")
-        assert result == f"quay.io/repo:tag@{FAKE_DIGEST}"
-        mock_inspect.assert_called_once_with("quay.io/repo:tag")
-
-    @patch("import_orchestrator.engine.pipelinerun._skopeo_inspect_raw")
-    def test_propagates_trigger_error_from_skopeo(self, mock_inspect):
-        mock_inspect.side_effect = TriggerError("inspect failed")
-
-        with pytest.raises(TriggerError, match="inspect failed"):
-            digest_pin_image("quay.io/bad:ref")
+    def test_raises_trigger_error_for_bare_reference(self):
+        with pytest.raises(TriggerError, match="must be digest-pinned"):
+            digest_pin_image("quay.io/repo")
 
 
 # ---------------------------------------------------------------------------
@@ -811,10 +804,10 @@ class TestPipelineRunBuilderTrigger:
 
     @patch("import_orchestrator.engine.pipelinerun.digest_pin_image")
     def test_raises_trigger_error_on_digest_failure(self, mock_pin, mock_kube):
-        mock_pin.side_effect = TriggerError("skopeo inspect failed")
+        mock_pin.side_effect = TriggerError("image reference must be digest-pinned")
 
         builder = PipelineRunBuilder(kube=mock_kube)
-        with pytest.raises(TriggerError, match="skopeo inspect failed"):
+        with pytest.raises(TriggerError, match="must be digest-pinned"):
             builder.trigger("quay.io/bad:ref")
 
     @patch("import_orchestrator.engine.pipelinerun.resolve_task_bundle")

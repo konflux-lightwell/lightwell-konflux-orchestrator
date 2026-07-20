@@ -82,16 +82,15 @@ def _skopeo_inspect_raw(image_ref: str) -> bytes:
 
 
 def digest_pin_image(source_image: str) -> str:
-    """Ensure *source_image* is digest-pinned, resolving via skopeo if needed."""
+    """Validate that *source_image* is digest-pinned (contains ``@sha256:``).
+
+    Raises:
+        TriggerError: If the image reference is not digest-pinned.
+    """
     if "@sha256:" in source_image:
         return source_image
 
-    print(f"Resolving digest for {source_image}...", file=sys.stderr)
-    raw = _skopeo_inspect_raw(source_image)
-    digest = _compute_sha256_digest(raw)
-    pinned = f"{source_image}@{digest}"
-    print(f"Pinned:  {pinned}", file=sys.stderr)
-    return pinned
+    raise TriggerError(f"image reference must be digest-pinned (contain @sha256:): {source_image}")
 
 
 def extract_tag_from_image(source_image: str) -> str:
@@ -264,7 +263,7 @@ class PipelineRunBuilder:
         """Execute the full trigger workflow.
 
         Args:
-            source_image: OCI image reference (will be digest-pinned if needed).
+            source_image: Digest-pinned OCI image reference (must contain @sha256:).
             tag: Optional destination tag override; derived from source_image if omitted.
 
         Returns:

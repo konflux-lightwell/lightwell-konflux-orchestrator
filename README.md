@@ -164,7 +164,7 @@ import-orchestrator trigger <source_image> [tag] [OPTIONS]
 
 | Argument/Option | Description |
 |-----------------|-------------|
-| `source_image` | OCI image reference to import (digest-pinned or with tag) |
+| `source_image` | OCI image reference to import (must be digest-pinned with @sha256:) |
 | `tag` | Optional destination tag override (default: derived from source image) |
 | `--artifact-type` | Artifact type: STAGE (default), REBUILD, or REMEDIATED |
 | `--dry-run` | Print the PipelineRun YAML without submitting it |
@@ -233,7 +233,7 @@ import-orchestrator trigger <source_image> [tag] [OPTIONS]
 
 #### `trigger` subcommand
 
-1. Resolves the source image digest if not already pinned (using `skopeo`)
+1. Validates that the source image is digest-pinned
 2. Loads the base PipelineRun definition from `tekton/pipelines/pnc-import/`
 3. Patches it with the source and destination image references
 4. Submits the PipelineRun to Konflux via `kubectl`
