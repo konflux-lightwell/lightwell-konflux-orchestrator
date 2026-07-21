@@ -41,6 +41,8 @@ spec:
       value: $(tasks.verify-and-mirror.results.CHAINS-GIT_COMMIT)
     - name: SOURCE_ARTIFACT
       value: $(tasks.verify-and-mirror.results.SOURCE_ARTIFACT)
+    - name: INDEX_BUILD_JSON_ARTIFACT
+      value: $(tasks.verify-and-mirror.results.INDEX_BUILD_JSON_ARTIFACT)
   tasks:
     - name: verify-and-mirror
       params:
