@@ -582,7 +582,7 @@ class TestPipelineRunBuilderTrigger:
 
     @patch("import_orchestrator.engine.pipelinerun.get_pipeline_definition_path")
     @patch("import_orchestrator.engine.pipelinerun.digest_pin_image")
-    def test_returns_none_when_kube_returns_none(
+    def test_raises_trigger_error_when_kube_returns_none(
         self,
         mock_pin,
         mock_path,
@@ -594,9 +594,9 @@ class TestPipelineRunBuilderTrigger:
         mock_kube.create_pipelinerun.return_value = None
 
         builder = PipelineRunBuilder(kube=mock_kube)
-        result = builder.trigger("quay.io/repo:v1.0")
 
-        assert result is None
+        with pytest.raises(TriggerError, match="PipelineRun creation failed"):
+            builder.trigger("quay.io/repo:v1.0")
 
     @patch("import_orchestrator.engine.pipelinerun.get_pipeline_definition_path")
     @patch("import_orchestrator.engine.pipelinerun.digest_pin_image")

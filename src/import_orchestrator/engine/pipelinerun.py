@@ -214,4 +214,7 @@ class PipelineRunBuilder:
             service_account=self._config["service_account"],
         )
 
-        return self.kube.create_pipelinerun(manifest)
+        pr_name = self.kube.create_pipelinerun(manifest)
+        if pr_name is None:
+            raise TriggerError("PipelineRun creation failed (kubectl returned no name)")
+        return pr_name
