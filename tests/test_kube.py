@@ -69,42 +69,41 @@ class TestKubeClientInit:
 
 
 class TestGetRunningPipelineRuns:
-    @patch("import_orchestrator.clients.kube.subprocess.run")
-    def test_returns_only_running(self, mock_run, kube: KubeClient):
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[],
-            returncode=0,
-            stdout="pr-1\tUnknown\npr-2\tTrue\npr-3\tFalse\npr-4\tUnknown\n",
-            stderr="",
-        )
+    def test_returns_only_running(self, kube: KubeClient):
+        kube._mock_api.list.return_value = {
+            "items": [
+                {"metadata": {"name": "pr-1"}, "status": {"conditions": [{"status": "Unknown"}]}},
+                {"metadata": {"name": "pr-2"}, "status": {"conditions": [{"status": "True"}]}},
+                {"metadata": {"name": "pr-3"}, "status": {"conditions": [{"status": "False"}]}},
+                {"metadata": {"name": "pr-4"}, "status": {"conditions": [{"status": "Unknown"}]}},
+            ]
+        }
 
         result = kube.get_running_pipelineruns()
         assert len(result) == 2
         assert result[0].name == "pr-1"
         assert result[1].name == "pr-4"
 
-    @patch("import_orchestrator.clients.kube.subprocess.run")
-    def test_returns_empty_on_error(self, mock_run, kube: KubeClient):
-        mock_run.side_effect = subprocess.CalledProcessError(1, "kubectl", stderr="connection refused")
+    def test_returns_empty_on_error(self, kube: KubeClient):
+        kube._mock_api.list.side_effect = requests.ConnectionError("connection refused")
 
         result = kube.get_running_pipelineruns()
         assert result == []
 
-    @patch("import_orchestrator.clients.kube.subprocess.run")
-    def test_handles_empty_output(self, mock_run, kube: KubeClient):
-        mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+    def test_handles_empty_items(self, kube: KubeClient):
+        kube._mock_api.list.return_value = {"items": []}
 
         result = kube.get_running_pipelineruns()
         assert result == []
 
-    @patch("import_orchestrator.clients.kube.subprocess.run")
-    def test_skips_malformed_lines(self, mock_run, kube: KubeClient):
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[],
-            returncode=0,
-            stdout="pr-1\tUnknown\nbadline\npr-2\tInvalid\n",
-            stderr="",
-        )
+    def test_skips_items_without_conditions(self, kube: KubeClient):
+        kube._mock_api.list.return_value = {
+            "items": [
+                {"metadata": {"name": "pr-1"}, "status": {"conditions": [{"status": "Unknown"}]}},
+                {"metadata": {"name": "pr-2"}, "status": {}},
+                {"metadata": {"name": "pr-3"}, "status": {"conditions": [{"status": "Invalid"}]}},
+            ]
+        }
 
         result = kube.get_running_pipelineruns()
         assert len(result) == 1
@@ -112,39 +111,60 @@ class TestGetRunningPipelineRuns:
 
 
 class TestGetPipelineRunStatus:
-    @patch("import_orchestrator.clients.kube.subprocess.run")
-    def test_returns_status(self, mock_run, kube: KubeClient):
-        mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="True", stderr="")
+    def test_returns_status_from_api(self, kube: KubeClient):
+        kube._mock_api.get.return_value = {"status": {"conditions": [{"status": "True"}]}}
 
         result = kube.get_pipelinerun_status("my-pr")
         assert result is not None
         assert result.name == "my-pr"
         assert result.is_successful is True
 
+    def test_returns_running_status(self, kube: KubeClient):
+        kube._mock_api.get.return_value = {"status": {"conditions": [{"status": "Unknown"}]}}
+
+        result = kube.get_pipelinerun_status("my-pr")
+        assert result is not None
+        assert result.is_running is True
+
+    def test_returns_none_when_no_conditions(self, kube: KubeClient):
+        kube._mock_api.get.return_value = {"status": {}}
+
+        result = kube.get_pipelinerun_status("my-pr")
+        assert result is None
+
     @patch("import_orchestrator.clients.kube.subprocess.run")
-    def test_returns_none_on_error(self, mock_run, kube: KubeClient):
+    def test_falls_back_to_kubearchive(self, mock_run, kube: KubeClient):
+        kube._mock_api.get.side_effect = requests.HTTPError("404")
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout='{"status":{"conditions":[{"type":"Succeeded","status":"True"}]}}',
+            stderr="",
+        )
+
+        result = kube.get_pipelinerun_status("archived-pr")
+        assert result is not None
+        assert result.name == "archived-pr"
+        assert result.is_successful is True
+
+    @patch("import_orchestrator.clients.kube.subprocess.run")
+    def test_returns_none_when_both_fail(self, mock_run, kube: KubeClient):
+        kube._mock_api.get.side_effect = requests.HTTPError("404")
         mock_run.side_effect = subprocess.CalledProcessError(1, "kubectl")
 
         result = kube.get_pipelinerun_status("missing-pr")
         assert result is None
 
-    @patch("import_orchestrator.clients.kube.subprocess.run")
-    def test_returns_none_for_unknown_status_string(self, mock_run, kube: KubeClient):
-        mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
-
-        result = kube.get_pipelinerun_status("my-pr")
-        assert result is None
-
 
 class TestCountRunningImports:
-    @patch("import_orchestrator.clients.kube.subprocess.run")
-    def test_counts_only_pnc_import_prefix(self, mock_run, kube: KubeClient):
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[],
-            returncode=0,
-            stdout="pnc-import-abc\tUnknown\npnc-import-def\tUnknown\nother-pr\tUnknown\n",
-            stderr="",
-        )
+    def test_counts_only_pnc_import_prefix(self, kube: KubeClient):
+        kube._mock_api.list.return_value = {
+            "items": [
+                {"metadata": {"name": "pnc-import-abc"}, "status": {"conditions": [{"status": "Unknown"}]}},
+                {"metadata": {"name": "pnc-import-def"}, "status": {"conditions": [{"status": "Unknown"}]}},
+                {"metadata": {"name": "other-pr"}, "status": {"conditions": [{"status": "Unknown"}]}},
+            ]
+        }
 
         assert kube.count_running_imports() == 2
 

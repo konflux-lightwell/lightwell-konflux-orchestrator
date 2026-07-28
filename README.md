@@ -16,7 +16,8 @@ This tool provides batch orchestration for importing PNC (Project Newcastle) bui
 ## Requirements
 
 - Python 3.11+
-- `kubectl` authenticated to the target cluster (kubeconfig or `KONFLUX_TOKEN`)
+- Cluster credentials via kubeconfig or `KONFLUX_TOKEN`
+- `kubectl` with the kubearchive plugin (only needed for archived PipelineRun lookups)
 
 
 ## Installation
@@ -174,7 +175,7 @@ import-orchestrator trigger <source_image> [tag] [OPTIONS]
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `QUAY_TOKEN` | Yes (for `fetch`) | Authentication token for Quay.io API |
-| `KONFLUX_TOKEN` or `KUBECONFIG` | Yes (for `orchestrate` and `trigger`) | Kubectl authentication |
+| `KONFLUX_TOKEN` or `KUBECONFIG` | Yes (for `orchestrate` and `trigger`) | Cluster authentication |
 | `LIGHTWELL_ARTIFACT_TYPE` | No | `STAGE` (default), `REBUILD`, or `REMEDIATED` |
 | `TEKTON_PIPELINE_DIR` | No | Path to directory containing Tekton pipeline definitions (defaults to `tekton/` in repository root) |
 

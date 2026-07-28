@@ -52,7 +52,7 @@ class OCIReference:
 
 @dataclass
 class PipelineRunStatus:
-    """Status of a PipelineRun from kubectl."""
+    """Status of a PipelineRun."""
 
     name: str
     status: Literal["True", "False", "Unknown"]
