@@ -17,7 +17,7 @@ This tool provides batch orchestration for importing PNC (Project Newcastle) bui
 
 - Python 3.11+
 - Cluster credentials via kubeconfig or `KONFLUX_TOKEN`
-- `kubectl` with the kubearchive plugin (only needed for archived PipelineRun lookups)
+- Access to the KubeArchive API (for archived PipelineRun lookups)
 
 
 ## Installation

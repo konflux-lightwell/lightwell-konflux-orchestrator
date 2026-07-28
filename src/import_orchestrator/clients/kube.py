@@ -16,15 +16,12 @@ limitations under the License.
 
 from __future__ import annotations
 
-import json
-import os
-import subprocess
 import sys
 from typing import Literal
 
 import requests
 
-from import_orchestrator.clients.kube_api import KubeAPI, resolve_auth
+from import_orchestrator.clients.kube_api import KubeAPI, KubeAuth, resolve_auth
 from import_orchestrator.models import PipelineRunStatus
 
 
@@ -34,18 +31,15 @@ class KubeClient:
     Authenticates using either a KUBECONFIG file or the KONFLUX_TOKEN environment variable.
     """
 
-    def __init__(self, namespace: str, cluster_api: str):
+    def __init__(self, namespace: str, cluster_api: str, kubearchive_api: str = ""):
         self.namespace = namespace
         self.cluster_api = cluster_api
-        self._api = KubeAPI(resolve_auth(cluster_api))
-        self._kubectl_base_args = self._build_kubectl_args()
-
-    def _build_kubectl_args(self) -> list[str]:
-        """Build base kubectl arguments from KUBECONFIG or KONFLUX_TOKEN."""
-        args = ["-n", self.namespace]
-        if token := os.getenv("KONFLUX_TOKEN"):
-            args.extend(["--token", token, "--server", self.cluster_api])
-        return args
+        auth = resolve_auth(cluster_api)
+        self._api = KubeAPI(auth)
+        self._ka_api: KubeAPI | None = None
+        if kubearchive_api:
+            ka_auth = KubeAuth(server=kubearchive_api, token=auth.token, ca_cert=auth.ca_cert)
+            self._ka_api = KubeAPI(ka_auth)
 
     def get_running_pipelineruns(self) -> list[PipelineRunStatus]:
         """Get all PipelineRuns with status 'Unknown' (i.e. still running)."""
@@ -69,8 +63,7 @@ class KubeClient:
     def get_pipelinerun_status(self, name: str) -> PipelineRunStatus | None:
         """Get the status of a specific PipelineRun by name.
 
-        Checks the live cluster first, then falls back to kubearchive
-        (subprocess — ka does not expose a REST API).
+        Checks the live cluster first, then falls back to the KubeArchive API.
         Returns None if not found in either place.
         """
         try:
@@ -84,22 +77,18 @@ class KubeClient:
         except requests.RequestException:
             pass
 
-        # Kubearchive fallback — subprocess until ka exposes a REST API
-        try:
-            result = subprocess.run(
-                ["kubectl", "ka", *self._kubectl_base_args, "get", "pr", name, "-o", "json"],
-                capture_output=True,
-                check=True,
-                text=True,
-            )
-            data = json.loads(result.stdout)
-            for cond in data.get("status", {}).get("conditions", []):
-                if cond.get("type") == "Succeeded":
-                    status = cond.get("status", "")
-                    if pr_status := PipelineRunStatus.from_str(name, status):
-                        return pr_status
-        except (subprocess.CalledProcessError, json.JSONDecodeError, KeyError):
-            pass
+        if self._ka_api is not None:
+            try:
+                data = self._ka_api.get(
+                    f"/apis/tekton.dev/v1/namespaces/{self.namespace}/pipelineruns/{name}",
+                )
+                for cond in data.get("status", {}).get("conditions", []):
+                    if cond.get("type") == "Succeeded":
+                        status = cond.get("status", "")
+                        if pr_status := PipelineRunStatus.from_str(name, status):
+                            return pr_status
+            except requests.RequestException:
+                pass
 
         return None
 

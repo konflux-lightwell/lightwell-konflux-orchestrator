@@ -14,7 +14,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
-import subprocess
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -24,7 +23,7 @@ from import_orchestrator.clients import KubeClient
 from import_orchestrator.clients.kube_api import KubeAuth
 
 
-def _make_kube_client(monkeypatch, token=None):
+def _make_kube_client(monkeypatch, token=None, kubearchive_api=""):
     """Create a KubeClient with mocked auth and API layer."""
     if token:
         monkeypatch.setenv("KONFLUX_TOKEN", token)
@@ -32,13 +31,21 @@ def _make_kube_client(monkeypatch, token=None):
         monkeypatch.delenv("KONFLUX_TOKEN", raising=False)
 
     mock_api = MagicMock()
+    mock_ka_api = MagicMock() if kubearchive_api else None
     with patch("import_orchestrator.clients.kube.resolve_auth") as mock_resolve:
         mock_resolve.return_value = KubeAuth(
             server="https://api.example.com:6443", token=token or "test-token", ca_cert=None
         )
         with patch("import_orchestrator.clients.kube.KubeAPI", return_value=mock_api):
-            client = KubeClient(namespace="test-ns", cluster_api="https://api.example.com:6443")
+            client = KubeClient(
+                namespace="test-ns",
+                cluster_api="https://api.example.com:6443",
+                kubearchive_api=kubearchive_api,
+            )
     client._mock_api = mock_api
+    if mock_ka_api is not None:
+        client._ka_api = mock_ka_api
+        client._mock_ka_api = mock_ka_api
     return client
 
 
@@ -49,23 +56,17 @@ def kube(monkeypatch):
 
 
 @pytest.fixture
-def kube_with_token(monkeypatch):
-    """Create a KubeClient with KONFLUX_TOKEN set."""
-    return _make_kube_client(monkeypatch, token="test-token-123")
+def kube_with_ka(monkeypatch):
+    """Create a KubeClient with KubeArchive API configured."""
+    return _make_kube_client(monkeypatch, kubearchive_api="https://kubearchive.example.com")
 
 
 class TestKubeClientInit:
-    def test_base_args_without_token(self, kube: KubeClient):
-        assert kube._kubectl_base_args == ["-n", "test-ns"]
+    def test_ka_api_is_none_when_not_configured(self, kube: KubeClient):
+        assert kube._ka_api is None
 
-    def test_base_args_with_token(self, kube_with_token: KubeClient):
-        args = kube_with_token._kubectl_base_args
-        assert "-n" in args
-        assert "test-ns" in args
-        assert "--token" in args
-        assert "test-token-123" in args
-        assert "--server" in args
-        assert "https://api.example.com:6443" in args
+    def test_ka_api_is_set_when_configured(self, kube_with_ka: KubeClient):
+        assert kube_with_ka._ka_api is not None
 
 
 class TestGetRunningPipelineRuns:
@@ -132,25 +133,26 @@ class TestGetPipelineRunStatus:
         result = kube.get_pipelinerun_status("my-pr")
         assert result is None
 
-    @patch("import_orchestrator.clients.kube.subprocess.run")
-    def test_falls_back_to_kubearchive(self, mock_run, kube: KubeClient):
-        kube._mock_api.get.side_effect = requests.HTTPError("404")
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[],
-            returncode=0,
-            stdout='{"status":{"conditions":[{"type":"Succeeded","status":"True"}]}}',
-            stderr="",
-        )
+    def test_falls_back_to_kubearchive(self, kube_with_ka: KubeClient):
+        kube_with_ka._mock_api.get.side_effect = requests.HTTPError("404")
+        kube_with_ka._mock_ka_api.get.return_value = {
+            "status": {"conditions": [{"type": "Succeeded", "status": "True"}]}
+        }
 
-        result = kube.get_pipelinerun_status("archived-pr")
+        result = kube_with_ka.get_pipelinerun_status("archived-pr")
         assert result is not None
         assert result.name == "archived-pr"
         assert result.is_successful is True
 
-    @patch("import_orchestrator.clients.kube.subprocess.run")
-    def test_returns_none_when_both_fail(self, mock_run, kube: KubeClient):
+    def test_returns_none_when_both_fail(self, kube_with_ka: KubeClient):
+        kube_with_ka._mock_api.get.side_effect = requests.HTTPError("404")
+        kube_with_ka._mock_ka_api.get.side_effect = requests.HTTPError("404")
+
+        result = kube_with_ka.get_pipelinerun_status("missing-pr")
+        assert result is None
+
+    def test_skips_kubearchive_when_not_configured(self, kube: KubeClient):
         kube._mock_api.get.side_effect = requests.HTTPError("404")
-        mock_run.side_effect = subprocess.CalledProcessError(1, "kubectl")
 
         result = kube.get_pipelinerun_status("missing-pr")
         assert result is None
