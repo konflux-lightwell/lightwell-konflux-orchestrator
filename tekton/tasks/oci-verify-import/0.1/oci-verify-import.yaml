@@ -295,6 +295,12 @@ spec:
           INDEX_IMAGE_REPO="$(echo "$SOURCE_IMAGE" | awk '{sub(/[:@].*/, ""); print}')"
           INDEX_IMAGE_REF="${INDEX_IMAGE_REPO}:idx-${BUILD_PIPELINE_ID}"
           oras pull --output /var/workdir/index "$INDEX_IMAGE_REF"
+          DOCKER_CONFIG=/tmp/dst-auth retry oras attach \
+            --no-tty \
+            --artifact-type application/vnd.redhat.gav-index-build+json \
+            "${DEST_REPO}@${SOURCE_DIGEST}" \
+            /var/workdir/index/*
+          echo "Attached build index JSON as referrer on ${DEST_REPO}@${SOURCE_DIGEST}"
         fi
     - name: store-source-artifact
       image: quay.io/konflux-ci/build-trusted-artifacts:latest@sha256:9bd32f6bafb517b309e11a2d89365052b4ab3f1c9c23c4ffd45aff6f03960476
