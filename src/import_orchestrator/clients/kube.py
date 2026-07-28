@@ -124,27 +124,6 @@ class KubeClient:
         except (requests.RequestException, KeyError, IndexError):
             return None
 
-    def is_snapshot_auto_released(self, snapshot_name: str) -> bool:
-        """Return True if the snapshot was superseded and auto-released by Konflux."""
-        try:
-            result = subprocess.run(
-                [
-                    "kubectl",
-                    *self._kubectl_base_args,
-                    "get",
-                    "snapshot",
-                    snapshot_name,
-                    "-o",
-                    'jsonpath={.status.conditions[?(@.type=="AutoReleased")].status}',
-                ],
-                capture_output=True,
-                check=True,
-                text=True,
-            )
-            return result.stdout.strip() == "True"
-        except subprocess.CalledProcessError:
-            return False
-
     def find_release_plan_for_snapshot(self, snapshot_name: str) -> str | None:
         """Find the ReleasePlan whose spec.application matches the snapshot's application label."""
         try:
