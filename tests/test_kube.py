@@ -169,6 +169,150 @@ class TestCountRunningImports:
         assert kube.count_running_imports() == 2
 
 
+class TestFindSnapshotByPipelinerun:
+    def test_returns_snapshot_name(self, kube: KubeClient):
+        kube._mock_api.list.return_value = {"items": [{"metadata": {"name": "snap-abc"}}]}
+
+        result = kube.find_snapshot_by_pipelinerun("pr-1")
+        assert result == "snap-abc"
+        kube._mock_api.list.assert_called_once_with(
+            "/apis/appstudio.redhat.com/v1alpha1/namespaces/test-ns/snapshots",
+            labelSelector="appstudio.openshift.io/build-pipelinerun=pr-1",
+        )
+
+    def test_returns_none_when_no_items(self, kube: KubeClient):
+        kube._mock_api.list.return_value = {"items": []}
+
+        assert kube.find_snapshot_by_pipelinerun("pr-1") is None
+
+    def test_returns_none_on_http_error(self, kube: KubeClient):
+        kube._mock_api.list.side_effect = requests.HTTPError("404")
+
+        assert kube.find_snapshot_by_pipelinerun("pr-1") is None
+
+
+class TestFindReleaseForSnapshot:
+    def test_finds_active_release(self, kube: KubeClient):
+        kube._mock_api.list.return_value = {
+            "items": [
+                {
+                    "metadata": {"name": "release-1"},
+                    "spec": {"snapshot": "snap-1"},
+                    "status": {"conditions": [{"type": "Released", "status": "Unknown", "reason": "Progressing"}]},
+                }
+            ]
+        }
+
+        assert kube.find_release_for_snapshot("snap-1") == "release-1"
+
+    def test_skips_terminally_failed_release(self, kube: KubeClient):
+        kube._mock_api.list.return_value = {
+            "items": [
+                {
+                    "metadata": {"name": "release-bad"},
+                    "spec": {"snapshot": "snap-1"},
+                    "status": {"conditions": [{"type": "Released", "status": "False", "reason": "Failed"}]},
+                }
+            ]
+        }
+
+        assert kube.find_release_for_snapshot("snap-1") is None
+
+    def test_does_not_skip_progressing_false(self, kube: KubeClient):
+        kube._mock_api.list.return_value = {
+            "items": [
+                {
+                    "metadata": {"name": "release-prog"},
+                    "spec": {"snapshot": "snap-1"},
+                    "status": {"conditions": [{"type": "Released", "status": "False", "reason": "Progressing"}]},
+                }
+            ]
+        }
+
+        assert kube.find_release_for_snapshot("snap-1") == "release-prog"
+
+    def test_returns_none_when_no_match(self, kube: KubeClient):
+        kube._mock_api.list.return_value = {
+            "items": [
+                {"metadata": {"name": "release-other"}, "spec": {"snapshot": "other-snap"}, "status": {}},
+            ]
+        }
+
+        assert kube.find_release_for_snapshot("snap-1") is None
+
+    def test_returns_none_on_http_error(self, kube: KubeClient):
+        kube._mock_api.list.side_effect = requests.HTTPError("500")
+
+        assert kube.find_release_for_snapshot("snap-1") is None
+
+
+class TestGetReleaseStatus:
+    def test_returns_true_on_success(self, kube: KubeClient):
+        kube._mock_api.get.return_value = {
+            "status": {"conditions": [{"type": "Released", "status": "True", "reason": "Succeeded"}]}
+        }
+
+        assert kube.get_release_status("rel-1") == "True"
+
+    def test_returns_false_on_terminal_failure(self, kube: KubeClient):
+        kube._mock_api.get.return_value = {
+            "status": {"conditions": [{"type": "Released", "status": "False", "reason": "Failed"}]}
+        }
+
+        assert kube.get_release_status("rel-1") == "False"
+
+    def test_returns_unknown_when_progressing(self, kube: KubeClient):
+        kube._mock_api.get.return_value = {
+            "status": {"conditions": [{"type": "Released", "status": "False", "reason": "Progressing"}]}
+        }
+
+        assert kube.get_release_status("rel-1") == "Unknown"
+
+    def test_returns_unknown_when_no_released_condition(self, kube: KubeClient):
+        kube._mock_api.get.return_value = {"status": {"conditions": [{"type": "Other", "status": "True"}]}}
+
+        assert kube.get_release_status("rel-1") == "Unknown"
+
+    def test_returns_none_on_http_error(self, kube: KubeClient):
+        kube._mock_api.get.side_effect = requests.HTTPError("404")
+
+        assert kube.get_release_status("rel-1") is None
+
+
+class TestFindReleasePlanForSnapshot:
+    def test_finds_matching_plan(self, kube: KubeClient):
+        kube._mock_api.get.return_value = {"metadata": {"labels": {"appstudio.openshift.io/application": "my-app"}}}
+        kube._mock_api.list.return_value = {
+            "items": [
+                {"metadata": {"name": "plan-other"}, "spec": {"application": "other-app"}},
+                {"metadata": {"name": "plan-mine"}, "spec": {"application": "my-app"}},
+            ]
+        }
+
+        assert kube.find_release_plan_for_snapshot("snap-1") == "plan-mine"
+
+    def test_returns_none_when_no_application_label(self, kube: KubeClient):
+        kube._mock_api.get.return_value = {"metadata": {"labels": {}}}
+
+        assert kube.find_release_plan_for_snapshot("snap-1") is None
+        kube._mock_api.list.assert_not_called()
+
+    def test_returns_none_when_no_matching_plan(self, kube: KubeClient):
+        kube._mock_api.get.return_value = {"metadata": {"labels": {"appstudio.openshift.io/application": "my-app"}}}
+        kube._mock_api.list.return_value = {
+            "items": [
+                {"metadata": {"name": "plan-other"}, "spec": {"application": "other-app"}},
+            ]
+        }
+
+        assert kube.find_release_plan_for_snapshot("snap-1") is None
+
+    def test_returns_none_on_http_error(self, kube: KubeClient):
+        kube._mock_api.get.side_effect = requests.HTTPError("404")
+
+        assert kube.find_release_plan_for_snapshot("snap-1") is None
+
+
 class TestCreatePipelinerun:
     """Test the create_pipelinerun method."""
 
@@ -205,6 +349,49 @@ class TestCreatePipelinerun:
         kube._mock_api.create.return_value = {"metadata": {"name": "pnc-import-ns"}}
 
         kube.create_pipelinerun({"kind": "PipelineRun"})
+
+        api_path = kube._mock_api.create.call_args[0][0]
+        assert "/namespaces/test-ns/" in api_path
+
+
+class TestCreateRelease:
+    def test_returns_generated_name(self, kube: KubeClient):
+        kube._mock_api.create.return_value = {"metadata": {"name": "pnc-import-abc123"}}
+
+        result = kube.create_release("my-snapshot", "my-release-plan")
+        assert result == "pnc-import-abc123"
+
+    def test_passes_correct_manifest(self, kube: KubeClient):
+        kube._mock_api.create.return_value = {"metadata": {"name": "pnc-import-xyz"}}
+
+        kube.create_release("snap-1", "plan-1")
+
+        kube._mock_api.create.assert_called_once_with(
+            "/apis/appstudio.redhat.com/v1alpha1/namespaces/test-ns/releases",
+            {
+                "apiVersion": "appstudio.redhat.com/v1alpha1",
+                "kind": "Release",
+                "metadata": {"generateName": "pnc-import-", "namespace": "test-ns"},
+                "spec": {"releasePlan": "plan-1", "snapshot": "snap-1"},
+            },
+        )
+
+    def test_returns_none_on_http_error(self, kube: KubeClient):
+        kube._mock_api.create.side_effect = requests.HTTPError("403 Forbidden")
+
+        result = kube.create_release("snap-1", "plan-1")
+        assert result is None
+
+    def test_returns_none_when_name_missing(self, kube: KubeClient):
+        kube._mock_api.create.return_value = {"metadata": {}}
+
+        result = kube.create_release("snap-1", "plan-1")
+        assert result is None
+
+    def test_uses_correct_namespace_in_path(self, kube: KubeClient):
+        kube._mock_api.create.return_value = {"metadata": {"name": "pnc-import-ns"}}
+
+        kube.create_release("snap-1", "plan-1")
 
         api_path = kube._mock_api.create.call_args[0][0]
         assert "/namespaces/test-ns/" in api_path
