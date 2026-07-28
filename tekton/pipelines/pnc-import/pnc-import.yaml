@@ -59,7 +59,7 @@ spec:
           - name: name
             value: oci-verify-import
           - name: bundle
-            value: quay.io/konflux-ci/tekton-catalog/task-oci-verify-import:0.1@sha256:05f4ac7ebe0d1a328fe642af16dadbcb144e0eeef5f81a72529ba9ac39eaeafd
+            value: quay.io/konflux-ci/tekton-catalog/task-oci-verify-import:0.1@sha256:66f31c965547b072f92092b88b653883cdeff4b6f85df3858b713ac76a752e77
           - name: kind
             value: task
         resolver: bundles
