@@ -294,12 +294,14 @@ spec:
         if [ -n "$BUILD_PIPELINE_ID" ]; then
           INDEX_IMAGE_REPO="$(echo "$SOURCE_IMAGE" | awk '{sub(/[:@].*/, ""); print}')"
           INDEX_IMAGE_REF="${INDEX_IMAGE_REPO}:idx-${BUILD_PIPELINE_ID}"
-          oras pull --output /var/workdir/index "$INDEX_IMAGE_REF"
+          ATTACHMENT_DIR=/var/workdir/index
+          ARTIFACT=$(oras pull --no-tty --output "$ATTACHMENT_DIR" "$INDEX_IMAGE_REF" --format "go-template={{range .files}}{{.path}}{{\"\n\"}}{{end}}")
+          pushd "$(dirname ${ARTIFACT})" > /dev/null
           DOCKER_CONFIG=/tmp/dst-auth retry oras attach \
             --no-tty \
             --artifact-type application/vnd.redhat.gav-index-build+json \
             "${DEST_REPO}@${SOURCE_DIGEST}" \
-            /var/workdir/index/*
+            "$(basename ${ARTIFACT})"
           echo "Attached build index JSON as referrer on ${DEST_REPO}@${SOURCE_DIGEST}"
         fi
     - name: store-source-artifact
