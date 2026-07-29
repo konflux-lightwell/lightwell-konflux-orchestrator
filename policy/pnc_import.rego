@@ -19,9 +19,6 @@
 #     oci_verify_import_allowed_distribution_targets:
 #       - validated                           # or remediated; stage allows both
 #
-#   Note: images without the dev.lightwell.distribution-target annotation are
-#   accepted (skipped). This is temporary until PNC populates it everywhere.
-#
 package pnc_import
 
 import rego.v1
@@ -122,12 +119,26 @@ deny contains result if {
 # ---------------------------------------------------------------------------
 
 # METADATA
+# title: Distribution target annotation present
+# description: >-
+#   Verify the dev.lightwell.distribution-target annotation is present on the
+#   released image's OCI manifest.
+# custom:
+#   short_name: distribution_target_annotation_present
+#   failure_msg: 'dev.lightwell.distribution-target annotation is absent from the image manifest'
+#   collections:
+#     - lightwell
+deny contains result if {
+	manifest := ec.oci.image_manifest(input.image.ref)
+	not manifest.annotations["dev.lightwell.distribution-target"]
+	result := metadata.result_helper(rego.metadata.chain(), [])
+}
+
+# METADATA
 # title: Distribution target annotation permitted
 # description: >-
 #   Verify the dev.lightwell.distribution-target annotation on the released
 #   image is in the set of allowed values configured for this release stream.
-#   If the annotation is absent the rule is skipped — temporary behaviour
-#   until PNC populates the annotation on all artifacts.
 # custom:
 #   short_name: distribution_target_permitted
 #   failure_msg: >-
@@ -208,10 +219,6 @@ _source_image_permitted(source_image) if {
 	startswith(source_image, prefix)
 }
 
-# Fetch the distribution-target annotation from the released image's OCI manifest.
-# Evaluates to undefined when the annotation is absent, which causes the
-# distribution_target_permitted deny rule to be skipped automatically — the
-# intended skip-if-missing behaviour for pre-annotation artifacts.
 _distribution_target_annotation := annotation if {
 	manifest := ec.oci.image_manifest(input.image.ref)
 	annotation := manifest.annotations["dev.lightwell.distribution-target"]

@@ -170,14 +170,15 @@ test_distribution_target_denied_wrong_value if {
 	r.code == "pnc_import.distribution_target_permitted"
 }
 
-test_distribution_target_absent_skips_check if {
-	codes := {r.code | some r in pnc_import.deny} with input.image.ref as _image_ref
+test_distribution_target_absent_is_denied if {
+	deny := pnc_import.deny with input.image.ref as _image_ref
 		with input.attestations as []
 		with data.rule_data_custom.oci_verify_import_allowed_source_registries as _allowed_rebuild
 		with data.rule_data_custom.oci_verify_import_allowed_signing_keys as _allowed_keys
 		with data.rule_data_custom.oci_verify_import_allowed_distribution_targets as _allowed_validated
 		with ec.oci.image_manifest as _mock_manifest_no_annotation
-	not "pnc_import.distribution_target_permitted" in codes
+	some r in deny
+	r.code == "pnc_import.distribution_target_annotation_present"
 }
 
 # ---------------------------------------------------------------------------
