@@ -58,11 +58,9 @@ class KubeClient:
                 name = item.get("metadata", {}).get("name", "")
                 conditions = item.get("status", {}).get("conditions", [])
                 status = conditions[0].get("status", "") if conditions else ""
-                if name and status in ("True", "False", "Unknown"):
-                    # mypy can't narrow str to Literal via `in` check
-                    pr = PipelineRunStatus(name=name, status=status)  # type: ignore
-                    if pr.is_running:
-                        pipelineruns.append(pr)
+                if pr_status := PipelineRunStatus.from_str(name, status):
+                    if pr_status.is_running:
+                        pipelineruns.append(pr_status)
             return pipelineruns
         except requests.RequestException as e:
             print(f"ERROR: Failed to get PipelineRuns: {e}", file=sys.stderr)
@@ -81,9 +79,8 @@ class KubeClient:
             )
             conditions = data.get("status", {}).get("conditions", [])
             status = conditions[0].get("status", "") if conditions else ""
-            if status in ("True", "False", "Unknown"):
-                # mypy can't narrow str to Literal via `in` check
-                return PipelineRunStatus(name=name, status=status)  # type: ignore
+            if pr_status := PipelineRunStatus.from_str(name, status):
+                return pr_status
         except requests.RequestException:
             pass
 
@@ -99,9 +96,8 @@ class KubeClient:
             for cond in data.get("status", {}).get("conditions", []):
                 if cond.get("type") == "Succeeded":
                     status = cond.get("status", "")
-                    if status in ("True", "False", "Unknown"):
-                        # mypy can't narrow str to Literal via `in` check
-                        return PipelineRunStatus(name=name, status=status)  # type: ignore
+                    if pr_status := PipelineRunStatus.from_str(name, status):
+                        return pr_status
         except (subprocess.CalledProcessError, json.JSONDecodeError, KeyError):
             pass
 
