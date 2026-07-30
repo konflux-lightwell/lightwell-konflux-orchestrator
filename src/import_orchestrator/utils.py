@@ -17,7 +17,6 @@ limitations under the License.
 from __future__ import annotations
 
 import re
-import subprocess
 
 
 def extract_tag(oci_ref: str) -> str:
@@ -35,21 +34,3 @@ def extract_tag(oci_ref: str) -> str:
     if digest_match:
         return digest_match.group(1)
     return oci_ref[-40:]
-
-
-def should_retry(error: subprocess.CalledProcessError) -> bool:
-    """Determine if a subprocess error is transient and eligible for retry.
-
-    Permanent failures (validation errors, authentication errors, exit code 2) are
-    not retried. Everything else is considered transient.
-    """
-    stderr = error.stderr.decode() if isinstance(error.stderr, bytes) else error.stderr or ""
-
-    if "validation error" in stderr.lower():
-        return False
-    if "authentication" in stderr.lower():
-        return False
-    if error.returncode == 2:
-        return False
-
-    return True

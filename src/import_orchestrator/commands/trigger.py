@@ -21,7 +21,7 @@ import os
 import sys
 
 from import_orchestrator.clients import KubeClient
-from import_orchestrator.constants import ARTIFACT_CONFIGS, CLUSTER_API, NAMESPACE
+from import_orchestrator.constants import ARTIFACT_CONFIGS, CLUSTER_API, KUBEARCHIVE_API, NAMESPACE
 from import_orchestrator.engine.pipelinerun import PipelineRunBuilder, TriggerError
 
 
@@ -60,7 +60,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:
 def run(args: argparse.Namespace) -> int:
     """Execute the trigger subcommand."""
     try:
-        kube = KubeClient(NAMESPACE, CLUSTER_API)
+        kube = KubeClient(NAMESPACE, CLUSTER_API, KUBEARCHIVE_API)
         builder = PipelineRunBuilder(kube=kube, artifact_type=args.artifact_type)
         pr_name = builder.trigger(args.source_image, args.tag)
 

@@ -136,7 +136,7 @@ def build_pipelinerun_manifest(
     app: str,
     service_account: str,
 ) -> dict[str, Any]:
-    """Build a complete PipelineRun manifest dict ready for ``kubectl create``."""
+    """Build a complete PipelineRun manifest dict."""
     return {
         "apiVersion": "tekton.dev/v1",
         "kind": "PipelineRun",
@@ -216,5 +216,5 @@ class PipelineRunBuilder:
 
         pr_name = self.kube.create_pipelinerun(manifest)
         if pr_name is None:
-            raise TriggerError("PipelineRun creation failed (kubectl returned no name)")
+            raise TriggerError("PipelineRun creation failed (API returned no name)")
         return pr_name

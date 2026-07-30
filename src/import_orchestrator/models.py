@@ -52,7 +52,7 @@ class OCIReference:
 
 @dataclass
 class PipelineRunStatus:
-    """Status of a PipelineRun from kubectl."""
+    """Status of a PipelineRun."""
 
     name: str
     status: Literal["True", "False", "Unknown"]
@@ -68,3 +68,9 @@ class PipelineRunStatus:
     @property
     def is_failed(self) -> bool:
         return self.status == "False"
+
+    @staticmethod
+    def from_str(name: str, status: str) -> PipelineRunStatus | None:
+        if name and status in ("True", "False", "Unknown"):
+            return PipelineRunStatus(name, status)
+        return None

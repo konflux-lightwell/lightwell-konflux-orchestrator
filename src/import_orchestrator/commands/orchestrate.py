@@ -27,6 +27,7 @@ from import_orchestrator.constants import (
     DEFAULT_MAX_PARALLEL,
     DEFAULT_MAX_RETRIES,
     DEFAULT_POLL_INTERVAL,
+    KUBEARCHIVE_API,
     NAMESPACE,
 )
 from import_orchestrator.database import ImportDatabase
@@ -88,7 +89,7 @@ def run(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
 
-        kube = KubeClient(NAMESPACE, CLUSTER_API)
+        kube = KubeClient(NAMESPACE, CLUSTER_API, KUBEARCHIVE_API)
         builder = PipelineRunBuilder(kube=kube, artifact_type=args.artifact_type)
 
         # Construct the specialized components

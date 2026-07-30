@@ -16,16 +16,12 @@ limitations under the License.
 
 from __future__ import annotations
 
-import json
-import os
-import re
-import subprocess
 import sys
 from typing import Literal
 
 import requests
 
-from import_orchestrator.clients.kube_api import KubeAPI, resolve_auth
+from import_orchestrator.clients.kube_api import KubeAPI, KubeAuth, resolve_auth
 from import_orchestrator.models import PipelineRunStatus
 
 
@@ -35,102 +31,64 @@ class KubeClient:
     Authenticates using either a KUBECONFIG file or the KONFLUX_TOKEN environment variable.
     """
 
-    def __init__(self, namespace: str, cluster_api: str):
+    def __init__(self, namespace: str, cluster_api: str, kubearchive_api: str = ""):
         self.namespace = namespace
         self.cluster_api = cluster_api
-        self._api = KubeAPI(resolve_auth(cluster_api))
-        self._kubectl_base_args = self._build_kubectl_args()
-
-    def _build_kubectl_args(self) -> list[str]:
-        """Build base kubectl arguments from KUBECONFIG or KONFLUX_TOKEN."""
-        args = ["-n", self.namespace]
-        if token := os.getenv("KONFLUX_TOKEN"):
-            args.extend(["--token", token, "--server", self.cluster_api])
-        return args
+        auth = resolve_auth(cluster_api)
+        self._api = KubeAPI(auth)
+        self._ka_api: KubeAPI | None = None
+        if kubearchive_api:
+            ka_auth = KubeAuth(server=kubearchive_api, token=auth.token, ca_cert=auth.ca_cert)
+            self._ka_api = KubeAPI(ka_auth)
 
     def get_running_pipelineruns(self) -> list[PipelineRunStatus]:
         """Get all PipelineRuns with status 'Unknown' (i.e. still running)."""
         try:
-            result = subprocess.run(
-                [
-                    "kubectl",
-                    *self._kubectl_base_args,
-                    "get",
-                    "pr",
-                    "-o",
-                    "jsonpath={range .items[*]}{.metadata.name}{'\\t'}{.status.conditions[0].status}{'\\n'}{end}",
-                ],
-                capture_output=True,
-                check=True,
-                text=True,
+            result = self._api.list(
+                f"/apis/tekton.dev/v1/namespaces/{self.namespace}/pipelineruns",
             )
-
             pipelineruns = []
-            for line in result.stdout.strip().split("\n"):
-                if not line:
-                    continue
-                parts = line.split("\t")
-                if len(parts) == 2:
-                    name, status = parts
-                    if status in ("True", "False", "Unknown"):
-                        pr = PipelineRunStatus(name=name, status=status)  # type: ignore
-                        if pr.is_running:
-                            pipelineruns.append(pr)
-
+            for item in result.get("items", []):
+                name = item.get("metadata", {}).get("name", "")
+                conditions = item.get("status", {}).get("conditions", [])
+                status = conditions[0].get("status", "") if conditions else ""
+                if pr_status := PipelineRunStatus.from_str(name, status):
+                    if pr_status.is_running:
+                        pipelineruns.append(pr_status)
             return pipelineruns
-
-        except subprocess.CalledProcessError as e:
-            print(
-                f"ERROR: Failed to get PipelineRuns: {e.stderr}",
-                file=sys.stderr,
-            )
+        except requests.RequestException as e:
+            print(f"ERROR: Failed to get PipelineRuns: {e}", file=sys.stderr)
             return []
 
     def get_pipelinerun_status(self, name: str) -> PipelineRunStatus | None:
         """Get the status of a specific PipelineRun by name.
 
-        Checks the live cluster first (jsonpath), then falls back to kubearchive
-        (JSON only — ka does not support jsonpath output format).
+        Checks the live cluster first, then falls back to the KubeArchive API.
         Returns None if not found in either place.
         """
-        # Live cluster — supports jsonpath
         try:
-            result = subprocess.run(
-                [
-                    "kubectl",
-                    *self._kubectl_base_args,
-                    "get",
-                    "pr",
-                    name,
-                    "-o",
-                    "jsonpath={.status.conditions[0].status}",
-                ],
-                capture_output=True,
-                check=True,
-                text=True,
+            data = self._api.get(
+                f"/apis/tekton.dev/v1/namespaces/{self.namespace}/pipelineruns/{name}",
             )
-            status = result.stdout.strip()
-            if status in ("True", "False", "Unknown"):
-                return PipelineRunStatus(name=name, status=status)  # type: ignore
-        except subprocess.CalledProcessError:
+            conditions = data.get("status", {}).get("conditions", [])
+            status = conditions[0].get("status", "") if conditions else ""
+            if pr_status := PipelineRunStatus.from_str(name, status):
+                return pr_status
+        except requests.RequestException:
             pass
 
-        # Kubearchive fallback — JSON only
-        try:
-            result = subprocess.run(
-                ["kubectl", "ka", *self._kubectl_base_args, "get", "pr", name, "-o", "json"],
-                capture_output=True,
-                check=True,
-                text=True,
-            )
-            data = json.loads(result.stdout)
-            for cond in data.get("status", {}).get("conditions", []):
-                if cond.get("type") == "Succeeded":
-                    status = cond.get("status", "")
-                    if status in ("True", "False", "Unknown"):
-                        return PipelineRunStatus(name=name, status=status)  # type: ignore
-        except (subprocess.CalledProcessError, json.JSONDecodeError, KeyError):
-            pass
+        if self._ka_api is not None:
+            try:
+                data = self._ka_api.get(
+                    f"/apis/tekton.dev/v1/namespaces/{self.namespace}/pipelineruns/{name}",
+                )
+                for cond in data.get("status", {}).get("conditions", []):
+                    if cond.get("type") == "Succeeded":
+                        status = cond.get("status", "")
+                        if pr_status := PipelineRunStatus.from_str(name, status):
+                            return pr_status
+            except requests.RequestException:
+                pass
 
         return None
 
@@ -142,106 +100,57 @@ class KubeClient:
     def find_snapshot_by_pipelinerun(self, pr_name: str) -> str | None:
         """Find the Snapshot created by a specific PipelineRun via its label."""
         try:
-            result = subprocess.run(
-                [
-                    "kubectl",
-                    *self._kubectl_base_args,
-                    "get",
-                    "snapshots",
-                    "-l",
-                    f"appstudio.openshift.io/build-pipelinerun={pr_name}",
-                    "-o",
-                    "jsonpath={.items[0].metadata.name}",
-                ],
-                capture_output=True,
-                check=True,
-                text=True,
+            result = self._api.list(
+                f"/apis/appstudio.redhat.com/v1alpha1/namespaces/{self.namespace}/snapshots",
+                labelSelector=f"appstudio.openshift.io/build-pipelinerun={pr_name}",
             )
-            name = result.stdout.strip()
-            return name if name else None
-        except subprocess.CalledProcessError:
+            items = result.get("items", [])
+            return items[0]["metadata"]["name"] if items else None
+        except (requests.RequestException, KeyError, IndexError):
             return None
-
-    def is_snapshot_auto_released(self, snapshot_name: str) -> bool:
-        """Return True if the snapshot was superseded and auto-released by Konflux."""
-        try:
-            result = subprocess.run(
-                [
-                    "kubectl",
-                    *self._kubectl_base_args,
-                    "get",
-                    "snapshot",
-                    snapshot_name,
-                    "-o",
-                    'jsonpath={.status.conditions[?(@.type=="AutoReleased")].status}',
-                ],
-                capture_output=True,
-                check=True,
-                text=True,
-            )
-            return result.stdout.strip() == "True"
-        except subprocess.CalledProcessError:
-            return False
 
     def find_release_plan_for_snapshot(self, snapshot_name: str) -> str | None:
         """Find the ReleasePlan whose spec.application matches the snapshot's application label."""
         try:
-            snap = subprocess.run(
-                [
-                    "kubectl",
-                    *self._kubectl_base_args,
-                    "get",
-                    "snapshot",
-                    snapshot_name,
-                    "-o",
-                    "jsonpath={.metadata.labels.appstudio\\.openshift\\.io/application}",
-                ],
-                capture_output=True,
-                check=True,
-                text=True,
+            snap = self._api.get(
+                f"/apis/appstudio.redhat.com/v1alpha1/namespaces/{self.namespace}/snapshots/{snapshot_name}",
             )
-            application = snap.stdout.strip()
+            application = snap.get("metadata", {}).get("labels", {}).get("appstudio.openshift.io/application", "")
             if not application:
                 return None
 
-            plans = subprocess.run(
-                ["kubectl", *self._kubectl_base_args, "get", "releaseplans", "-o", "json"],
-                capture_output=True,
-                check=True,
-                text=True,
+            plans = self._api.list(
+                f"/apis/appstudio.redhat.com/v1alpha1/namespaces/{self.namespace}/releaseplans",
             )
-            data = json.loads(plans.stdout)
-            for item in data.get("items", []):
+            for item in plans.get("items", []):
                 if item.get("spec", {}).get("application") == application:
                     return item["metadata"]["name"]
             return None
-        except (subprocess.CalledProcessError, json.JSONDecodeError, KeyError):
+        except (requests.RequestException, KeyError):
             return None
 
     def create_release(self, snapshot_name: str, release_plan: str) -> str | None:
         """Create a Release for the given snapshot and return its name."""
-        manifest = (
-            f"apiVersion: appstudio.redhat.com/v1alpha1\n"
-            f"kind: Release\n"
-            f"metadata:\n"
-            f"  generateName: pnc-import-\n"
-            f"  namespace: {self.namespace}\n"
-            f"spec:\n"
-            f"  releasePlan: {release_plan}\n"
-            f"  snapshot: {snapshot_name}\n"
-        )
+        manifest = {
+            "apiVersion": "appstudio.redhat.com/v1alpha1",
+            "kind": "Release",
+            "metadata": {
+                "generateName": "pnc-import-",
+                "namespace": self.namespace,
+            },
+            "spec": {
+                "releasePlan": release_plan,
+                "snapshot": snapshot_name,
+            },
+        }
         try:
-            result = subprocess.run(
-                ["kubectl", *self._kubectl_base_args, "create", "-f", "-"],
-                input=manifest,
-                capture_output=True,
-                check=True,
-                text=True,
+            result = self._api.create(
+                f"/apis/appstudio.redhat.com/v1alpha1/namespaces/{self.namespace}/releases",
+                manifest,
             )
-            match = re.search(r"release\.appstudio\.redhat\.com/(\S+)\s+created", result.stdout + result.stderr)
-            return match.group(1) if match else None
-        except subprocess.CalledProcessError as e:
-            print(f"ERROR: Failed to create release for {snapshot_name}: {e.stderr}", file=sys.stderr)
+            return result["metadata"]["name"]
+        except (requests.RequestException, KeyError) as e:
+            print(f"ERROR: Failed to create release for {snapshot_name}: {e}", file=sys.stderr)
             return None
 
     def create_pipelinerun(self, manifest: dict) -> str | None:
@@ -259,14 +168,10 @@ class KubeClient:
     def find_release_for_snapshot(self, snapshot_name: str) -> str | None:
         """Find an active (non-terminally-failed) Release for the given snapshot."""
         try:
-            result = subprocess.run(
-                ["kubectl", *self._kubectl_base_args, "get", "releases", "-o", "json"],
-                capture_output=True,
-                check=True,
-                text=True,
+            result = self._api.list(
+                f"/apis/appstudio.redhat.com/v1alpha1/namespaces/{self.namespace}/releases",
             )
-            data = json.loads(result.stdout)
-            for item in data.get("items", []):
+            for item in result.get("items", []):
                 if item.get("spec", {}).get("snapshot") != snapshot_name:
                     continue
                 released = next(
@@ -278,7 +183,7 @@ class KubeClient:
                     continue
                 return item["metadata"]["name"]
             return None
-        except (subprocess.CalledProcessError, json.JSONDecodeError, KeyError):
+        except (requests.RequestException, KeyError):
             return None
 
     def get_release_status(self, release_name: str) -> Literal["True", "False", "Unknown"] | None:
@@ -291,28 +196,21 @@ class KubeClient:
         False as a failure when the reason is not "Progressing".
         """
         try:
-            result = subprocess.run(
-                [
-                    "kubectl",
-                    *self._kubectl_base_args,
-                    "get",
-                    "release",
-                    release_name,
-                    "-o",
-                    "jsonpath={.status.conditions[?(@.type==\"Released\")].status}{'\\t'}"
-                    '{.status.conditions[?(@.type=="Released")].reason}',
-                ],
-                capture_output=True,
-                check=True,
-                text=True,
+            data = self._api.get(
+                f"/apis/appstudio.redhat.com/v1alpha1/namespaces/{self.namespace}/releases/{release_name}",
             )
-            parts = result.stdout.strip().split("\t")
-            status = parts[0] if parts else ""
-            reason = parts[1] if len(parts) > 1 else ""
+            released = next(
+                (c for c in data.get("status", {}).get("conditions", []) if c.get("type") == "Released"),
+                None,
+            )
+            if released is None:
+                return "Unknown"
+            status = released.get("status", "")
+            reason = released.get("reason", "")
             if status == "True":
                 return "True"
             if status == "False" and reason != "Progressing":
                 return "False"
             return "Unknown"
-        except subprocess.CalledProcessError:
+        except requests.RequestException:
             return None
