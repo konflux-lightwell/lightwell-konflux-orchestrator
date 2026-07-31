@@ -196,11 +196,11 @@ _signing_key_fingerprints contains fp if {
 	fp := r.value
 }
 
-# SLSA v1.0: byProducts from runDetails
+# SLSA v1.0: byproducts from runDetails
 _signing_key_fingerprints contains fp if {
 	some att in _pipelinerun_attestations
 	att.statement.predicateType == "https://slsa.dev/provenance/v1"
-	some bp in att.statement.predicate.runDetails.byProducts
+	some bp in att.statement.predicate.runDetails.byproducts
 	bp.name == "VERIFICATION_KEY_FINGERPRINT"
 	fp := bp.content
 }
