@@ -218,7 +218,7 @@ _mock_v1(source_image, key_fingerprint) := {"statement": {
 			]}},
 		},
 		"runDetails": {"byproducts": [
-			{"name": "pipelineRunResults/VERIFICATION_KEY_FINGERPRINT", "content": key_fingerprint},
+			{"name": "pipelineRunResults/VERIFICATION_KEY_FINGERPRINT", "content": base64.encode(json.marshal(key_fingerprint))},
 		]},
 	},
 }}

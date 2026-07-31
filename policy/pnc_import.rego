@@ -202,7 +202,7 @@ _signing_key_fingerprints contains fp if {
 	att.statement.predicateType == "https://slsa.dev/provenance/v1"
 	some bp in att.statement.predicate.runDetails.byproducts
 	_name_matches(bp.name, "VERIFICATION_KEY_FINGERPRINT")
-	fp := bp.content
+	fp := json.unmarshal(base64.decode(bp.content))
 }
 
 # Filter to PipelineRun SLSA attestations only.
