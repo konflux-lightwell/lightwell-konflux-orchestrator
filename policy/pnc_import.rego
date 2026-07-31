@@ -201,7 +201,7 @@ _signing_key_fingerprints contains fp if {
 	some att in _pipelinerun_attestations
 	att.statement.predicateType == "https://slsa.dev/provenance/v1"
 	some bp in att.statement.predicate.runDetails.byproducts
-	bp.name == "VERIFICATION_KEY_FINGERPRINT"
+	_name_matches(bp.name, "VERIFICATION_KEY_FINGERPRINT")
 	fp := bp.content
 }
 
@@ -223,6 +223,11 @@ _distribution_target_annotation := annotation if {
 	manifest := ec.oci.image_manifest(input.image.ref)
 	annotation := manifest.annotations["dev.lightwell.distribution-target"]
 }
+
+# Byproduct names may be bare ("FOO") or prefixed ("pipelineRunResults/FOO").
+_name_matches(name, target) if name == target
+
+_name_matches(name, target) if endswith(name, concat("", ["/", target]))
 
 # ---------------------------------------------------------------------------
 # ruleData accessors with schema validation
