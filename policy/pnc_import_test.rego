@@ -207,7 +207,7 @@ _mock_v02_no_fingerprint(source_image) := {"statement": {
 	},
 }}
 
-# v1: SOURCE_IMAGE in runSpec params; VERIFICATION_KEY_FINGERPRINT in byProducts
+# v1: SOURCE_IMAGE in runSpec params; VERIFICATION_KEY_FINGERPRINT in byproducts
 _mock_v1(source_image, key_fingerprint) := {"statement": {
 	"predicateType": "https://slsa.dev/provenance/v1",
 	"predicate": {
@@ -217,8 +217,8 @@ _mock_v1(source_image, key_fingerprint) := {"statement": {
 				{"name": "SOURCE_IMAGE", "value": source_image},
 			]}},
 		},
-		"runDetails": {"byProducts": [
-			{"name": "VERIFICATION_KEY_FINGERPRINT", "content": key_fingerprint},
+		"runDetails": {"byproducts": [
+			{"name": "pipelineRunResults/VERIFICATION_KEY_FINGERPRINT", "content": base64.encode(json.marshal(key_fingerprint))},
 		]},
 	},
 }}

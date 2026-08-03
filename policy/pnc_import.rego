@@ -196,13 +196,13 @@ _signing_key_fingerprints contains fp if {
 	fp := r.value
 }
 
-# SLSA v1.0: byProducts from runDetails
+# SLSA v1.0: byproducts from runDetails
 _signing_key_fingerprints contains fp if {
 	some att in _pipelinerun_attestations
 	att.statement.predicateType == "https://slsa.dev/provenance/v1"
-	some bp in att.statement.predicate.runDetails.byProducts
-	bp.name == "VERIFICATION_KEY_FINGERPRINT"
-	fp := bp.content
+	some bp in att.statement.predicate.runDetails.byproducts
+	_name_matches(bp.name, "VERIFICATION_KEY_FINGERPRINT")
+	fp := json.unmarshal(base64.decode(bp.content))
 }
 
 # Filter to PipelineRun SLSA attestations only.
@@ -223,6 +223,11 @@ _distribution_target_annotation := annotation if {
 	manifest := ec.oci.image_manifest(input.image.ref)
 	annotation := manifest.annotations["dev.lightwell.distribution-target"]
 }
+
+# Byproduct names may be bare ("FOO") or prefixed ("pipelineRunResults/FOO").
+_name_matches(name, target) if name == target
+
+_name_matches(name, target) if endswith(name, concat("", ["/", target]))
 
 # ---------------------------------------------------------------------------
 # ruleData accessors with schema validation
