@@ -19,6 +19,12 @@ _pnc_fingerprint := "SHA256:LEMzGGdveXznXBtjkbiSPIwR2NxdsNbBL6m5FyW9dOI"
 _other_fingerprint := "SHA256:HHTvfqOgdrdt9TXDyYDMYlwZ8r8rAsiNjiVlB"
 _allowed_keys := [_pnc_fingerprint]
 
+_allowed_validated := ["validated"]
+_allowed_remediated := ["remediated"]
+_allowed_both := ["validated", "remediated"]
+
+_image_ref := "quay.io/redhat-user-workloads/lightwell-poc-tenant/pnc-import/pnc-import@sha256:abc123"
+
 # ---------------------------------------------------------------------------
 # Source registry — SLSA v0.2
 # ---------------------------------------------------------------------------
@@ -27,6 +33,7 @@ test_source_registry_permitted_v02 if {
 	count(pnc_import.deny) == 0 with input.attestations as [_mock_v02(_rebuild_source, _pnc_fingerprint)]
 		with data.rule_data_custom.oci_verify_import_allowed_source_registries as _allowed_rebuild
 		with data.rule_data_custom.oci_verify_import_allowed_signing_keys as _allowed_keys
+		with data.rule_data_custom.oci_verify_import_allowed_distribution_targets as _allowed_validated
 }
 
 test_source_registry_denied_wrong_repo_v02 if {
@@ -49,6 +56,7 @@ test_remediated_source_permitted_in_remediated_ecp_v02 if {
 	count(pnc_import.deny) == 0 with input.attestations as [_mock_v02(_secure_source, _pnc_fingerprint)]
 		with data.rule_data_custom.oci_verify_import_allowed_source_registries as _allowed_secure
 		with data.rule_data_custom.oci_verify_import_allowed_signing_keys as _allowed_keys
+		with data.rule_data_custom.oci_verify_import_allowed_distribution_targets as _allowed_remediated
 }
 
 # ---------------------------------------------------------------------------
@@ -59,6 +67,7 @@ test_source_registry_permitted_v1 if {
 	count(pnc_import.deny) == 0 with input.attestations as [_mock_v1(_rebuild_source, _pnc_fingerprint)]
 		with data.rule_data_custom.oci_verify_import_allowed_source_registries as _allowed_rebuild
 		with data.rule_data_custom.oci_verify_import_allowed_signing_keys as _allowed_keys
+		with data.rule_data_custom.oci_verify_import_allowed_distribution_targets as _allowed_validated
 }
 
 test_source_registry_denied_wrong_repo_v1 if {
@@ -77,6 +86,7 @@ test_signing_key_permitted_v02 if {
 	count(pnc_import.deny) == 0 with input.attestations as [_mock_v02(_rebuild_source, _pnc_fingerprint)]
 		with data.rule_data_custom.oci_verify_import_allowed_source_registries as _allowed_rebuild
 		with data.rule_data_custom.oci_verify_import_allowed_signing_keys as _allowed_keys
+		with data.rule_data_custom.oci_verify_import_allowed_distribution_targets as _allowed_validated
 }
 
 test_signing_key_denied_wrong_key_v02 if {
@@ -136,6 +146,42 @@ test_empty_signing_key_rule_data if {
 }
 
 # ---------------------------------------------------------------------------
+# Distribution target annotation
+# ---------------------------------------------------------------------------
+
+test_distribution_target_permitted if {
+	codes := {r.code | some r in pnc_import.deny} with input.image.ref as _image_ref
+		with input.attestations as []
+		with data.rule_data_custom.oci_verify_import_allowed_source_registries as _allowed_rebuild
+		with data.rule_data_custom.oci_verify_import_allowed_signing_keys as _allowed_keys
+		with data.rule_data_custom.oci_verify_import_allowed_distribution_targets as _allowed_validated
+		with ec.oci.image_manifest as _mock_manifest_validated
+	not "pnc_import.distribution_target_permitted" in codes
+}
+
+test_distribution_target_denied_wrong_value if {
+	deny := pnc_import.deny with input.image.ref as _image_ref
+		with input.attestations as []
+		with data.rule_data_custom.oci_verify_import_allowed_source_registries as _allowed_rebuild
+		with data.rule_data_custom.oci_verify_import_allowed_signing_keys as _allowed_keys
+		with data.rule_data_custom.oci_verify_import_allowed_distribution_targets as _allowed_validated
+		with ec.oci.image_manifest as _mock_manifest_remediated
+	some r in deny
+	r.code == "pnc_import.distribution_target_permitted"
+}
+
+test_distribution_target_absent_is_denied if {
+	deny := pnc_import.deny with input.image.ref as _image_ref
+		with input.attestations as []
+		with data.rule_data_custom.oci_verify_import_allowed_source_registries as _allowed_rebuild
+		with data.rule_data_custom.oci_verify_import_allowed_signing_keys as _allowed_keys
+		with data.rule_data_custom.oci_verify_import_allowed_distribution_targets as _allowed_validated
+		with ec.oci.image_manifest as _mock_manifest_no_annotation
+	some r in deny
+	r.code == "pnc_import.distribution_target_annotation_present"
+}
+
+# ---------------------------------------------------------------------------
 # Mock attestation builders
 # ---------------------------------------------------------------------------
 
@@ -176,3 +222,13 @@ _mock_v1(source_image, key_fingerprint) := {"statement": {
 		]},
 	},
 }}
+
+# ---------------------------------------------------------------------------
+# Mock OCI manifest builders
+# ---------------------------------------------------------------------------
+
+_mock_manifest_validated(_) := {"annotations": {"dev.lightwell.distribution-target": "validated"}}
+
+_mock_manifest_remediated(_) := {"annotations": {"dev.lightwell.distribution-target": "remediated"}}
+
+_mock_manifest_no_annotation(_) := {"annotations": {}}

@@ -2,10 +2,11 @@
 # title: PNC Import Trust Policy
 # description: >-
 #   Validates that the oci-verify-import task operated on an approved source
-#   registry and used an approved signing key.
+#   registry and used an approved signing key, and that the released image
+#   carries a distribution-target annotation matching the release stream.
 #
-#   Both rules are required to be configured in ruleData. If a rule should not
-#   apply, remove this policy bundle from the ECP entirely.
+#   All ruleData keys are required. If a rule should not apply, remove this
+#   policy bundle from the ECP entirely.
 #
 #   Required ruleData keys:
 #
@@ -14,6 +15,9 @@
 #
 #     oci_verify_import_allowed_signing_keys:
 #       - SHA256:abcd...                      # PNC signing key fingerprint
+#
+#     oci_verify_import_allowed_distribution_targets:
+#       - validated                           # or remediated; stage allows both
 #
 package pnc_import
 
@@ -111,6 +115,58 @@ deny contains result if {
 }
 
 # ---------------------------------------------------------------------------
+# Distribution target annotation check
+# ---------------------------------------------------------------------------
+
+# METADATA
+# title: Distribution target annotation present
+# description: >-
+#   Verify the dev.lightwell.distribution-target annotation is present on the
+#   released image's OCI manifest.
+# custom:
+#   short_name: distribution_target_annotation_present
+#   failure_msg: 'dev.lightwell.distribution-target annotation is absent from the image manifest'
+#   collections:
+#     - lightwell
+deny contains result if {
+	manifest := ec.oci.image_manifest(input.image.ref)
+	not manifest.annotations["dev.lightwell.distribution-target"]
+	result := metadata.result_helper(rego.metadata.chain(), [])
+}
+
+# METADATA
+# title: Distribution target annotation permitted
+# description: >-
+#   Verify the dev.lightwell.distribution-target annotation on the released
+#   image is in the set of allowed values configured for this release stream.
+# custom:
+#   short_name: distribution_target_permitted
+#   failure_msg: >-
+#     dev.lightwell.distribution-target annotation %q is not in the allowed set.
+#     Allowed: %v
+#   collections:
+#     - lightwell
+deny contains result if {
+	annotation := _distribution_target_annotation
+	not annotation in _allowed_distribution_targets
+	result := metadata.result_helper(rego.metadata.chain(), [annotation, _allowed_distribution_targets])
+}
+
+# METADATA
+# title: Distribution target ruleData provided
+# description: >-
+#   Confirm oci_verify_import_allowed_distribution_targets was provided in ruleData.
+# custom:
+#   short_name: distribution_target_rule_data_provided
+#   failure_msg: '%s'
+#   collections:
+#     - lightwell
+deny contains result if {
+	some e in _distribution_target_rule_data_errors
+	result := metadata.result_helper_with_severity(rego.metadata.chain(), [e.message], e.severity)
+}
+
+# ---------------------------------------------------------------------------
 # Helpers — extract input parameters from SLSA PipelineRun attestations
 # ---------------------------------------------------------------------------
 
@@ -163,6 +219,11 @@ _source_image_permitted(source_image) if {
 	startswith(source_image, prefix)
 }
 
+_distribution_target_annotation := annotation if {
+	manifest := ec.oci.image_manifest(input.image.ref)
+	annotation := manifest.annotations["dev.lightwell.distribution-target"]
+}
+
 # ---------------------------------------------------------------------------
 # ruleData accessors with schema validation
 # ---------------------------------------------------------------------------
@@ -190,6 +251,16 @@ _source_registry_rule_data_errors contains error if {
 _signing_key_rule_data_errors contains error if {
 	some e in j.validate_schema(
 		rule_data.get("oci_verify_import_allowed_signing_keys"),
+		_string_list_schema,
+	)
+	error := {"message": e.message, "severity": e.severity}
+}
+
+_allowed_distribution_targets := rule_data.get("oci_verify_import_allowed_distribution_targets")
+
+_distribution_target_rule_data_errors contains error if {
+	some e in j.validate_schema(
+		rule_data.get("oci_verify_import_allowed_distribution_targets"),
 		_string_list_schema,
 	)
 	error := {"message": e.message, "severity": e.severity}
