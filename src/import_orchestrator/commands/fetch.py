@@ -25,7 +25,7 @@ from import_orchestrator.constants import (
     ARTIFACT_CONFIGS,
 )
 from import_orchestrator.database import ImportDatabase
-from import_orchestrator.engine import OciIngest
+from import_orchestrator.engine import Ingest
 
 
 def register(subparsers: argparse._SubParsersAction) -> None:
@@ -62,7 +62,7 @@ def run(args: argparse.Namespace) -> int:
     client = QuayClient(token=token, repo=config["source_repo"])
 
     with ImportDatabase(args.db) as db:
-        ingest = OciIngest(db)
+        ingest = Ingest(db)
         result = ingest.from_quay(client)
 
         _print_summary(result)

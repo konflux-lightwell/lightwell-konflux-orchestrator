@@ -50,7 +50,7 @@ class TestDiscoverSnapshot:
 
     def test_discovers_and_caches_snapshot(self, monitor: ReleaseMonitor, mock_kube: MagicMock):
         """Verify that snapshot is discovered and cached in the database."""
-        ref, _ = monitor.db.add_oci_reference("quay.io/repo:tag@sha256:abc")
+        ref, _ = monitor.db.add_item("quay.io/repo:tag@sha256:abc")
         assert ref.id is not None
 
         monitor.db.update_status(ref.id, ImportStatus.AWAITING_RELEASE, pipelinerun_name="pnc-import-abc")
@@ -66,7 +66,7 @@ class TestDiscoverSnapshot:
 
     def test_waits_when_snapshot_not_found(self, monitor: ReleaseMonitor, mock_kube: MagicMock):
         """Verify that monitor waits when snapshot is not yet available."""
-        ref, _ = monitor.db.add_oci_reference("quay.io/repo:tag@sha256:abc")
+        ref, _ = monitor.db.add_item("quay.io/repo:tag@sha256:abc")
         assert ref.id is not None
 
         monitor.db.update_status(ref.id, ImportStatus.AWAITING_RELEASE, pipelinerun_name="pnc-import-abc")
@@ -85,7 +85,7 @@ class TestFindOrCreateRelease:
 
     def test_finds_existing_release(self, monitor: ReleaseMonitor, mock_kube: MagicMock):
         """Verify that existing release is found and cached."""
-        ref, _ = monitor.db.add_oci_reference("quay.io/repo:tag@sha256:abc")
+        ref, _ = monitor.db.add_item("quay.io/repo:tag@sha256:abc")
         assert ref.id is not None
 
         monitor.db.update_status(
@@ -106,7 +106,7 @@ class TestFindOrCreateRelease:
 
     def test_creates_release_when_not_found(self, monitor: ReleaseMonitor, mock_kube: MagicMock):
         """Verify that a new release is created when none exists."""
-        ref, _ = monitor.db.add_oci_reference("quay.io/repo:tag@sha256:abc")
+        ref, _ = monitor.db.add_item("quay.io/repo:tag@sha256:abc")
         assert ref.id is not None
 
         monitor.db.update_status(
@@ -132,7 +132,7 @@ class TestFindOrCreateRelease:
         """Verify that release creation is deferred when max_parallel is reached."""
         # Fill capacity with 5 active releases
         for i in range(5):
-            ref, _ = monitor.db.add_oci_reference(f"quay.io/repo:tag{i}@sha256:abc{i}")
+            ref, _ = monitor.db.add_item(f"quay.io/repo:tag{i}@sha256:abc{i}")
             assert ref.id is not None
             monitor.db.update_status(
                 ref.id,
@@ -143,7 +143,7 @@ class TestFindOrCreateRelease:
             )
 
         # Add one more that needs a release
-        ref, _ = monitor.db.add_oci_reference("quay.io/repo:new@sha256:xyz")
+        ref, _ = monitor.db.add_item("quay.io/repo:new@sha256:xyz")
         assert ref.id is not None
         monitor.db.update_status(
             ref.id,
@@ -163,7 +163,7 @@ class TestFindOrCreateRelease:
 
     def test_waits_when_release_plan_not_found(self, monitor: ReleaseMonitor, mock_kube: MagicMock):
         """Verify that monitor waits when ReleasePlan is not found."""
-        ref, _ = monitor.db.add_oci_reference("quay.io/repo:tag@sha256:abc")
+        ref, _ = monitor.db.add_item("quay.io/repo:tag@sha256:abc")
         assert ref.id is not None
 
         monitor.db.update_status(
@@ -185,7 +185,7 @@ class TestFindOrCreateRelease:
 
     def test_waits_when_release_creation_fails(self, monitor: ReleaseMonitor, mock_kube: MagicMock):
         """Verify that monitor waits when release creation fails."""
-        ref, _ = monitor.db.add_oci_reference("quay.io/repo:tag@sha256:abc")
+        ref, _ = monitor.db.add_item("quay.io/repo:tag@sha256:abc")
         assert ref.id is not None
 
         monitor.db.update_status(
@@ -211,7 +211,7 @@ class TestCheckReleaseCompletion:
 
     def test_updates_to_success_when_release_succeeds(self, monitor: ReleaseMonitor, mock_kube: MagicMock):
         """Verify that import is marked SUCCESS when release succeeds."""
-        ref, _ = monitor.db.add_oci_reference("quay.io/repo:tag@sha256:abc")
+        ref, _ = monitor.db.add_item("quay.io/repo:tag@sha256:abc")
         assert ref.id is not None
 
         monitor.db.update_status(
@@ -233,7 +233,7 @@ class TestCheckReleaseCompletion:
 
     def test_updates_to_failed_when_release_fails(self, monitor: ReleaseMonitor, mock_kube: MagicMock):
         """Verify that import is marked FAILED when release fails."""
-        ref, _ = monitor.db.add_oci_reference("quay.io/repo:tag@sha256:abc")
+        ref, _ = monitor.db.add_item("quay.io/repo:tag@sha256:abc")
         assert ref.id is not None
 
         monitor.db.update_status(
@@ -256,7 +256,7 @@ class TestCheckReleaseCompletion:
 
     def test_waits_when_release_still_running(self, monitor: ReleaseMonitor, mock_kube: MagicMock):
         """Verify that monitor waits when release is still running."""
-        ref, _ = monitor.db.add_oci_reference("quay.io/repo:tag@sha256:abc")
+        ref, _ = monitor.db.add_item("quay.io/repo:tag@sha256:abc")
         assert ref.id is not None
 
         monitor.db.update_status(
@@ -281,7 +281,7 @@ class TestIntegration:
 
     def test_complete_flow_from_awaiting_to_success(self, monitor: ReleaseMonitor, mock_kube: MagicMock):
         """Verify complete flow: discover snapshot, create release, mark success."""
-        ref, _ = monitor.db.add_oci_reference("quay.io/repo:tag@sha256:abc")
+        ref, _ = monitor.db.add_item("quay.io/repo:tag@sha256:abc")
         assert ref.id is not None
 
         monitor.db.update_status(ref.id, ImportStatus.AWAITING_RELEASE, pipelinerun_name="pnc-import-abc")

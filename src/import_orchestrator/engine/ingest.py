@@ -39,11 +39,11 @@ class IngestResult:
         return self.total - self.newly_added
 
 
-class OciIngest:
-    """Ingests OCI references from external sources into the import database.
+class Ingest:
+    """Ingests items from external sources into the import database.
 
     Handles deduplication and provides counts of what was ingested.
-    This is the single entry point for getting OCI references into
+    This is the single entry point for getting items into
     the system, regardless of the data source.
     """
 
@@ -158,8 +158,8 @@ class OciIngest:
         valid_refs = [line.strip() for line in lines if self._is_valid_reference(line)]
 
         newly_added = 0
-        for oci_ref in valid_refs:
-            _, was_inserted = self.db.add_oci_reference(oci_ref)
+        for ref in valid_refs:
+            _, was_inserted = self.db.add_item(ref)
             if was_inserted:
                 newly_added += 1
 

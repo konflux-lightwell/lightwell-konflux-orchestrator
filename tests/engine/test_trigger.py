@@ -22,7 +22,7 @@ import pytest
 from import_orchestrator.database import ImportDatabase
 from import_orchestrator.engine import ImportTrigger
 from import_orchestrator.engine.pipelinerun import PipelineRunBuilder, TriggerError
-from import_orchestrator.models import ImportStatus, OCIReference
+from import_orchestrator.models import ImportItem, ImportStatus
 
 
 @pytest.fixture
@@ -55,28 +55,28 @@ class TestTriggerImport:
 
     def test_returns_pipelinerun_name(self, trigger: ImportTrigger, mock_builder: MagicMock):
         """Verify that PipelineRun name is returned from PipelineRunBuilder."""
-        oci_ref = OCIReference(id=1, oci_ref="quay.io/repo:tag@sha256:abc", status=ImportStatus.PENDING)
+        item = ImportItem(id=1, ref="quay.io/repo:tag@sha256:abc", status=ImportStatus.PENDING)
         mock_builder.trigger.return_value = "pnc-import-12345"
 
-        name = trigger.trigger_import(oci_ref, tag="tag")
+        name = trigger.trigger_import(item, tag="tag")
         assert name == "pnc-import-12345"
         mock_builder.trigger.assert_called_once_with(source_image="quay.io/repo:tag@sha256:abc", tag="tag")
 
     def test_returns_none_when_builder_returns_none(self, trigger: ImportTrigger, mock_builder: MagicMock):
         """Verify that None is returned when PipelineRunBuilder returns None."""
-        oci_ref = OCIReference(id=1, oci_ref="quay.io/repo:tag@sha256:abc", status=ImportStatus.PENDING)
+        item = ImportItem(id=1, ref="quay.io/repo:tag@sha256:abc", status=ImportStatus.PENDING)
         mock_builder.trigger.return_value = None
 
-        name = trigger.trigger_import(oci_ref, tag="tag")
+        name = trigger.trigger_import(item, tag="tag")
         assert name is None
 
     def test_raises_on_trigger_error(self, trigger: ImportTrigger, mock_builder: MagicMock):
         """Verify that TriggerError is raised when PipelineRunBuilder fails."""
-        oci_ref = OCIReference(id=1, oci_ref="quay.io/repo:tag@sha256:abc", status=ImportStatus.PENDING)
+        item = ImportItem(id=1, ref="quay.io/repo:tag@sha256:abc", status=ImportStatus.PENDING)
         mock_builder.trigger.side_effect = TriggerError("build error")
 
         with pytest.raises(TriggerError):
-            trigger.trigger_import(oci_ref, tag="tag")
+            trigger.trigger_import(item, tag="tag")
 
 
 class TestTriggerNextBatch:
@@ -86,13 +86,13 @@ class TestTriggerNextBatch:
         """Verify that imports are triggered up to the available capacity."""
         # Add 3 already in-flight imports (simulating running/triggered)
         for i in range(3):
-            ref, _ = trigger.db.add_oci_reference(f"quay.io/repo:inflight{i}@sha256:bbb{i}")
+            ref, _ = trigger.db.add_item(f"quay.io/repo:inflight{i}@sha256:bbb{i}")
             assert ref.id is not None
             trigger.db.update_status(ref.id, ImportStatus.RUNNING)
 
         # Add 5 pending imports
         for i in range(5):
-            trigger.db.add_oci_reference(f"quay.io/repo:tag{i}@sha256:aaa{i}")
+            trigger.db.add_item(f"quay.io/repo:tag{i}@sha256:aaa{i}")
 
         mock_builder.trigger.return_value = "pnc-import-xxx"
 
@@ -108,12 +108,12 @@ class TestTriggerNextBatch:
         """Verify that no imports are triggered when capacity is full."""
         # Fill all 5 slots with in-flight imports
         for i in range(5):
-            ref, _ = trigger.db.add_oci_reference(f"quay.io/repo:inflight{i}@sha256:bbb{i}")
+            ref, _ = trigger.db.add_item(f"quay.io/repo:inflight{i}@sha256:bbb{i}")
             assert ref.id is not None
             trigger.db.update_status(ref.id, ImportStatus.RUNNING)
 
         # Add a pending import
-        trigger.db.add_oci_reference("quay.io/repo:tag@sha256:abc")
+        trigger.db.add_item("quay.io/repo:tag@sha256:abc")
 
         # No slots available, should return 0 without triggering
         triggered = trigger.trigger_next_batch()
@@ -125,7 +125,7 @@ class TestTriggerNextBatch:
 
     def test_handles_trigger_failure(self, trigger: ImportTrigger, mock_builder: MagicMock):
         """Verify that trigger failures are recorded in the database."""
-        trigger.db.add_oci_reference("quay.io/repo:tag@sha256:abc")
+        trigger.db.add_item("quay.io/repo:tag@sha256:abc")
 
         mock_builder.trigger.side_effect = TriggerError("connection refused")
 
@@ -140,7 +140,7 @@ class TestTriggerNextBatch:
     def test_triggers_retry_candidates(self, trigger: ImportTrigger, mock_builder: MagicMock):
         """Verify that failed imports are retried within the retry limit."""
         # Add a failed import that can be retried
-        ref, _ = trigger.db.add_oci_reference("quay.io/repo:tag@sha256:abc")
+        ref, _ = trigger.db.add_item("quay.io/repo:tag@sha256:abc")
         assert ref.id is not None
         trigger.db.update_status(
             ref.id,
@@ -162,7 +162,7 @@ class TestTriggerNextBatch:
     def test_clears_cached_fields_on_retry(self, trigger: ImportTrigger, mock_builder: MagicMock):
         """Verify that snapshot and release names are cleared when retrying a failed import."""
         # Add a failed import with cached fields from a previous attempt
-        ref, _ = trigger.db.add_oci_reference("quay.io/repo:tag@sha256:abc")
+        ref, _ = trigger.db.add_item("quay.io/repo:tag@sha256:abc")
         assert ref.id is not None
         trigger.db.update_status(
             ref.id,
@@ -185,7 +185,7 @@ class TestTriggerNextBatch:
 
     def test_marks_failure_with_incremented_retry_count(self, trigger: ImportTrigger, mock_builder: MagicMock):
         """Verify that TriggerError failures increment retry count."""
-        trigger.db.add_oci_reference("quay.io/repo:tag@sha256:abc")
+        trigger.db.add_item("quay.io/repo:tag@sha256:abc")
 
         mock_builder.trigger.side_effect = TriggerError("validation error")
 

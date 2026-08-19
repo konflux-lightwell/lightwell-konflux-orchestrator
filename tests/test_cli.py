@@ -338,7 +338,7 @@ class TestMainImportFile:
         with ImportDatabase(db_path) as db:
             pending = db.get_by_status(ImportStatus.PENDING)
             assert len(pending) == 2
-            refs = {r.oci_ref for r in pending}
+            refs = {r.ref for r in pending}
             assert refs == {"quay.io/repo:tag1@sha256:aaa", "quay.io/repo:tag2@sha256:bbb"}
 
     def test_skips_comments_and_blank_lines(self, monkeypatch, tmp_path: Path):
@@ -406,7 +406,7 @@ class TestMainImportFile:
 
         # Pre-populate the database
         with ImportDatabase(db_path) as db:
-            db.add_oci_reference("quay.io/repo:old@sha256:old")
+            db.add_item("quay.io/repo:old@sha256:old")
 
         refs_file = tmp_path / "refs.txt"
         refs_file.write_text("quay.io/repo:new@sha256:new\n")
@@ -429,4 +429,4 @@ class TestMainImportFile:
         with ImportDatabase(db_path) as db:
             pending = db.get_by_status(ImportStatus.PENDING)
             assert len(pending) == 1
-            assert pending[0].oci_ref == "quay.io/repo:new@sha256:new"
+            assert pending[0].ref == "quay.io/repo:new@sha256:new"

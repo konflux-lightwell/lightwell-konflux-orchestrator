@@ -22,7 +22,7 @@ import pytest
 
 from import_orchestrator.clients import QuayClient
 from import_orchestrator.database import ImportDatabase
-from import_orchestrator.engine import IngestResult, OciIngest
+from import_orchestrator.engine import Ingest, IngestResult
 
 
 @pytest.fixture
@@ -35,8 +35,8 @@ def db(tmp_path: Path):
 
 @pytest.fixture
 def ingest(db: ImportDatabase):
-    """Create an OciIngest instance with a test database."""
-    return OciIngest(db)
+    """Create an Ingest instance with a test database."""
+    return Ingest(db)
 
 
 class TestIngestResult:
@@ -59,7 +59,7 @@ class TestFromScript:
     """Test the from_script method."""
 
     @patch("import_orchestrator.engine.ingest.subprocess.run")
-    def test_stores_fetched_refs(self, mock_run, ingest: OciIngest, tmp_path: Path):
+    def test_stores_fetched_refs(self, mock_run, ingest: Ingest, tmp_path: Path):
         """Verify that OCI references from script stdout are stored in the database."""
         script = tmp_path / "fetch.sh"
         script.write_text("#!/bin/bash\necho 'ref1'\necho 'ref2'")
@@ -76,11 +76,11 @@ class TestFromScript:
         mock_run.assert_called_once()
 
     @patch("import_orchestrator.engine.ingest.subprocess.run")
-    def test_handles_duplicates(self, mock_run, ingest: OciIngest, tmp_path: Path):
+    def test_handles_duplicates(self, mock_run, ingest: Ingest, tmp_path: Path):
         """Verify that duplicate references are not re-added."""
         script = tmp_path / "fetch.sh"
 
-        ingest.db.add_oci_reference("oci://example.com/foo:tag1")
+        ingest.db.add_item("oci://example.com/foo:tag1")
 
         mock_result = MagicMock()
         mock_result.stdout = "oci://example.com/foo:tag1\noci://example.com/bar:tag2\n"
@@ -93,7 +93,7 @@ class TestFromScript:
         assert result.duplicates == 1
 
     @patch("import_orchestrator.engine.ingest.subprocess.run")
-    def test_empty_output_returns_zero(self, mock_run, ingest: OciIngest, tmp_path: Path):
+    def test_empty_output_returns_zero(self, mock_run, ingest: Ingest, tmp_path: Path):
         """Verify that empty script output returns zero counts."""
         script = tmp_path / "fetch.sh"
 
@@ -107,7 +107,7 @@ class TestFromScript:
         assert result.newly_added == 0
 
     @patch("import_orchestrator.engine.ingest.subprocess.run")
-    def test_script_failure_raises(self, mock_run, ingest: OciIngest, tmp_path: Path):
+    def test_script_failure_raises(self, mock_run, ingest: Ingest, tmp_path: Path):
         """Verify that subprocess failures are propagated."""
         script = tmp_path / "fetch.sh"
 
@@ -124,7 +124,7 @@ class TestFromScript:
 class TestFromLines:
     """Test the from_lines method."""
 
-    def test_ingests_valid_lines(self, ingest: OciIngest):
+    def test_ingests_valid_lines(self, ingest: Ingest):
         """Verify that valid OCI references are ingested from lines."""
         lines = [
             "oci://example.com/foo:tag1",
@@ -137,7 +137,7 @@ class TestFromLines:
         assert result.total == 3
         assert result.newly_added == 3
 
-    def test_skips_blank_lines(self, ingest: OciIngest):
+    def test_skips_blank_lines(self, ingest: Ingest):
         """Verify that blank lines are ignored."""
         lines = [
             "oci://example.com/foo:tag1",
@@ -151,7 +151,7 @@ class TestFromLines:
         assert result.total == 2
         assert result.newly_added == 2
 
-    def test_skips_comment_lines(self, ingest: OciIngest):
+    def test_skips_comment_lines(self, ingest: Ingest):
         """Verify that comment lines (starting with #) are ignored."""
         lines = [
             "# This is a comment",
@@ -165,9 +165,9 @@ class TestFromLines:
         assert result.total == 2
         assert result.newly_added == 2
 
-    def test_handles_duplicates(self, ingest: OciIngest):
+    def test_handles_duplicates(self, ingest: Ingest):
         """Verify that duplicate references in lines are handled correctly."""
-        ingest.db.add_oci_reference("oci://example.com/foo:tag1")
+        ingest.db.add_item("oci://example.com/foo:tag1")
 
         lines = [
             "oci://example.com/foo:tag1",
@@ -181,14 +181,14 @@ class TestFromLines:
         assert result.newly_added == 2
         assert result.duplicates == 1
 
-    def test_empty_lines_returns_zero(self, ingest: OciIngest):
+    def test_empty_lines_returns_zero(self, ingest: Ingest):
         """Verify that an empty list returns zero counts."""
         result = ingest.from_lines([])
 
         assert result.total == 0
         assert result.newly_added == 0
 
-    def test_strips_whitespace(self, ingest: OciIngest):
+    def test_strips_whitespace(self, ingest: Ingest):
         """Verify that leading/trailing whitespace is stripped from references."""
         lines = [
             "  oci://example.com/foo:tag1  ",
@@ -204,7 +204,7 @@ class TestFromLines:
 class TestFromManifest:
     """Test the from_manifest method."""
 
-    def test_combines_tag_and_digest(self, ingest: OciIngest, tmp_path: Path):
+    def test_combines_tag_and_digest(self, ingest: Ingest, tmp_path: Path):
         manifest = tmp_path / "manifest.yaml"
         manifest.write_text(
             "libraries:\n"
@@ -219,7 +219,7 @@ class TestFromManifest:
         assert result.total == 1
         assert result.newly_added == 1
 
-    def test_combined_ref_format(self, ingest: OciIngest, tmp_path: Path, db: ImportDatabase):
+    def test_combined_ref_format(self, ingest: Ingest, tmp_path: Path, db: ImportDatabase):
         manifest = tmp_path / "manifest.yaml"
         manifest.write_text(
             "libraries:\n"
@@ -235,9 +235,9 @@ class TestFromManifest:
 
         pending = db.get_by_status(ImportStatus.PENDING)
         assert len(pending) == 1
-        assert pending[0].oci_ref == "quay.io/ns/repo:build-100@sha256:abcdef"
+        assert pending[0].ref == "quay.io/ns/repo:build-100@sha256:abcdef"
 
-    def test_digest_only(self, ingest: OciIngest, tmp_path: Path, db: ImportDatabase):
+    def test_digest_only(self, ingest: Ingest, tmp_path: Path, db: ImportDatabase):
         manifest = tmp_path / "manifest.yaml"
         manifest.write_text(
             'libraries:\n  - output:\n      artifact:\n        digest: "quay.io/ns/repo@sha256:abcdef"\n'
@@ -251,9 +251,9 @@ class TestFromManifest:
         from import_orchestrator.models import ImportStatus
 
         pending = db.get_by_status(ImportStatus.PENDING)
-        assert pending[0].oci_ref == "quay.io/ns/repo@sha256:abcdef"
+        assert pending[0].ref == "quay.io/ns/repo@sha256:abcdef"
 
-    def test_tag_only(self, ingest: OciIngest, tmp_path: Path, db: ImportDatabase):
+    def test_tag_only(self, ingest: Ingest, tmp_path: Path, db: ImportDatabase):
         manifest = tmp_path / "manifest.yaml"
         manifest.write_text('libraries:\n  - output:\n      artifact:\n        tag: "quay.io/ns/repo:build-100"\n')
 
@@ -265,9 +265,9 @@ class TestFromManifest:
         from import_orchestrator.models import ImportStatus
 
         pending = db.get_by_status(ImportStatus.PENDING)
-        assert pending[0].oci_ref == "quay.io/ns/repo:build-100"
+        assert pending[0].ref == "quay.io/ns/repo:build-100"
 
-    def test_skips_entries_with_no_tag_or_digest(self, ingest: OciIngest, tmp_path: Path):
+    def test_skips_entries_with_no_tag_or_digest(self, ingest: Ingest, tmp_path: Path):
         manifest = tmp_path / "manifest.yaml"
         manifest.write_text("libraries:\n  - output:\n      artifact: {}\n  - output:\n      other_field: value\n")
 
@@ -276,7 +276,7 @@ class TestFromManifest:
         assert result.total == 0
         assert result.newly_added == 0
 
-    def test_empty_libraries_returns_zero(self, ingest: OciIngest, tmp_path: Path):
+    def test_empty_libraries_returns_zero(self, ingest: Ingest, tmp_path: Path):
         manifest = tmp_path / "manifest.yaml"
         manifest.write_text("libraries: []\n")
 
@@ -285,7 +285,7 @@ class TestFromManifest:
         assert result.total == 0
         assert result.newly_added == 0
 
-    def test_no_libraries_key_returns_zero(self, ingest: OciIngest, tmp_path: Path):
+    def test_no_libraries_key_returns_zero(self, ingest: Ingest, tmp_path: Path):
         manifest = tmp_path / "manifest.yaml"
         manifest.write_text("other_key: value\n")
 
@@ -294,7 +294,7 @@ class TestFromManifest:
         assert result.total == 0
         assert result.newly_added == 0
 
-    def test_multiple_libraries(self, ingest: OciIngest, tmp_path: Path):
+    def test_multiple_libraries(self, ingest: Ingest, tmp_path: Path):
         manifest = tmp_path / "manifest.yaml"
         manifest.write_text(
             "libraries:\n"
@@ -316,8 +316,8 @@ class TestFromManifest:
         assert result.total == 3
         assert result.newly_added == 3
 
-    def test_handles_duplicates(self, ingest: OciIngest, tmp_path: Path):
-        ingest.db.add_oci_reference("quay.io/ns/repo:build-1@sha256:aaa")
+    def test_handles_duplicates(self, ingest: Ingest, tmp_path: Path):
+        ingest.db.add_item("quay.io/ns/repo:build-1@sha256:aaa")
 
         manifest = tmp_path / "manifest.yaml"
         manifest.write_text(
@@ -338,7 +338,7 @@ class TestFromManifest:
         assert result.newly_added == 1
         assert result.duplicates == 1
 
-    def test_warns_on_no_refs_found(self, ingest: OciIngest, tmp_path: Path, capsys):
+    def test_warns_on_no_refs_found(self, ingest: Ingest, tmp_path: Path, capsys):
         manifest = tmp_path / "manifest.yaml"
         manifest.write_text("libraries: []\n")
 
@@ -347,7 +347,7 @@ class TestFromManifest:
         captured = capsys.readouterr()
         assert "No OCI references found in manifest" in captured.err
 
-    def test_digest_without_at_sign_raises(self, ingest: OciIngest, tmp_path: Path):
+    def test_digest_without_at_sign_raises(self, ingest: Ingest, tmp_path: Path):
         manifest = tmp_path / "manifest.yaml"
         manifest.write_text(
             "libraries:\n"
@@ -364,7 +364,7 @@ class TestFromManifest:
 class TestFromQuay:
     """Test the from_quay method."""
 
-    def test_ingests_refs_from_quay(self, ingest: OciIngest):
+    def test_ingests_refs_from_quay(self, ingest: Ingest):
         """Verify that OCI references from QuayClient are stored in the database."""
         mock_client = MagicMock(spec=QuayClient)
         mock_client.fetch_oci_references.return_value = [
@@ -378,7 +378,7 @@ class TestFromQuay:
         assert result.newly_added == 2
         mock_client.fetch_oci_references.assert_called_once_with()
 
-    def test_handles_empty_response(self, ingest: OciIngest):
+    def test_handles_empty_response(self, ingest: Ingest):
         """Verify that an empty Quay response returns zero counts."""
         mock_client = MagicMock(spec=QuayClient)
         mock_client.fetch_oci_references.return_value = []
@@ -388,9 +388,9 @@ class TestFromQuay:
         assert result.total == 0
         assert result.newly_added == 0
 
-    def test_handles_duplicates(self, ingest: OciIngest):
+    def test_handles_duplicates(self, ingest: Ingest):
         """Verify that refs already in the database are counted as duplicates."""
-        ingest.db.add_oci_reference("quay.io/ns/repo:lw-build-1@sha256:aaa")
+        ingest.db.add_item("quay.io/ns/repo:lw-build-1@sha256:aaa")
 
         mock_client = MagicMock(spec=QuayClient)
         mock_client.fetch_oci_references.return_value = [

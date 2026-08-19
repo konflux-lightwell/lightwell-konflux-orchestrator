@@ -91,7 +91,7 @@ class TestMainImportManifest:
     def test_works_with_reset_flag(self, monkeypatch, tmp_path: Path):
         db_path = tmp_path / "test.db"
         with ImportDatabase(db_path) as db:
-            db.add_oci_reference("quay.io/ns/repo:old@sha256:old")
+            db.add_item("quay.io/ns/repo:old@sha256:old")
 
         manifest = tmp_path / "consolidated.yaml"
         manifest.write_text(SIMPLE_MANIFEST)

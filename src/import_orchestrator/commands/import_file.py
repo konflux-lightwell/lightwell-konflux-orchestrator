@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 
 from import_orchestrator.database import ImportDatabase
-from import_orchestrator.engine import OciIngest
+from import_orchestrator.engine import Ingest
 
 
 def register(subparsers: argparse._SubParsersAction) -> None:
@@ -50,7 +50,7 @@ def run(args: argparse.Namespace) -> int:
     lines = args.file.read_text().splitlines()
 
     with ImportDatabase(args.db) as db:
-        ingest = OciIngest(db)
+        ingest = Ingest(db)
         result = ingest.from_lines(lines)
 
     _print_summary(result)

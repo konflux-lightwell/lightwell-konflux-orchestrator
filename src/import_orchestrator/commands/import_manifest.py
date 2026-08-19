@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 
 from import_orchestrator.database import ImportDatabase
-from import_orchestrator.engine import OciIngest
+from import_orchestrator.engine import Ingest
 
 
 def register(subparsers: argparse._SubParsersAction) -> None:
@@ -52,7 +52,7 @@ def run(args: argparse.Namespace) -> int:
         return 2
 
     with ImportDatabase(args.db) as db:
-        ingest = OciIngest(db)
+        ingest = Ingest(db)
         result = ingest.from_manifest(args.file)
 
     if result.total == 0:
