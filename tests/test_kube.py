@@ -21,6 +21,7 @@ import requests
 
 from import_orchestrator.clients import KubeClient
 from import_orchestrator.clients.kube_api import KubeAuth
+from import_orchestrator.engine.errors import TriggerError
 
 
 def _make_kube_client(monkeypatch, token=None, kubearchive_api=""):
@@ -335,11 +336,19 @@ class TestCreatePipelinerun:
             manifest,
         )
 
-    def test_returns_none_on_http_error(self, kube: KubeClient):
+    def test_raises_trigger_error_on_http_error(self, kube: KubeClient):
         kube._mock_api.create.side_effect = requests.HTTPError("403 Forbidden")
 
-        result = kube.create_pipelinerun({"kind": "PipelineRun"})
-        assert result is None
+        with pytest.raises(TriggerError):
+            kube.create_pipelinerun({"kind": "PipelineRun"})
+
+    def test_http_error_surfaces_api_message(self, kube: KubeClient):
+        response = MagicMock()
+        response.json.return_value = {"kind": "Status", "message": "non-existent variable in value"}
+        kube._mock_api.create.side_effect = requests.HTTPError("400 Bad Request", response=response)
+
+        with pytest.raises(TriggerError, match="non-existent variable in value"):
+            kube.create_pipelinerun({"kind": "PipelineRun"})
 
     def test_returns_none_when_name_missing(self, kube: KubeClient):
         kube._mock_api.create.return_value = {"metadata": {}}

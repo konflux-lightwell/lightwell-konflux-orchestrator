@@ -213,8 +213,8 @@ spec:
             value: task
       params:
         - name: image-digest
-          value: $(tasks.verify-and-mirror.results.IMAGE_DIGEST)
+          value: $(tasks.fromager-build-wheels.results.IMAGE_DIGEST)
         - name: image-url
-          value: $(tasks.verify-and-mirror.results.IMAGE_URL)
+          value: $(tasks.fromager-build-wheels.results.IMAGE_URL)
       runAfter:
         - fromager-build-wheels
