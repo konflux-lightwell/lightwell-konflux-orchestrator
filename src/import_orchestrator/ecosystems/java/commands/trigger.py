@@ -18,13 +18,10 @@ from __future__ import annotations
 
 import argparse
 import os
-import sys
 
-from import_orchestrator.clients import KubeClient
-from import_orchestrator.constants import CLUSTER_API, KUBEARCHIVE_API, NAMESPACE
+from import_orchestrator.commands.trigger import run_trigger
 from import_orchestrator.ecosystems.base import Ecosystem
 from import_orchestrator.ecosystems.java import config
-from import_orchestrator.engine.errors import TriggerError
 
 
 def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> None:
@@ -61,19 +58,4 @@ def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> No
 
 def run(args: argparse.Namespace) -> int:
     """Execute the trigger subcommand."""
-    try:
-        kube = KubeClient(NAMESPACE, CLUSTER_API, KUBEARCHIVE_API)
-        eco = args.ecosystem
-        manifest = eco.build_pipelinerun(args.source_image, args)
-        pr_name = kube.create_pipelinerun(manifest)
-
-        if pr_name:
-            print(f"pipelinerun.tekton.dev/{pr_name} created")
-            return 0
-
-        print("ERROR: PipelineRun may have been created but its name could not be parsed", file=sys.stderr)
-        return 1
-
-    except TriggerError as e:
-        print(f"ERROR: {e}", file=sys.stderr)
-        return 1
+    return run_trigger(args, args.source_image)
