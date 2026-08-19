@@ -62,13 +62,14 @@ def build_pipelinerun_manifest(
     service_account: str,
     prefix: str,
     verification_secret: str,
+    namespace: str = NAMESPACE,
 ) -> dict[str, Any]:
     return {
         "apiVersion": "tekton.dev/v1",
         "kind": "PipelineRun",
         "metadata": {
             "generateName": prefix,
-            "namespace": NAMESPACE,
+            "namespace": namespace,
             "annotations": {"test.appstudio.openshift.io/ignore-supersession": "true"},
             "labels": {
                 "appstudio.openshift.io/application": app,

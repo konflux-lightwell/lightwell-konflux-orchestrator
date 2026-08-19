@@ -32,6 +32,7 @@ class Ecosystem(Protocol):
     name: str
     default_db_path: str
     pipelinerun_prefix: str
+    namespace: str
 
     def build_pipelinerun(self, ref: str, args: argparse.Namespace) -> dict:
         """Build a PipelineRun manifest dict for one import item (by its ref)."""

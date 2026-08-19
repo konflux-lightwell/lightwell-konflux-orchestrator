@@ -21,6 +21,7 @@ class _Dummy:
     name = "dummy"
     default_db_path = "./dummy.db"
     pipelinerun_prefix = "dummy-"
+    namespace = "dummy-tenant"
 
     def build_pipelinerun(self, ref, args):
         return {"ref": ref}
