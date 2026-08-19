@@ -71,3 +71,18 @@ def test_java_ecosystem_satisfies_protocol():
     from import_orchestrator.ecosystems.base import Ecosystem
 
     assert isinstance(JavaEcosystem(), Ecosystem)
+
+
+def test_java_namespace():
+    assert JavaEcosystem().namespace == "lightwell-poc-tenant"
+
+
+def test_build_pipelinerun_uses_ecosystem_namespace(monkeypatch, tmp_path):
+    pipeline_file = tmp_path / "tekton" / "pipelines" / "pnc-import" / "pnc-import.yaml"
+    pipeline_file.parent.mkdir(parents=True)
+    pipeline_file.write_text("spec:\n  tasks: []\n")
+    monkeypatch.setenv("TEKTON_PIPELINE_DIR", str(tmp_path / "tekton"))
+
+    manifest = JavaEcosystem().build_pipelinerun("quay.io/repo:lw-ABC@sha256:deadbeef", _args("STAGE"))
+
+    assert manifest["metadata"]["namespace"] == "lightwell-poc-tenant"

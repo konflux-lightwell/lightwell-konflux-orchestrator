@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 
+from import_orchestrator.constants import NAMESPACE
 from import_orchestrator.ecosystems.java import config
 from import_orchestrator.ecosystems.java.pipelinerun import (
     build_pipelinerun_manifest,
@@ -33,6 +34,7 @@ class JavaEcosystem:
     name = "java"
     default_db_path = config.JAVA_DEFAULT_DB_PATH
     pipelinerun_prefix = config.PIPELINERUN_PREFIX
+    namespace = NAMESPACE
 
     def build_pipelinerun(self, ref: str, args: argparse.Namespace) -> dict:
         artifact_type = getattr(args, "artifact_type", "STAGE")
@@ -51,6 +53,7 @@ class JavaEcosystem:
             service_account=cfg["service_account"],
             prefix=self.pipelinerun_prefix,
             verification_secret=config.VERIFICATION_PUBLIC_KEY_SECRET,
+            namespace=self.namespace,
         )
 
     def register_cli(self, subparsers: argparse._SubParsersAction) -> None:
