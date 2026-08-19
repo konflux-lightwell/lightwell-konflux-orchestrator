@@ -58,7 +58,7 @@ def run(args: argparse.Namespace) -> int:
 
     artifact_config = config.ARTIFACT_CONFIGS[args.artifact_type]
 
-    client = QuayClient(token=token, repo=artifact_config["source_repo"])
+    client = QuayClient(token=token, ref=artifact_config["source_repo"])
 
     with ImportDatabase(args.db) as db:
         ingest = Ingest(db)
