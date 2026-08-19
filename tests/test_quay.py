@@ -75,6 +75,15 @@ class TestFetchOciReferences:
         mock_get.assert_called_once()
 
     @patch("import_orchestrator.clients.quay.requests.get")
+    def test_request_url_is_https(self, mock_get, client):
+        mock_get.return_value = _make_response([_make_tag("lw-x", "sha256:abc")])
+
+        client.fetch_oci_references()
+
+        requested_url = mock_get.call_args[0][0]
+        assert requested_url.startswith("https://quay.io/api/v1/repository/light-castle/rebuild-pnc/tag/")
+
+    @patch("import_orchestrator.clients.quay.requests.get")
     def test_pagination(self, mock_get, client):
         page1_tags = [_make_tag(f"lw-build-{i}", f"sha256:{i:03d}") for i in range(100)]
         page2_tags = [_make_tag("lw-build-100", "sha256:100")]
