@@ -20,8 +20,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from import_orchestrator.database import ImportDatabase
+from import_orchestrator.ecosystems.java.pipelinerun import TriggerError
 from import_orchestrator.engine import ImportTrigger
-from import_orchestrator.engine.pipelinerun import PipelineRunBuilder, TriggerError
 from import_orchestrator.models import ImportItem, ImportStatus
 
 
@@ -34,17 +34,23 @@ def db(tmp_path: Path):
 
 
 @pytest.fixture
-def mock_builder():
-    """Create a mock PipelineRunBuilder."""
-    return MagicMock(spec=PipelineRunBuilder)
+def mock_kube():
+    return MagicMock()
 
 
 @pytest.fixture
-def trigger(db: ImportDatabase, mock_builder: MagicMock):
+def mock_build():
+    return MagicMock(return_value={"kind": "PipelineRun"})
+
+
+@pytest.fixture
+def trigger(db: ImportDatabase, mock_kube: MagicMock, mock_build: MagicMock):
     """Create an ImportTrigger instance with a test database."""
+    mock_kube.create_pipelinerun.return_value = "pnc-import-xxx"
     return ImportTrigger(
         db=db,
-        builder=mock_builder,
+        kube=mock_kube,
+        build_pipelinerun=mock_build,
         max_parallel=5,
         max_retries=3,
     )
@@ -53,36 +59,35 @@ def trigger(db: ImportDatabase, mock_builder: MagicMock):
 class TestTriggerImport:
     """Test the trigger_import method."""
 
-    def test_returns_pipelinerun_name(self, trigger: ImportTrigger, mock_builder: MagicMock):
-        """Verify that PipelineRun name is returned from PipelineRunBuilder."""
+    def test_returns_pipelinerun_name(self, trigger: ImportTrigger, mock_kube: MagicMock, mock_build: MagicMock):
         item = ImportItem(id=1, ref="quay.io/repo:tag@sha256:abc", status=ImportStatus.PENDING)
-        mock_builder.trigger.return_value = "pnc-import-12345"
+        mock_kube.create_pipelinerun.return_value = "pnc-import-12345"
 
-        name = trigger.trigger_import(item, tag="tag")
+        name = trigger.trigger_import(item)
+
         assert name == "pnc-import-12345"
-        mock_builder.trigger.assert_called_once_with(source_image="quay.io/repo:tag@sha256:abc", tag="tag")
+        mock_build.assert_called_once_with("quay.io/repo:tag@sha256:abc")
+        mock_kube.create_pipelinerun.assert_called_once_with({"kind": "PipelineRun"})
 
-    def test_returns_none_when_builder_returns_none(self, trigger: ImportTrigger, mock_builder: MagicMock):
-        """Verify that None is returned when PipelineRunBuilder returns None."""
+    def test_raises_when_kube_returns_none(self, trigger: ImportTrigger, mock_kube: MagicMock):
         item = ImportItem(id=1, ref="quay.io/repo:tag@sha256:abc", status=ImportStatus.PENDING)
-        mock_builder.trigger.return_value = None
+        mock_kube.create_pipelinerun.return_value = None
 
-        name = trigger.trigger_import(item, tag="tag")
-        assert name is None
+        with pytest.raises(TriggerError, match="PipelineRun creation failed"):
+            trigger.trigger_import(item)
 
-    def test_raises_on_trigger_error(self, trigger: ImportTrigger, mock_builder: MagicMock):
-        """Verify that TriggerError is raised when PipelineRunBuilder fails."""
+    def test_raises_on_build_error(self, trigger: ImportTrigger, mock_build: MagicMock):
         item = ImportItem(id=1, ref="quay.io/repo:tag@sha256:abc", status=ImportStatus.PENDING)
-        mock_builder.trigger.side_effect = TriggerError("build error")
+        mock_build.side_effect = TriggerError("build error")
 
         with pytest.raises(TriggerError):
-            trigger.trigger_import(item, tag="tag")
+            trigger.trigger_import(item)
 
 
 class TestTriggerNextBatch:
     """Test the trigger_next_batch method."""
 
-    def test_triggers_up_to_available_slots(self, trigger: ImportTrigger, mock_builder: MagicMock):
+    def test_triggers_up_to_available_slots(self, trigger: ImportTrigger):
         """Verify that imports are triggered up to the available capacity."""
         # Add 3 already in-flight imports (simulating running/triggered)
         for i in range(3):
@@ -93,8 +98,6 @@ class TestTriggerNextBatch:
         # Add 5 pending imports
         for i in range(5):
             trigger.db.add_item(f"quay.io/repo:tag{i}@sha256:aaa{i}")
-
-        mock_builder.trigger.return_value = "pnc-import-xxx"
 
         # 5 max - 3 in-flight = 2 slots available
         triggered = trigger.trigger_next_batch()
@@ -123,11 +126,10 @@ class TestTriggerNextBatch:
         pending = trigger.db.get_by_status(ImportStatus.PENDING)
         assert len(pending) == 1
 
-    def test_handles_trigger_failure(self, trigger: ImportTrigger, mock_builder: MagicMock):
+    def test_handles_trigger_failure(self, trigger: ImportTrigger, mock_kube: MagicMock):
         """Verify that trigger failures are recorded in the database."""
         trigger.db.add_item("quay.io/repo:tag@sha256:abc")
-
-        mock_builder.trigger.side_effect = TriggerError("connection refused")
+        mock_kube.create_pipelinerun.side_effect = TriggerError("connection refused")
 
         triggered = trigger.trigger_next_batch()
         assert triggered == 0
@@ -137,7 +139,7 @@ class TestTriggerNextBatch:
         assert len(failed) == 1
         assert "connection refused" in failed[0].error_message
 
-    def test_triggers_retry_candidates(self, trigger: ImportTrigger, mock_builder: MagicMock):
+    def test_triggers_retry_candidates(self, trigger: ImportTrigger):
         """Verify that failed imports are retried within the retry limit."""
         # Add a failed import that can be retried
         ref, _ = trigger.db.add_item("quay.io/repo:tag@sha256:abc")
@@ -149,8 +151,6 @@ class TestTriggerNextBatch:
             retry_count=1,
         )
 
-        mock_builder.trigger.return_value = "pnc-import-retry"
-
         triggered = trigger.trigger_next_batch()
         assert triggered == 1
 
@@ -159,9 +159,8 @@ class TestTriggerNextBatch:
         assert len(triggered_refs) == 1
         assert triggered_refs[0].retry_count == 2
 
-    def test_clears_cached_fields_on_retry(self, trigger: ImportTrigger, mock_builder: MagicMock):
+    def test_clears_cached_fields_on_retry(self, trigger: ImportTrigger):
         """Verify that snapshot and release names are cleared when retrying a failed import."""
-        # Add a failed import with cached fields from a previous attempt
         ref, _ = trigger.db.add_item("quay.io/repo:tag@sha256:abc")
         assert ref.id is not None
         trigger.db.update_status(
@@ -172,22 +171,18 @@ class TestTriggerNextBatch:
             retry_count=1,
         )
 
-        mock_builder.trigger.return_value = "pnc-import-retry"
-
         trigger.trigger_next_batch()
 
         # Cached fields should be cleared (database stores None for empty strings)
         triggered_refs = trigger.db.get_by_status(ImportStatus.TRIGGERED)
         assert len(triggered_refs) == 1
-        # The database update with "" clears to None
         assert triggered_refs[0].snapshot_name is None or triggered_refs[0].snapshot_name == ""
         assert triggered_refs[0].release_name is None or triggered_refs[0].release_name == ""
 
-    def test_marks_failure_with_incremented_retry_count(self, trigger: ImportTrigger, mock_builder: MagicMock):
+    def test_marks_failure_with_incremented_retry_count(self, trigger: ImportTrigger, mock_kube: MagicMock):
         """Verify that TriggerError failures increment retry count."""
         trigger.db.add_item("quay.io/repo:tag@sha256:abc")
-
-        mock_builder.trigger.side_effect = TriggerError("validation error")
+        mock_kube.create_pipelinerun.side_effect = TriggerError("validation error")
 
         triggered = trigger.trigger_next_batch()
         assert triggered == 0

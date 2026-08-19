@@ -21,8 +21,8 @@ import pytest
 
 from import_orchestrator.clients import KubeClient
 from import_orchestrator.database import ImportDatabase
+from import_orchestrator.ecosystems.java.pipelinerun import TriggerError
 from import_orchestrator.engine import ImportOrchestrator, ImportTrigger, PipelineMonitor, ReleaseMonitor
-from import_orchestrator.engine.pipelinerun import TriggerError
 from import_orchestrator.models import ImportStatus, PipelineRunStatus
 
 
@@ -41,16 +41,12 @@ def mock_kube():
 
 
 @pytest.fixture
-def mock_builder():
-    """Create a mock PipelineRunBuilder."""
-    return MagicMock()
-
-
-@pytest.fixture
-def orchestrator(db: ImportDatabase, mock_kube: MagicMock, mock_builder: MagicMock):
+def orchestrator(db: ImportDatabase, mock_kube: MagicMock):
+    mock_kube.create_pipelinerun.return_value = "pnc-import-xxx"
     trigger = ImportTrigger(
         db=db,
-        builder=mock_builder,
+        kube=mock_kube,
+        build_pipelinerun=MagicMock(return_value={"kind": "PipelineRun"}),
         max_parallel=5,
         max_retries=3,
     )
@@ -131,9 +127,7 @@ class TestUpdatePipelineRunStatuses:
 
 
 class TestTriggerNextBatch:
-    def test_triggers_up_to_available_slots(
-        self, orchestrator: ImportOrchestrator, mock_kube: MagicMock, mock_builder: MagicMock
-    ):
+    def test_triggers_up_to_available_slots(self, orchestrator: ImportOrchestrator, mock_kube: MagicMock):
         # Add 3 already in-flight imports (simulating running/triggered)
         for i in range(3):
             ref, _ = orchestrator.db.add_item(f"quay.io/repo:inflight{i}@sha256:bbb{i}")
@@ -143,8 +137,6 @@ class TestTriggerNextBatch:
         # Add 5 pending imports
         for i in range(5):
             orchestrator.db.add_item(f"quay.io/repo:tag{i}@sha256:aaa{i}")
-
-        mock_builder.trigger.return_value = "pnc-import-xxx"
 
         # 5 max - 3 in-flight = 2 slots available
         triggered = orchestrator.trigger_next_batch()
@@ -164,12 +156,10 @@ class TestTriggerNextBatch:
         triggered = orchestrator.trigger_next_batch()
         assert triggered == 0
 
-    def test_handles_trigger_failure(
-        self, orchestrator: ImportOrchestrator, mock_kube: MagicMock, mock_builder: MagicMock
-    ):
+    def test_handles_trigger_failure(self, orchestrator: ImportOrchestrator, mock_kube: MagicMock):
         orchestrator.db.add_item("quay.io/repo:tag@sha256:abc")
 
-        mock_builder.trigger.side_effect = TriggerError("connection refused")
+        mock_kube.create_pipelinerun.side_effect = TriggerError("connection refused")
 
         triggered = orchestrator.trigger_next_batch()
         assert triggered == 0
@@ -211,14 +201,11 @@ class TestIsComplete:
 
 
 class TestRunUntilComplete:
-    def test_completes_with_success(
-        self, orchestrator: ImportOrchestrator, mock_kube: MagicMock, mock_builder: MagicMock
-    ):
+    def test_completes_with_success(self, orchestrator: ImportOrchestrator, mock_kube: MagicMock):
         ref, _ = orchestrator.db.add_item("quay.io/repo:tag@sha256:abc")
         assert ref.id is not None
 
-        # Mock builder to return PipelineRun name
-        mock_builder.trigger.return_value = "pnc-import-abc"
+        mock_kube.create_pipelinerun.return_value = "pnc-import-abc"
 
         # After trigger, the status check will show success
         call_count = 0

@@ -14,10 +14,10 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
+from import_orchestrator.ecosystems.java.pipelinerun import TriggerError
 from import_orchestrator.engine.ingest import Ingest, IngestResult
 from import_orchestrator.engine.orchestrator import ImportOrchestrator
 from import_orchestrator.engine.pipeline import PipelineMonitor
-from import_orchestrator.engine.pipelinerun import PipelineRunBuilder, TriggerError
 from import_orchestrator.engine.release import ReleaseMonitor
 from import_orchestrator.engine.trigger import ImportTrigger
 
@@ -27,7 +27,6 @@ __all__ = [
     "Ingest",
     "IngestResult",
     "PipelineMonitor",
-    "PipelineRunBuilder",
     "ReleaseMonitor",
     "TriggerError",
 ]

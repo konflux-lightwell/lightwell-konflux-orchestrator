@@ -29,11 +29,10 @@ from import_orchestrator.constants import (
     DEFAULT_POLL_INTERVAL,
     KUBEARCHIVE_API,
     NAMESPACE,
-    PIPELINERUN_PREFIX,
 )
 from import_orchestrator.database import ImportDatabase
+from import_orchestrator.ecosystems.java.ecosystem import JavaEcosystem
 from import_orchestrator.engine import ImportOrchestrator, ImportTrigger, PipelineMonitor, ReleaseMonitor
-from import_orchestrator.engine.pipelinerun import PipelineRunBuilder
 
 
 def register(subparsers: argparse._SubParsersAction) -> None:
@@ -91,17 +90,20 @@ def run(args: argparse.Namespace) -> int:
             )
 
         kube = KubeClient(NAMESPACE, CLUSTER_API, KUBEARCHIVE_API)
-        builder = PipelineRunBuilder(kube=kube, artifact_type=args.artifact_type)
+        eco = JavaEcosystem()
 
         # Construct the specialized components
         trigger = ImportTrigger(
             db=db,
-            builder=builder,
+            kube=kube,
+            build_pipelinerun=lambda ref: eco.build_pipelinerun(ref, args),
             max_parallel=args.max_parallel,
             max_retries=args.max_retries,
         )
         pipeline_monitor = PipelineMonitor(db=db, kube=kube)
-        release_monitor = ReleaseMonitor(db=db, kube=kube, max_parallel=args.max_parallel, prefix=PIPELINERUN_PREFIX)
+        release_monitor = ReleaseMonitor(
+            db=db, kube=kube, max_parallel=args.max_parallel, prefix=eco.pipelinerun_prefix
+        )
 
         # Construct the coordinator
         orchestrator = ImportOrchestrator(

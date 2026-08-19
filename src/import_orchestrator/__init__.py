@@ -22,7 +22,6 @@ from import_orchestrator.engine import (
     Ingest,
     IngestResult,
     PipelineMonitor,
-    PipelineRunBuilder,
     ReleaseMonitor,
     TriggerError,
 )
@@ -40,7 +39,6 @@ __all__ = [
     "IngestResult",
     "KubeClient",
     "PipelineMonitor",
-    "PipelineRunBuilder",
     "PipelineRunStatus",
     "ReleaseMonitor",
     "TriggerError",
