@@ -21,6 +21,7 @@ import sys
 from pathlib import Path
 
 from import_orchestrator.database import ImportDatabase
+from import_orchestrator.ecosystems.java.parser import parse_manifest
 from import_orchestrator.engine import Ingest
 
 
@@ -51,9 +52,10 @@ def run(args: argparse.Namespace) -> int:
         print(f"ERROR: file not found: {args.file}", file=sys.stderr)
         return 2
 
+    refs = parse_manifest(args.file)
     with ImportDatabase(args.db) as db:
         ingest = Ingest(db)
-        result = ingest.from_manifest(args.file)
+        result = ingest.from_lines(refs)
 
     if result.total == 0:
         print("No OCI references found in manifest", file=sys.stderr)

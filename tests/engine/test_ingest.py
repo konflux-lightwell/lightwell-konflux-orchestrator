@@ -22,6 +22,7 @@ import pytest
 
 from import_orchestrator.clients import QuayClient
 from import_orchestrator.database import ImportDatabase
+from import_orchestrator.ecosystems.java.parser import parse_manifest
 from import_orchestrator.engine import Ingest, IngestResult
 
 
@@ -202,7 +203,7 @@ class TestFromLines:
 
 
 class TestFromManifest:
-    """Test the from_manifest method."""
+    """Integration tests for parse_manifest + Ingest.from_lines (DB round-trip)."""
 
     def test_combines_tag_and_digest(self, ingest: Ingest, tmp_path: Path):
         manifest = tmp_path / "manifest.yaml"
@@ -214,7 +215,7 @@ class TestFromManifest:
             '        digest: "quay.io/ns/repo@sha256:abcdef"\n'
         )
 
-        result = ingest.from_manifest(manifest)
+        result = ingest.from_lines(parse_manifest(manifest))
 
         assert result.total == 1
         assert result.newly_added == 1
@@ -229,7 +230,7 @@ class TestFromManifest:
             '        digest: "quay.io/ns/repo@sha256:abcdef"\n'
         )
 
-        ingest.from_manifest(manifest)
+        ingest.from_lines(parse_manifest(manifest))
 
         from import_orchestrator.models import ImportStatus
 
@@ -243,7 +244,7 @@ class TestFromManifest:
             'libraries:\n  - output:\n      artifact:\n        digest: "quay.io/ns/repo@sha256:abcdef"\n'
         )
 
-        result = ingest.from_manifest(manifest)
+        result = ingest.from_lines(parse_manifest(manifest))
 
         assert result.total == 1
         assert result.newly_added == 1
@@ -257,7 +258,7 @@ class TestFromManifest:
         manifest = tmp_path / "manifest.yaml"
         manifest.write_text('libraries:\n  - output:\n      artifact:\n        tag: "quay.io/ns/repo:build-100"\n')
 
-        result = ingest.from_manifest(manifest)
+        result = ingest.from_lines(parse_manifest(manifest))
 
         assert result.total == 1
         assert result.newly_added == 1
@@ -271,7 +272,7 @@ class TestFromManifest:
         manifest = tmp_path / "manifest.yaml"
         manifest.write_text("libraries:\n  - output:\n      artifact: {}\n  - output:\n      other_field: value\n")
 
-        result = ingest.from_manifest(manifest)
+        result = ingest.from_lines(parse_manifest(manifest))
 
         assert result.total == 0
         assert result.newly_added == 0
@@ -280,7 +281,7 @@ class TestFromManifest:
         manifest = tmp_path / "manifest.yaml"
         manifest.write_text("libraries: []\n")
 
-        result = ingest.from_manifest(manifest)
+        result = ingest.from_lines(parse_manifest(manifest))
 
         assert result.total == 0
         assert result.newly_added == 0
@@ -289,7 +290,7 @@ class TestFromManifest:
         manifest = tmp_path / "manifest.yaml"
         manifest.write_text("other_key: value\n")
 
-        result = ingest.from_manifest(manifest)
+        result = ingest.from_lines(parse_manifest(manifest))
 
         assert result.total == 0
         assert result.newly_added == 0
@@ -311,7 +312,7 @@ class TestFromManifest:
             '        digest: "quay.io/ns/repo@sha256:ccc"\n'
         )
 
-        result = ingest.from_manifest(manifest)
+        result = ingest.from_lines(parse_manifest(manifest))
 
         assert result.total == 3
         assert result.newly_added == 3
@@ -332,20 +333,11 @@ class TestFromManifest:
             '        digest: "quay.io/ns/repo@sha256:bbb"\n'
         )
 
-        result = ingest.from_manifest(manifest)
+        result = ingest.from_lines(parse_manifest(manifest))
 
         assert result.total == 2
         assert result.newly_added == 1
         assert result.duplicates == 1
-
-    def test_warns_on_no_refs_found(self, ingest: Ingest, tmp_path: Path, capsys):
-        manifest = tmp_path / "manifest.yaml"
-        manifest.write_text("libraries: []\n")
-
-        ingest.from_manifest(manifest)
-
-        captured = capsys.readouterr()
-        assert "No OCI references found in manifest" in captured.err
 
     def test_digest_without_at_sign_raises(self, ingest: Ingest, tmp_path: Path):
         manifest = tmp_path / "manifest.yaml"
@@ -358,7 +350,7 @@ class TestFromManifest:
         )
 
         with pytest.raises(ValueError, match="Malformed digest reference"):
-            ingest.from_manifest(manifest)
+            parse_manifest(manifest)
 
 
 class TestFromQuay:
