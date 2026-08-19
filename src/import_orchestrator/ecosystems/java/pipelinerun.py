@@ -17,13 +17,19 @@ limitations under the License.
 from __future__ import annotations
 
 import re
-from pathlib import Path
 from typing import Any
-
-import yaml
 
 from import_orchestrator.constants import NAMESPACE
 from import_orchestrator.engine.errors import TriggerError
+from import_orchestrator.engine.pipeline_loader import load_pipeline
+
+__all__ = [
+    "TriggerError",
+    "build_pipelinerun_manifest",
+    "digest_pin_image",
+    "extract_tag_from_image",
+    "load_pipeline",
+]
 
 
 def digest_pin_image(source_image: str) -> str:
@@ -40,17 +46,6 @@ def extract_tag_from_image(source_image: str) -> str:
     if digest_match:
         return digest_match.group(1)
     raise TriggerError(f"could not extract tag from {source_image}")
-
-
-def load_pipeline(pipeline_path: Path) -> dict[str, Any]:
-    if not pipeline_path.exists():
-        raise TriggerError(f"pipeline definition not found: {pipeline_path}")
-    try:
-        with open(pipeline_path) as f:
-            pipeline = yaml.safe_load(f)
-        return pipeline["spec"]
-    except (yaml.YAMLError, KeyError, TypeError) as e:
-        raise TriggerError(f"failed to load pipeline from {pipeline_path}: {e}") from e
 
 
 def build_pipelinerun_manifest(
