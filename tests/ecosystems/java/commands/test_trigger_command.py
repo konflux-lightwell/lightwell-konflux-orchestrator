@@ -20,7 +20,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from import_orchestrator.cli import make_parser
-from import_orchestrator.commands.trigger import register, run
+from import_orchestrator.ecosystems.java.commands.trigger import register, run
 from import_orchestrator.ecosystems.java.ecosystem import JavaEcosystem
 from import_orchestrator.engine.errors import TriggerError
 
@@ -134,7 +134,7 @@ def _args(**overrides):
 class TestTriggerRun:
     """Test the run() function that executes the trigger subcommand."""
 
-    @patch("import_orchestrator.commands.trigger.KubeClient")
+    @patch("import_orchestrator.ecosystems.java.commands.trigger.KubeClient")
     def test_successful_trigger_returns_0(self, mock_kube_cls, capsys):
         mock_kube = mock_kube_cls.return_value
         mock_kube.create_pipelinerun.return_value = "pnc-import-12345"
@@ -148,7 +148,7 @@ class TestTriggerRun:
         captured = capsys.readouterr()
         assert "pnc-import-12345" in captured.out
 
-    @patch("import_orchestrator.commands.trigger.KubeClient")
+    @patch("import_orchestrator.ecosystems.java.commands.trigger.KubeClient")
     def test_none_result_returns_1(self, mock_kube_cls, capsys):
         mock_kube = mock_kube_cls.return_value
         mock_kube.create_pipelinerun.return_value = None
@@ -162,7 +162,7 @@ class TestTriggerRun:
         captured = capsys.readouterr()
         assert "could not be parsed" in captured.err
 
-    @patch("import_orchestrator.commands.trigger.KubeClient")
+    @patch("import_orchestrator.ecosystems.java.commands.trigger.KubeClient")
     def test_trigger_error_returns_1(self, mock_kube_cls, capsys):
         eco = MagicMock()
         eco.build_pipelinerun.side_effect = TriggerError("skopeo failed")
@@ -173,7 +173,7 @@ class TestTriggerRun:
         captured = capsys.readouterr()
         assert "skopeo failed" in captured.err
 
-    @patch("import_orchestrator.commands.trigger.KubeClient")
+    @patch("import_orchestrator.ecosystems.java.commands.trigger.KubeClient")
     def test_passes_source_image_and_args_to_build(self, mock_kube_cls):
         mock_kube = mock_kube_cls.return_value
         mock_kube.create_pipelinerun.return_value = "pnc-import-xyz"
@@ -187,7 +187,7 @@ class TestTriggerRun:
         eco.build_pipelinerun.assert_called_once_with("quay.io/repo:tag@sha256:abc", args)
         mock_kube.create_pipelinerun.assert_called_once_with({"kind": "PipelineRun"})
 
-    @patch("import_orchestrator.commands.trigger.KubeClient")
+    @patch("import_orchestrator.ecosystems.java.commands.trigger.KubeClient")
     def test_output_format_on_success(self, mock_kube_cls, capsys):
         mock_kube = mock_kube_cls.return_value
         mock_kube.create_pipelinerun.return_value = "pnc-import-99999"
@@ -210,7 +210,7 @@ class TestTriggerCLIIntegration:
     """Test the trigger subcommand through the full CLI entry point."""
 
     @patch.object(JavaEcosystem, "build_pipelinerun", return_value={"kind": "PipelineRun"})
-    @patch("import_orchestrator.commands.trigger.KubeClient")
+    @patch("import_orchestrator.ecosystems.java.commands.trigger.KubeClient")
     def test_cli_trigger_success(self, mock_kube_cls, mock_build, monkeypatch, capsys):
         mock_kube = mock_kube_cls.return_value
         mock_kube.create_pipelinerun.return_value = "pnc-import-cli-test"
@@ -225,7 +225,7 @@ class TestTriggerCLIIntegration:
         assert "pnc-import-cli-test" in captured.out
 
     @patch.object(JavaEcosystem, "build_pipelinerun", return_value={"kind": "PipelineRun"})
-    @patch("import_orchestrator.commands.trigger.KubeClient")
+    @patch("import_orchestrator.ecosystems.java.commands.trigger.KubeClient")
     def test_cli_trigger_passes_source_and_args(self, mock_kube_cls, mock_build, monkeypatch):
         mock_kube = mock_kube_cls.return_value
         mock_kube.create_pipelinerun.return_value = "pnc-import-xyz"
@@ -255,7 +255,7 @@ class TestTriggerCLIIntegration:
         assert called_args.artifact_type == "REMEDIATED"
 
     @patch.object(JavaEcosystem, "build_pipelinerun", side_effect=TriggerError("connection refused"))
-    @patch("import_orchestrator.commands.trigger.KubeClient")
+    @patch("import_orchestrator.ecosystems.java.commands.trigger.KubeClient")
     def test_cli_trigger_error_exits_1(self, mock_kube_cls, mock_build, monkeypatch, capsys):
         monkeypatch.setattr("sys.argv", ["prog", "java", "trigger", "quay.io/repo:bad@sha256:xxx"])
 

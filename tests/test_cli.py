@@ -212,7 +212,7 @@ class TestMainFetch:
         exit_code = main()
         assert exit_code == 2
 
-    @patch("import_orchestrator.commands.fetch.QuayClient")
+    @patch("import_orchestrator.ecosystems.java.commands.fetch.QuayClient")
     def test_fetch_stores_refs_and_returns_0(self, mock_client_cls, monkeypatch, tmp_path: Path):
         monkeypatch.setenv("QUAY_TOKEN", "test-token")
         mock_client = mock_client_cls.return_value
@@ -226,7 +226,7 @@ class TestMainFetch:
         exit_code = main()
         assert exit_code == 0
 
-    @patch("import_orchestrator.commands.fetch.QuayClient")
+    @patch("import_orchestrator.ecosystems.java.commands.fetch.QuayClient")
     def test_fetch_passes_quay_args_to_client(self, mock_client_cls, monkeypatch, tmp_path: Path):
         monkeypatch.setenv("QUAY_TOKEN", "test-token")
         mock_client = mock_client_cls.return_value
@@ -244,7 +244,7 @@ class TestMainFetch:
             repo="quay.io/light-castle/rebuild-pnc",
         )
 
-    @patch("import_orchestrator.commands.fetch.QuayClient")
+    @patch("import_orchestrator.ecosystems.java.commands.fetch.QuayClient")
     def test_db_default_resolves_to_java(self, mock_client_cls, monkeypatch, tmp_path: Path):
         """When --db is omitted, main() resolves it to the ecosystem default path."""
         monkeypatch.chdir(tmp_path)

@@ -14,6 +14,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
-from import_orchestrator.commands import import_file
+from import_orchestrator.ecosystems.java.commands import fetch, import_manifest, orchestrate, trigger
 
-__all__ = ["import_file"]
+__all__ = ["fetch", "import_manifest", "orchestrate", "trigger"]
