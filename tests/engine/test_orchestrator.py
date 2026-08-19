@@ -55,7 +55,7 @@ def orchestrator(db: ImportDatabase, mock_kube: MagicMock, mock_builder: MagicMo
         max_retries=3,
     )
     pipeline_monitor = PipelineMonitor(db=db, kube=mock_kube)
-    release_monitor = ReleaseMonitor(db=db, kube=mock_kube, max_parallel=5)
+    release_monitor = ReleaseMonitor(db=db, kube=mock_kube, max_parallel=5, prefix="pnc-import-")
 
     return ImportOrchestrator(
         db=db,

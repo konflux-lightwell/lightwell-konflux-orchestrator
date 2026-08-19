@@ -22,6 +22,9 @@ NAMESPACE = "lightwell-poc-tenant"
 CLUSTER_API = "https://api.stone-prod-p01.wcfb.p1.openshiftapps.com:6443"
 KUBEARCHIVE_API = "https://kubearchive-api-server-product-kubearchive.apps.stone-prod-p01.wcfb.p1.openshiftapps.com"
 DEFAULT_DB_PATH = "./pnc_import_state.db"
+# Temporary: moves to the Java ecosystem in a later step of the multi-ecosystem refactor.
+PIPELINERUN_PREFIX = "pnc-import-"
+
 DEFAULT_MAX_PARALLEL = 1
 DEFAULT_POLL_INTERVAL = 30  # seconds
 DEFAULT_MAX_RETRIES = 3

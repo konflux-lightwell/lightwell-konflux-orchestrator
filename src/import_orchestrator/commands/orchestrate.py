@@ -29,6 +29,7 @@ from import_orchestrator.constants import (
     DEFAULT_POLL_INTERVAL,
     KUBEARCHIVE_API,
     NAMESPACE,
+    PIPELINERUN_PREFIX,
 )
 from import_orchestrator.database import ImportDatabase
 from import_orchestrator.engine import ImportOrchestrator, ImportTrigger, PipelineMonitor, ReleaseMonitor
@@ -100,7 +101,7 @@ def run(args: argparse.Namespace) -> int:
             max_retries=args.max_retries,
         )
         pipeline_monitor = PipelineMonitor(db=db, kube=kube)
-        release_monitor = ReleaseMonitor(db=db, kube=kube, max_parallel=args.max_parallel)
+        release_monitor = ReleaseMonitor(db=db, kube=kube, max_parallel=args.max_parallel, prefix=PIPELINERUN_PREFIX)
 
         # Construct the coordinator
         orchestrator = ImportOrchestrator(

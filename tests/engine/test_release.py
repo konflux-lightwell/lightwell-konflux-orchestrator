@@ -42,7 +42,7 @@ def mock_kube():
 @pytest.fixture
 def monitor(db: ImportDatabase, mock_kube: MagicMock):
     """Create a ReleaseMonitor instance with a test database and mock kube client."""
-    return ReleaseMonitor(db, mock_kube, max_parallel=5)
+    return ReleaseMonitor(db, mock_kube, max_parallel=5, prefix="pnc-import-")
 
 
 class TestDiscoverSnapshot:
@@ -126,7 +126,7 @@ class TestFindOrCreateRelease:
         # Release should be created and cached
         updated_ref = monitor.db.get_by_status(ImportStatus.AWAITING_RELEASE)[0]
         assert updated_ref.release_name == "release-789"
-        mock_kube.create_release.assert_called_once_with("snapshot-123", "release-plan-default")
+        mock_kube.create_release.assert_called_once_with("snapshot-123", "release-plan-default", "pnc-import-")
 
     def test_defers_when_capacity_full(self, monitor: ReleaseMonitor, mock_kube: MagicMock):
         """Verify that release creation is deferred when max_parallel is reached."""

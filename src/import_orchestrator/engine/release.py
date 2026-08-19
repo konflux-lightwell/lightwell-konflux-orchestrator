@@ -32,10 +32,11 @@ class ReleaseMonitor:
     to manage the AWAITING_RELEASE -> SUCCESS/FAILED transitions.
     """
 
-    def __init__(self, db: ImportDatabase, kube: KubeClient, max_parallel: int):
+    def __init__(self, db: ImportDatabase, kube: KubeClient, max_parallel: int, prefix: str):
         self.db = db
         self.kube = kube
         self.max_parallel = max_parallel
+        self.prefix = prefix
 
     def update_statuses(self) -> None:
         """For AWAITING_RELEASE imports, find the Release and check its status."""
@@ -137,7 +138,7 @@ class ReleaseMonitor:
             f"  No release found for {item.snapshot_name}, creating via {release_plan} ({tag})...",
             file=sys.stderr,
         )
-        release_name = self.kube.create_release(item.snapshot_name, release_plan)
+        release_name = self.kube.create_release(item.snapshot_name, release_plan, self.prefix)
 
         if not release_name:
             print(f"  Failed to create release for {item.snapshot_name} ({tag}), will retry", file=sys.stderr)
