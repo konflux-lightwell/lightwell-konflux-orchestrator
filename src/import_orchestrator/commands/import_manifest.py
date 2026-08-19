@@ -21,11 +21,12 @@ import sys
 from pathlib import Path
 
 from import_orchestrator.database import ImportDatabase
+from import_orchestrator.ecosystems.base import Ecosystem
 from import_orchestrator.ecosystems.java.parser import parse_manifest
 from import_orchestrator.engine import Ingest
 
 
-def register(subparsers: argparse._SubParsersAction) -> None:
+def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> None:
     """Register the 'import-manifest' subcommand with the given subparsers."""
     parser = subparsers.add_parser(
         "import-manifest",
@@ -43,7 +44,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         help="Path to a consolidated build manifest YAML file",
     )
 
-    parser.set_defaults(func=run)
+    parser.set_defaults(func=run, ecosystem=ecosystem)
 
 
 def run(args: argparse.Namespace) -> int:

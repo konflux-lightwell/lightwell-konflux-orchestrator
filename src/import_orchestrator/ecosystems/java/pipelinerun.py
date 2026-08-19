@@ -23,10 +23,7 @@ from typing import Any
 import yaml
 
 from import_orchestrator.constants import NAMESPACE
-
-
-class TriggerError(Exception):
-    """Non-recoverable error during the PipelineRun trigger process."""
+from import_orchestrator.engine.errors import TriggerError
 
 
 def digest_pin_image(source_image: str) -> str:

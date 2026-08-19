@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
-from import_orchestrator.ecosystems.java.pipelinerun import TriggerError
+from import_orchestrator.engine.errors import TriggerError
 from import_orchestrator.engine.ingest import Ingest, IngestResult
 from import_orchestrator.engine.orchestrator import ImportOrchestrator
 from import_orchestrator.engine.pipeline import PipelineMonitor

@@ -21,10 +21,11 @@ import sys
 from pathlib import Path
 
 from import_orchestrator.database import ImportDatabase
+from import_orchestrator.ecosystems.base import Ecosystem
 from import_orchestrator.engine import Ingest
 
 
-def register(subparsers: argparse._SubParsersAction) -> None:
+def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> None:
     """Register the 'import-file' subcommand with the given subparsers."""
     parser = subparsers.add_parser(
         "import-file",
@@ -38,7 +39,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         help="Path to a text file containing OCI references (one per line)",
     )
 
-    parser.set_defaults(func=run)
+    parser.set_defaults(func=run, ecosystem=ecosystem)
 
 
 def run(args: argparse.Namespace) -> int:

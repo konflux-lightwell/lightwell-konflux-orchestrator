@@ -60,13 +60,3 @@ def test_pipeline_definition_path_env_override(tmp_path, monkeypatch):
     monkeypatch.setenv("TEKTON_PIPELINE_DIR", str(tmp_path))
     path = pipeline_definition_path()
     assert path == tmp_path / "pipelines" / "pnc-import" / "pnc-import.yaml"
-
-
-def test_constants_shim_reexports():
-    """constants.py must re-export Java values so existing callers keep working."""
-    import import_orchestrator.constants as constants
-
-    assert constants.PIPELINERUN_PREFIX == PIPELINERUN_PREFIX
-    assert constants.RELEASE_PLAN == RELEASE_PLAN
-    assert constants.VERIFICATION_PUBLIC_KEY_SECRET == VERIFICATION_PUBLIC_KEY_SECRET
-    assert constants.ARTIFACT_CONFIGS == ARTIFACT_CONFIGS

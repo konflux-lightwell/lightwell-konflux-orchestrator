@@ -14,6 +14,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
-from import_orchestrator.commands import fetch, import_file, orchestrate, trigger
+from import_orchestrator.commands import fetch, import_file, import_manifest, orchestrate, trigger
 
-__all__ = ["fetch", "import_file", "orchestrate", "trigger"]
+__all__ = ["fetch", "import_file", "import_manifest", "orchestrate", "trigger"]

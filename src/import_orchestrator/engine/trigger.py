@@ -22,9 +22,7 @@ from datetime import datetime
 
 from import_orchestrator.clients.kube import KubeClient
 from import_orchestrator.database import ImportDatabase
-
-# TriggerError lives in java.pipelinerun transitionally; moved to engine.errors in Task 8.
-from import_orchestrator.ecosystems.java.pipelinerun import TriggerError
+from import_orchestrator.engine.errors import TriggerError
 from import_orchestrator.models import ImportItem, ImportStatus
 from import_orchestrator.utils import extract_tag
 

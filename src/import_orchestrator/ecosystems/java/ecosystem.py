@@ -54,4 +54,13 @@ class JavaEcosystem:
         )
 
     def register_cli(self, subparsers: argparse._SubParsersAction) -> None:
-        raise NotImplementedError  # finalized in Task 8
+        from import_orchestrator.commands import fetch, import_file, import_manifest, orchestrate, trigger
+
+        eco_parser = subparsers.add_parser("java", help="Java (PNC) OCI image imports")
+        eco_sub = eco_parser.add_subparsers(dest="command")
+        fetch.register(eco_sub, self)
+        import_file.register(eco_sub, self)
+        import_manifest.register(eco_sub, self)
+        orchestrate.register(eco_sub, self)
+        trigger.register(eco_sub, self)
+        eco_parser.set_defaults(_ecosystem_parser=eco_parser)
