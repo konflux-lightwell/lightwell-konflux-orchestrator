@@ -1,10 +1,20 @@
 # import-orchestrator
 
-CLI tool for orchestrating batch PNC import PipelineRuns with intelligent state tracking, dynamic throttling, and automatic retry logic.
+CLI tool for orchestrating batch import PipelineRuns across ecosystems with intelligent state tracking, dynamic throttling, and automatic retry logic.
 
 ## Overview
 
-This tool provides batch orchestration for importing PNC (Project Newcastle) builds into Konflux. It manages multiple concurrent imports with SQLite-based state persistence, monitors actual PipelineRun counts for intelligent throttling, and automatically retries transient failures.
+This tool provides batch orchestration for importing builds into Konflux. Commands are grouped per ecosystem; the `java` ecosystem imports PNC (Project Newcastle) builds. It manages multiple concurrent imports with SQLite-based state persistence, monitors actual PipelineRun counts for intelligent throttling, and automatically retries transient failures.
+
+## Ecosystems
+
+Commands are namespaced by ecosystem: `import-orchestrator <ecosystem> <command>`.
+
+Only the `java` ecosystem is available today (PNC OCI image imports). Each ecosystem uses its own default database (`--db` overrides it):
+
+| Ecosystem | Default database | Description |
+|-----------|------------------|-------------|
+| `java` | `./java_import_state.db` | PNC OCI image imports |
 
 **Key Features:**
 - **State persistence**: SQLite database tracks each OCI reference status (pending, triggered, running, success, failed)
@@ -41,49 +51,52 @@ pip install -e ".[dev]"
 ```bash
 # Show help
 import-orchestrator --help
-import-orchestrator fetch --help
-import-orchestrator import-file --help
-import-orchestrator orchestrate --help
-import-orchestrator import-manifest --help
-import-orchestrator trigger --help
+import-orchestrator java --help
+import-orchestrator java fetch --help
+import-orchestrator java import-file --help
+import-orchestrator java orchestrate --help
+import-orchestrator java import-manifest --help
+import-orchestrator java trigger --help
 
 # Typical workflow: fetch then orchestrate
-QUAY_TOKEN=<token> import-orchestrator fetch
-import-orchestrator orchestrate --max-parallel 10
+QUAY_TOKEN=<token> import-orchestrator java fetch
+import-orchestrator java orchestrate --max-parallel 10
 
 # Alternative: import from file then orchestrate
-import-orchestrator import-file refs.txt
-import-orchestrator orchestrate --max-parallel 10
+import-orchestrator java import-file refs.txt
+import-orchestrator java orchestrate --max-parallel 10
 
 # Alternative: import from a consolidated build manifest
-import-orchestrator import-manifest consolidated.yaml
-import-orchestrator orchestrate --max-parallel 10
+import-orchestrator java import-manifest consolidated.yaml
+import-orchestrator java orchestrate --max-parallel 10
 
 # Trigger a single PNC import PipelineRun
-import-orchestrator trigger 'quay.io/light-castle/rebuild-pnc:tag@sha256:abc123...'
+import-orchestrator java trigger 'quay.io/light-castle/rebuild-pnc:tag@sha256:abc123...'
 
 # Fetch only (populate database for inspection)
-QUAY_TOKEN=<token> import-orchestrator fetch
+QUAY_TOKEN=<token> import-orchestrator java fetch
 
 # Resume interrupted orchestration from existing database
-import-orchestrator orchestrate
+import-orchestrator java orchestrate
 
 # Fetch REMEDIATED builds instead of STAGE (default)
-QUAY_TOKEN=<token> import-orchestrator fetch --artifact-type REMEDIATED
-import-orchestrator orchestrate --max-parallel 5
+QUAY_TOKEN=<token> import-orchestrator java fetch --artifact-type REMEDIATED
+import-orchestrator java orchestrate --max-parallel 5
 
 # Reset database and start fresh
-QUAY_TOKEN=<token> import-orchestrator --reset fetch
-import-orchestrator orchestrate
+QUAY_TOKEN=<token> import-orchestrator --reset java fetch
+import-orchestrator java orchestrate
 ```
 
 ### Command-Line Options
 
 #### Global Options
 
+Global options are placed before the ecosystem: `import-orchestrator [--db PATH] [--reset] <ecosystem> <command>`.
+
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--db` | `./pnc_import_state.db` | SQLite database path |
+| `--db` | per-ecosystem (e.g. `./java_import_state.db`) | SQLite database path |
 | `--reset` | `false` | Reset database (delete existing data before running) |
 
 #### `fetch` Subcommand
@@ -91,7 +104,7 @@ import-orchestrator orchestrate
 Fetches OCI references from Quay and stores them in the database.
 
 ```bash
-import-orchestrator fetch [--artifact-type {STAGE,REBUILD,REMEDIATED}]
+import-orchestrator java fetch [--artifact-type {STAGE,REBUILD,REMEDIATED}]
 ```
 
 | Option | Default | Description |
@@ -103,7 +116,7 @@ import-orchestrator fetch [--artifact-type {STAGE,REBUILD,REMEDIATED}]
 Imports OCI references from a text file into the database.
 
 ```bash
-import-orchestrator import-file <file>
+import-orchestrator java import-file <file>
 ```
 
 Reads OCI references from a text file (one per line) and adds them to the database as pending imports. Lines starting with `#` and blank lines are ignored.
@@ -123,7 +136,7 @@ quay.io/namespace/repo:tag3@sha256:789abc...
 Imports OCI references from a consolidated build manifest (YAML) into the database.
 
 ```bash
-import-orchestrator import-manifest <file>
+import-orchestrator java import-manifest <file>
 ```
 
 Each library entry's `output.artifact.tag` and `output.artifact.digest` are combined into a `tag@digest` reference when both are present, falling back to digest-only or tag-only. Entries missing both fields are skipped. A malformed digest (missing `@` separator) is treated as an error and aborts processing.
@@ -145,7 +158,7 @@ libraries:
 Orchestrates the import process by triggering PipelineRuns and monitoring their status.
 
 ```bash
-import-orchestrator orchestrate [OPTIONS]
+import-orchestrator java orchestrate [OPTIONS]
 ```
 
 | Option | Default | Description |
@@ -160,7 +173,7 @@ import-orchestrator orchestrate [OPTIONS]
 Triggers a single PNC import PipelineRun for manual or ad-hoc imports.
 
 ```bash
-import-orchestrator trigger <source_image> [tag] [OPTIONS]
+import-orchestrator java trigger <source_image> [tag] [OPTIONS]
 ```
 
 | Argument/Option | Description |
@@ -224,7 +237,7 @@ import-orchestrator trigger <source_image> [tag] [OPTIONS]
 2. **Orchestration loop:**
    - Checks status of triggered/running imports via `KubeClient`
    - Updates database with current PipelineRun statuses
-   - Triggers new imports up to `--max-parallel` limit using `PipelineRunBuilder`
+   - Triggers new imports up to `--max-parallel` limit using the ecosystem's PipelineRun builder
    - Sleeps for `--poll-interval` seconds
    - Repeats until all imports are complete (success or retry-exhausted)
 
@@ -249,19 +262,19 @@ The SQLite database can be queried directly for monitoring:
 
 ```bash
 # View current state summary
-sqlite3 pnc_import_state.db \
+sqlite3 java_import_state.db \
   "SELECT status, COUNT(*) FROM oci_references GROUP BY status"
 
 # List all failed imports with errors
-sqlite3 pnc_import_state.db \
+sqlite3 java_import_state.db \
   "SELECT oci_ref, error_message, retry_count FROM oci_references WHERE status='failed'"
 
 # Show recent activity
-sqlite3 pnc_import_state.db \
+sqlite3 java_import_state.db \
   "SELECT oci_ref, status, triggered_at, completed_at FROM oci_references ORDER BY id DESC LIMIT 10"
 
 # Reset specific import to retry manually
-sqlite3 pnc_import_state.db \
+sqlite3 java_import_state.db \
   "UPDATE oci_references SET status='pending', retry_count=0 WHERE oci_ref='quay.io/...'"
 ```
 
@@ -287,7 +300,8 @@ import-orchestrator/
 ├── src/import_orchestrator/
 │   ├── clients/           # Quay and Kubernetes API clients
 │   ├── commands/          # CLI subcommand implementations
-│   ├── engine/            # Core logic
+│   ├── ecosystems/        # Per-ecosystem config, parser, and PipelineRun builder (e.g. java/)
+│   ├── engine/            # Core ecosystem-neutral logic
 │   ├── database.py        # SQLite state persistence
 │   ├── models.py          # Data models
 │   └── constants.py       # Configuration constants
