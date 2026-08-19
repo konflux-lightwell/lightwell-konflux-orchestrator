@@ -22,40 +22,16 @@ NAMESPACE = "lightwell-poc-tenant"
 CLUSTER_API = "https://api.stone-prod-p01.wcfb.p1.openshiftapps.com:6443"
 KUBEARCHIVE_API = "https://kubearchive-api-server-product-kubearchive.apps.stone-prod-p01.wcfb.p1.openshiftapps.com"
 DEFAULT_DB_PATH = "./pnc_import_state.db"
-# Temporary: moves to the Java ecosystem in a later step of the multi-ecosystem refactor.
-PIPELINERUN_PREFIX = "pnc-import-"
 
 DEFAULT_MAX_PARALLEL = 1
 DEFAULT_POLL_INTERVAL = 30  # seconds
 DEFAULT_MAX_RETRIES = 3
-RELEASE_PLAN = "pnc-import-java-pulp-validated-prod"
 
-# ---------------------------------------------------------------------------
-# Tekton pipeline configuration
-# ---------------------------------------------------------------------------
-
-# Name of the K8s Secret containing the cosign public key (cosign.pub) used
-# to verify PNC artifacts. Must exist in NAMESPACE before imports can run.
-VERIFICATION_PUBLIC_KEY_SECRET = "verification-public-key"
-
-# Artifact-type-specific configuration.
-ARTIFACT_CONFIGS: dict[str, dict[str, str]] = {
-    "REBUILD": {
-        "app": "pnc-import",
-        "service_account": "build-pipeline-pnc-import",
-        "source_repo": "quay.io/light-castle/rebuild-pnc",
-        "dest_repo": "quay.io/redhat-user-workloads/lightwell-poc-tenant/pnc-import/pnc-import",
-    },
-    "REMEDIATED": {
-        "app": "pnc-import-remediated",
-        "service_account": "build-pipeline-pnc-import-remediated",
-        "source_repo": "quay.io/light-castle/secure-pnc",
-        "dest_repo": "quay.io/redhat-user-workloads/lightwell-poc-tenant/pnc-import-remediated/pnc-import-remediated",
-    },
-    "STAGE": {
-        "app": "pnc-import-stage",
-        "service_account": "build-pipeline-pnc-import-stage",
-        "source_repo": "quay.io/light-castle/rebuild-pnc",
-        "dest_repo": "quay.io/redhat-user-workloads/lightwell-poc-tenant/pnc-import-stage/pnc-import-stage",
-    },
-}
+# Temporary shims: these Java-specific values now live in the Java ecosystem.
+# Removed in the final step of the multi-ecosystem refactor (Task 8).
+from import_orchestrator.ecosystems.java.config import (  # noqa: E402,F401
+    ARTIFACT_CONFIGS,
+    PIPELINERUN_PREFIX,
+    RELEASE_PLAN,
+    VERIFICATION_PUBLIC_KEY_SECRET,
+)
