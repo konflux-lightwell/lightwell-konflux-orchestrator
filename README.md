@@ -10,11 +10,14 @@ This tool orchestrates the release of Lightwell artifacts through Konflux. Comma
 
 Commands are namespaced by ecosystem: `import-orchestrator <ecosystem> <command>`.
 
-Only the `java` ecosystem is available today (PNC OCI image imports). Each ecosystem uses its own default database (`--db` overrides it):
+Two ecosystems are available today. Each uses its own default database (`--db` overrides it):
 
-| Ecosystem | Default database | Description |
-|-----------|------------------|-------------|
-| `java` | `./java_import_state.db` | PNC OCI image imports |
+| Ecosystem | Default database | Description | Commands |
+|-----------|------------------|-------------|----------|
+| `java` | `./java_import_state.db` | PNC OCI image imports | `fetch`, `import-file`, `import-manifest`, `orchestrate`, `trigger` |
+| `python` | `./python_import_state.db` | CVE-remediated Python wheel builds | `import-file`, `orchestrate`, `trigger` |
+
+The `python` ecosystem identifies each build by a `package==version` reference (e.g. `ntplib==0.4.0`) instead of an OCI image, and runs the `python-remediated-build` pipeline. It has no `fetch` or `import-manifest` commands; populate its database with `import-file` (one `package==version` per line).
 
 **Key Features:**
 - **State persistence**: SQLite database tracks each OCI reference status (pending, triggered, running, success, failed)
@@ -86,6 +89,33 @@ import-orchestrator java orchestrate --max-parallel 5
 # Reset database and start fresh
 QUAY_TOKEN=<token> import-orchestrator --reset java fetch
 import-orchestrator java orchestrate
+```
+
+### Python Ecosystem
+
+The `python` ecosystem builds CVE-remediated wheels from `lightwell-builds` sources. Each item is a `package==version` reference:
+
+```bash
+# Show help
+import-orchestrator python --help
+import-orchestrator python import-file --help
+import-orchestrator python orchestrate --help
+import-orchestrator python trigger --help
+
+# Import package references from a file, then orchestrate
+import-orchestrator python import-file packages.txt
+import-orchestrator python orchestrate --max-parallel 5
+
+# Trigger a single build
+import-orchestrator python trigger 'ntplib==0.4.0'
+```
+
+The `import-file` input lists one `package==version` per line; blank lines and lines starting with `#` are ignored:
+
+```
+# CVE-remediated Python packages
+ntplib==0.4.0
+requests==2.31.0
 ```
 
 ### Command-Line Options
