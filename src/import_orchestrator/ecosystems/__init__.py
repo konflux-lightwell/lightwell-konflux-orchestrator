@@ -17,6 +17,6 @@ limitations under the License.
 from __future__ import annotations
 
 from import_orchestrator.ecosystems.base import Ecosystem
+from import_orchestrator.ecosystems.java.ecosystem import JavaEcosystem
 
-# Registry of available ecosystems. JavaEcosystem is appended in java/ (Task 6).
-ECOSYSTEMS: list[Ecosystem] = []
+ECOSYSTEMS: list[Ecosystem] = [JavaEcosystem()]

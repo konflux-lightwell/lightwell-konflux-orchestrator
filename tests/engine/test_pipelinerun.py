@@ -299,66 +299,48 @@ class TestBuildPipelinerunManifest:
     def pipeline_spec(self) -> dict:
         return {"tasks": [], "params": []}
 
-    def test_apiversion_and_kind(self, pipeline_spec):
-        manifest = build_pipelinerun_manifest(
-            source_image="quay.io/src:tag@sha256:abc",
-            dest_image="quay.io/dst:tag",
+    # Helper so callers don't need to repeat the two new required args every time.
+    @staticmethod
+    def _build(pipeline_spec, app="pnc-import", service_account="build-pipeline-pnc-import", **kw):
+        return build_pipelinerun_manifest(
+            source_image=kw.pop("source_image", "quay.io/src:tag@sha256:abc"),
+            dest_image=kw.pop("dest_image", "quay.io/dst:tag"),
             pipeline_spec=pipeline_spec,
-            app="pnc-import",
-            service_account="build-pipeline-pnc-import",
+            app=app,
+            service_account=service_account,
+            prefix="pnc-import-",
+            verification_secret="verification-public-key",
+            **kw,
         )
+
+    def test_apiversion_and_kind(self, pipeline_spec):
+        manifest = self._build(pipeline_spec)
         assert manifest["apiVersion"] == "tekton.dev/v1"
         assert manifest["kind"] == "PipelineRun"
 
     def test_generate_name_prefix(self, pipeline_spec):
-        manifest = build_pipelinerun_manifest(
-            source_image="quay.io/src:tag@sha256:abc",
-            dest_image="quay.io/dst:tag",
-            pipeline_spec=pipeline_spec,
-            app="pnc-import",
-            service_account="build-pipeline-pnc-import",
-        )
+        manifest = self._build(pipeline_spec)
         assert manifest["metadata"]["generateName"] == "pnc-import-"
 
     def test_namespace(self, pipeline_spec):
-        manifest = build_pipelinerun_manifest(
-            source_image="quay.io/src:tag@sha256:abc",
-            dest_image="quay.io/dst:tag",
-            pipeline_spec=pipeline_spec,
-            app="pnc-import",
-            service_account="build-pipeline-pnc-import",
-        )
+        manifest = self._build(pipeline_spec)
         assert manifest["metadata"]["namespace"] == "lightwell-poc-tenant"
 
     def test_annotations(self, pipeline_spec):
-        manifest = build_pipelinerun_manifest(
-            source_image="quay.io/src:tag@sha256:abc",
-            dest_image="quay.io/dst:tag",
-            pipeline_spec=pipeline_spec,
-            app="pnc-import",
-            service_account="build-pipeline-pnc-import",
-        )
+        manifest = self._build(pipeline_spec)
         annotations = manifest["metadata"]["annotations"]
         assert annotations["test.appstudio.openshift.io/ignore-supersession"] == "true"
 
     def test_labels_for_rebuild_app(self, pipeline_spec):
-        manifest = build_pipelinerun_manifest(
-            source_image="quay.io/src:tag@sha256:abc",
-            dest_image="quay.io/dst:tag",
-            pipeline_spec=pipeline_spec,
-            app="pnc-import",
-            service_account="build-pipeline-pnc-import",
-        )
+        manifest = self._build(pipeline_spec)
         labels = manifest["metadata"]["labels"]
         assert labels["appstudio.openshift.io/application"] == "pnc-import"
         assert labels["appstudio.openshift.io/component"] == "pnc-import"
         assert labels["pipelines.appstudio.openshift.io/type"] == "build"
 
     def test_labels_for_remediated_app(self, pipeline_spec):
-        manifest = build_pipelinerun_manifest(
-            source_image="quay.io/src:tag@sha256:abc",
-            dest_image="quay.io/dst:tag",
-            pipeline_spec=pipeline_spec,
+        manifest = self._build(
+            pipeline_spec,
             app="pnc-import-remediated",
             service_account="build-pipeline-pnc-import-remediated",
         )
@@ -367,47 +349,28 @@ class TestBuildPipelinerunManifest:
         assert labels["appstudio.openshift.io/component"] == "pnc-import-remediated"
 
     def test_service_account_in_task_run_template(self, pipeline_spec):
-        manifest = build_pipelinerun_manifest(
-            source_image="quay.io/src:tag@sha256:abc",
-            dest_image="quay.io/dst:tag",
-            pipeline_spec=pipeline_spec,
-            app="pnc-import",
-            service_account="build-pipeline-pnc-import",
-        )
+        manifest = self._build(pipeline_spec)
         sa = manifest["spec"]["taskRunTemplate"]["serviceAccountName"]
         assert sa == "build-pipeline-pnc-import"
 
     def test_pipeline_spec_embedded(self, pipeline_spec):
-        manifest = build_pipelinerun_manifest(
-            source_image="quay.io/src:tag@sha256:abc",
-            dest_image="quay.io/dst:tag",
-            pipeline_spec=pipeline_spec,
-            app="pnc-import",
-            service_account="build-pipeline-pnc-import",
-        )
+        manifest = self._build(pipeline_spec)
         assert manifest["spec"]["pipelineSpec"] is pipeline_spec
 
     def test_params_contain_source_and_dest(self, pipeline_spec):
         src = "quay.io/src:tag@sha256:abc"
         dst = "quay.io/dst:v1.0"
-        manifest = build_pipelinerun_manifest(
-            source_image=src,
-            dest_image=dst,
-            pipeline_spec=pipeline_spec,
-            app="pnc-import",
-            service_account="build-pipeline-pnc-import",
-        )
+        manifest = self._build(pipeline_spec, source_image=src, dest_image=dst)
         params = {p["name"]: p["value"] for p in manifest["spec"]["params"]}
         assert params["SOURCE_IMAGE"] == src
         assert params["IMAGE"] == dst
 
     def test_manifest_is_valid_yaml(self, pipeline_spec):
         """The generated manifest should round-trip through YAML serialization."""
-        manifest = build_pipelinerun_manifest(
+        manifest = self._build(
+            pipeline_spec,
             source_image="quay.io/src:t@sha256:abc",
             dest_image="quay.io/dst:t",
-            pipeline_spec=pipeline_spec,
-            app="pnc-import",
             service_account="sa",
         )
         yaml_str = yaml.dump(manifest, default_flow_style=False)
