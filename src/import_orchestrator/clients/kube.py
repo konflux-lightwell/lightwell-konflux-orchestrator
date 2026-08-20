@@ -92,10 +92,10 @@ class KubeClient:
 
         return None
 
-    def count_running_imports(self) -> int:
-        """Count running PipelineRuns whose names start with 'pnc-import-'."""
+    def count_running_imports(self, prefix: str) -> int:
+        """Count running PipelineRuns whose names start with the given prefix."""
         running_prs = self.get_running_pipelineruns()
-        return sum(1 for pr in running_prs if pr.name.startswith("pnc-import-"))
+        return sum(1 for pr in running_prs if pr.name.startswith(prefix))
 
     def find_snapshot_by_pipelinerun(self, pr_name: str) -> str | None:
         """Find the Snapshot created by a specific PipelineRun via its label."""
@@ -129,13 +129,13 @@ class KubeClient:
         except (requests.RequestException, KeyError):
             return None
 
-    def create_release(self, snapshot_name: str, release_plan: str) -> str | None:
+    def create_release(self, snapshot_name: str, release_plan: str, prefix: str) -> str | None:
         """Create a Release for the given snapshot and return its name."""
         manifest = {
             "apiVersion": "appstudio.redhat.com/v1alpha1",
             "kind": "Release",
             "metadata": {
-                "generateName": "pnc-import-",
+                "generateName": prefix,
                 "namespace": self.namespace,
             },
             "spec": {

@@ -21,8 +21,8 @@ import pytest
 
 from import_orchestrator.clients import KubeClient
 from import_orchestrator.database import ImportDatabase
+from import_orchestrator.ecosystems.java.pipelinerun import TriggerError
 from import_orchestrator.engine import ImportOrchestrator, ImportTrigger, PipelineMonitor, ReleaseMonitor
-from import_orchestrator.engine.pipelinerun import TriggerError
 from import_orchestrator.models import ImportStatus, PipelineRunStatus
 
 
@@ -41,21 +41,17 @@ def mock_kube():
 
 
 @pytest.fixture
-def mock_builder():
-    """Create a mock PipelineRunBuilder."""
-    return MagicMock()
-
-
-@pytest.fixture
-def orchestrator(db: ImportDatabase, mock_kube: MagicMock, mock_builder: MagicMock):
+def orchestrator(db: ImportDatabase, mock_kube: MagicMock):
+    mock_kube.create_pipelinerun.return_value = "pnc-import-xxx"
     trigger = ImportTrigger(
         db=db,
-        builder=mock_builder,
+        kube=mock_kube,
+        build_pipelinerun=MagicMock(return_value={"kind": "PipelineRun"}),
         max_parallel=5,
         max_retries=3,
     )
     pipeline_monitor = PipelineMonitor(db=db, kube=mock_kube)
-    release_monitor = ReleaseMonitor(db=db, kube=mock_kube, max_parallel=5)
+    release_monitor = ReleaseMonitor(db=db, kube=mock_kube, max_parallel=5, prefix="pnc-import-")
 
     return ImportOrchestrator(
         db=db,
@@ -69,7 +65,7 @@ def orchestrator(db: ImportDatabase, mock_kube: MagicMock, mock_builder: MagicMo
 
 class TestUpdatePipelineRunStatuses:
     def test_updates_triggered_to_running(self, orchestrator: ImportOrchestrator, mock_kube: MagicMock):
-        ref, _ = orchestrator.db.add_oci_reference("quay.io/repo:tag@sha256:abc")
+        ref, _ = orchestrator.db.add_item("quay.io/repo:tag@sha256:abc")
         assert ref.id is not None
 
         orchestrator.db.update_status(ref.id, ImportStatus.TRIGGERED, pipelinerun_name="pnc-import-abc")
@@ -82,7 +78,7 @@ class TestUpdatePipelineRunStatuses:
         assert len(running) == 1
 
     def test_updates_running_to_success(self, orchestrator: ImportOrchestrator, mock_kube: MagicMock):
-        ref, _ = orchestrator.db.add_oci_reference("quay.io/repo:tag@sha256:abc")
+        ref, _ = orchestrator.db.add_item("quay.io/repo:tag@sha256:abc")
         assert ref.id is not None
 
         orchestrator.db.update_status(ref.id, ImportStatus.RUNNING, pipelinerun_name="pnc-import-abc")
@@ -95,7 +91,7 @@ class TestUpdatePipelineRunStatuses:
         assert len(awaiting) == 1
 
     def test_updates_running_to_failed(self, orchestrator: ImportOrchestrator, mock_kube: MagicMock):
-        ref, _ = orchestrator.db.add_oci_reference("quay.io/repo:tag@sha256:abc")
+        ref, _ = orchestrator.db.add_item("quay.io/repo:tag@sha256:abc")
         assert ref.id is not None
 
         orchestrator.db.update_status(ref.id, ImportStatus.RUNNING, pipelinerun_name="pnc-import-abc")
@@ -108,7 +104,7 @@ class TestUpdatePipelineRunStatuses:
         assert len(failed) == 1
 
     def test_skips_refs_without_pipelinerun_name(self, orchestrator: ImportOrchestrator, mock_kube: MagicMock):
-        orchestrator.db.add_oci_reference("quay.io/repo:tag@sha256:abc")
+        orchestrator.db.add_item("quay.io/repo:tag@sha256:abc")
 
         orchestrator.update_pipelinerun_statuses()
 
@@ -116,7 +112,7 @@ class TestUpdatePipelineRunStatuses:
         mock_kube.get_pipelinerun_status.assert_not_called()
 
     def test_skips_when_pr_status_is_none(self, orchestrator: ImportOrchestrator, mock_kube: MagicMock):
-        ref, _ = orchestrator.db.add_oci_reference("quay.io/repo:tag@sha256:abc")
+        ref, _ = orchestrator.db.add_item("quay.io/repo:tag@sha256:abc")
         assert ref.id is not None
 
         orchestrator.db.update_status(ref.id, ImportStatus.TRIGGERED, pipelinerun_name="pnc-import-abc")
@@ -131,20 +127,16 @@ class TestUpdatePipelineRunStatuses:
 
 
 class TestTriggerNextBatch:
-    def test_triggers_up_to_available_slots(
-        self, orchestrator: ImportOrchestrator, mock_kube: MagicMock, mock_builder: MagicMock
-    ):
+    def test_triggers_up_to_available_slots(self, orchestrator: ImportOrchestrator, mock_kube: MagicMock):
         # Add 3 already in-flight imports (simulating running/triggered)
         for i in range(3):
-            ref, _ = orchestrator.db.add_oci_reference(f"quay.io/repo:inflight{i}@sha256:bbb{i}")
+            ref, _ = orchestrator.db.add_item(f"quay.io/repo:inflight{i}@sha256:bbb{i}")
             assert ref.id is not None
             orchestrator.db.update_status(ref.id, ImportStatus.RUNNING)
 
         # Add 5 pending imports
         for i in range(5):
-            orchestrator.db.add_oci_reference(f"quay.io/repo:tag{i}@sha256:aaa{i}")
-
-        mock_builder.trigger.return_value = "pnc-import-xxx"
+            orchestrator.db.add_item(f"quay.io/repo:tag{i}@sha256:aaa{i}")
 
         # 5 max - 3 in-flight = 2 slots available
         triggered = orchestrator.trigger_next_batch()
@@ -153,23 +145,21 @@ class TestTriggerNextBatch:
     def test_returns_zero_when_no_slots(self, orchestrator: ImportOrchestrator, mock_kube: MagicMock):
         # Fill all 5 slots with in-flight imports
         for i in range(5):
-            ref, _ = orchestrator.db.add_oci_reference(f"quay.io/repo:inflight{i}@sha256:bbb{i}")
+            ref, _ = orchestrator.db.add_item(f"quay.io/repo:inflight{i}@sha256:bbb{i}")
             assert ref.id is not None
             orchestrator.db.update_status(ref.id, ImportStatus.RUNNING)
 
         # Add a pending import
-        orchestrator.db.add_oci_reference("quay.io/repo:tag@sha256:abc")
+        orchestrator.db.add_item("quay.io/repo:tag@sha256:abc")
 
         # No slots available, should return 0 without triggering
         triggered = orchestrator.trigger_next_batch()
         assert triggered == 0
 
-    def test_handles_trigger_failure(
-        self, orchestrator: ImportOrchestrator, mock_kube: MagicMock, mock_builder: MagicMock
-    ):
-        orchestrator.db.add_oci_reference("quay.io/repo:tag@sha256:abc")
+    def test_handles_trigger_failure(self, orchestrator: ImportOrchestrator, mock_kube: MagicMock):
+        orchestrator.db.add_item("quay.io/repo:tag@sha256:abc")
 
-        mock_builder.trigger.side_effect = TriggerError("connection refused")
+        mock_kube.create_pipelinerun.side_effect = TriggerError("connection refused")
 
         triggered = orchestrator.trigger_next_batch()
         assert triggered == 0
@@ -181,26 +171,26 @@ class TestTriggerNextBatch:
 
 class TestIsComplete:
     def test_complete_when_all_success(self, orchestrator: ImportOrchestrator):
-        ref, _ = orchestrator.db.add_oci_reference("quay.io/repo:tag@sha256:abc")
+        ref, _ = orchestrator.db.add_item("quay.io/repo:tag@sha256:abc")
         assert ref.id is not None
         orchestrator.db.update_status(ref.id, ImportStatus.SUCCESS)
 
         assert orchestrator.is_complete() is True
 
     def test_not_complete_with_pending(self, orchestrator: ImportOrchestrator):
-        orchestrator.db.add_oci_reference("quay.io/repo:tag@sha256:abc")
+        orchestrator.db.add_item("quay.io/repo:tag@sha256:abc")
 
         assert orchestrator.is_complete() is False
 
     def test_not_complete_with_retryable_failure(self, orchestrator: ImportOrchestrator):
-        ref, _ = orchestrator.db.add_oci_reference("quay.io/repo:tag@sha256:abc")
+        ref, _ = orchestrator.db.add_item("quay.io/repo:tag@sha256:abc")
         assert ref.id is not None
         orchestrator.db.update_status(ref.id, ImportStatus.FAILED, retry_count=1)
 
         assert orchestrator.is_complete() is False
 
     def test_complete_when_failure_exhausted_retries(self, orchestrator: ImportOrchestrator):
-        ref, _ = orchestrator.db.add_oci_reference("quay.io/repo:tag@sha256:abc")
+        ref, _ = orchestrator.db.add_item("quay.io/repo:tag@sha256:abc")
         assert ref.id is not None
         orchestrator.db.update_status(ref.id, ImportStatus.FAILED, retry_count=3)
 
@@ -211,14 +201,11 @@ class TestIsComplete:
 
 
 class TestRunUntilComplete:
-    def test_completes_with_success(
-        self, orchestrator: ImportOrchestrator, mock_kube: MagicMock, mock_builder: MagicMock
-    ):
-        ref, _ = orchestrator.db.add_oci_reference("quay.io/repo:tag@sha256:abc")
+    def test_completes_with_success(self, orchestrator: ImportOrchestrator, mock_kube: MagicMock):
+        ref, _ = orchestrator.db.add_item("quay.io/repo:tag@sha256:abc")
         assert ref.id is not None
 
-        # Mock builder to return PipelineRun name
-        mock_builder.trigger.return_value = "pnc-import-abc"
+        mock_kube.create_pipelinerun.return_value = "pnc-import-abc"
 
         # After trigger, the status check will show success
         call_count = 0
@@ -241,7 +228,7 @@ class TestRunUntilComplete:
         assert exit_code == 0
 
     def test_returns_1_when_failures(self, orchestrator: ImportOrchestrator, mock_kube: MagicMock):
-        ref, _ = orchestrator.db.add_oci_reference("quay.io/repo:tag@sha256:abc")
+        ref, _ = orchestrator.db.add_item("quay.io/repo:tag@sha256:abc")
         assert ref.id is not None
 
         # Pre-set as permanently failed

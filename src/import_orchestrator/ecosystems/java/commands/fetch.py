@@ -21,14 +21,13 @@ import os
 import sys
 
 from import_orchestrator.clients import QuayClient
-from import_orchestrator.constants import (
-    ARTIFACT_CONFIGS,
-)
 from import_orchestrator.database import ImportDatabase
-from import_orchestrator.engine import OciIngest
+from import_orchestrator.ecosystems.base import Ecosystem
+from import_orchestrator.ecosystems.java import config
+from import_orchestrator.engine import Ingest
 
 
-def register(subparsers: argparse._SubParsersAction) -> None:
+def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> None:
     """Register the 'fetch' subcommand with the given subparsers."""
     parser = subparsers.add_parser(
         "fetch",
@@ -38,11 +37,11 @@ def register(subparsers: argparse._SubParsersAction) -> None:
 
     parser.add_argument(
         "--artifact-type",
-        choices=list(ARTIFACT_CONFIGS),
+        choices=list(config.ARTIFACT_CONFIGS),
         default=os.environ.get("LIGHTWELL_ARTIFACT_TYPE", "STAGE"),
         help="Artifact type (default: STAGE, or LIGHTWELL_ARTIFACT_TYPE env var)",
     )
-    parser.set_defaults(func=run)
+    parser.set_defaults(func=run, ecosystem=ecosystem)
 
 
 def run(args: argparse.Namespace) -> int:
@@ -57,12 +56,12 @@ def run(args: argparse.Namespace) -> int:
         )
         return 2
 
-    config = ARTIFACT_CONFIGS[args.artifact_type]
+    artifact_config = config.ARTIFACT_CONFIGS[args.artifact_type]
 
-    client = QuayClient(token=token, repo=config["source_repo"])
+    client = QuayClient(token=token, ref=artifact_config["source_repo"])
 
     with ImportDatabase(args.db) as db:
-        ingest = OciIngest(db)
+        ingest = Ingest(db)
         result = ingest.from_quay(client)
 
         _print_summary(result)

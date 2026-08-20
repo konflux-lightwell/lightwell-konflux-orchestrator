@@ -168,7 +168,7 @@ class TestCountRunningImports:
             ]
         }
 
-        assert kube.count_running_imports() == 2
+        assert kube.count_running_imports("pnc-import-") == 2
 
 
 class TestFindSnapshotByPipelinerun:
@@ -360,13 +360,13 @@ class TestCreateRelease:
     def test_returns_generated_name(self, kube: KubeClient):
         kube._mock_api.create.return_value = {"metadata": {"name": "pnc-import-abc123"}}
 
-        result = kube.create_release("my-snapshot", "my-release-plan")
+        result = kube.create_release("my-snapshot", "my-release-plan", "pnc-import-")
         assert result == "pnc-import-abc123"
 
     def test_passes_correct_manifest(self, kube: KubeClient):
         kube._mock_api.create.return_value = {"metadata": {"name": "pnc-import-xyz"}}
 
-        kube.create_release("snap-1", "plan-1")
+        kube.create_release("snap-1", "plan-1", "pnc-import-")
 
         kube._mock_api.create.assert_called_once_with(
             "/apis/appstudio.redhat.com/v1alpha1/namespaces/test-ns/releases",
@@ -381,19 +381,19 @@ class TestCreateRelease:
     def test_returns_none_on_http_error(self, kube: KubeClient):
         kube._mock_api.create.side_effect = requests.HTTPError("403 Forbidden")
 
-        result = kube.create_release("snap-1", "plan-1")
+        result = kube.create_release("snap-1", "plan-1", "pnc-import-")
         assert result is None
 
     def test_returns_none_when_name_missing(self, kube: KubeClient):
         kube._mock_api.create.return_value = {"metadata": {}}
 
-        result = kube.create_release("snap-1", "plan-1")
+        result = kube.create_release("snap-1", "plan-1", "pnc-import-")
         assert result is None
 
     def test_uses_correct_namespace_in_path(self, kube: KubeClient):
         kube._mock_api.create.return_value = {"metadata": {"name": "pnc-import-ns"}}
 
-        kube.create_release("snap-1", "plan-1")
+        kube.create_release("snap-1", "plan-1", "pnc-import-")
 
         api_path = kube._mock_api.create.call_args[0][0]
         assert "/namespaces/test-ns/" in api_path

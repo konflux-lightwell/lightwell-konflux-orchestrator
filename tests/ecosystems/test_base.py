@@ -14,23 +14,20 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
-from __future__ import annotations
-
-import re
+from import_orchestrator.ecosystems.base import Ecosystem
 
 
-def extract_tag(ref: str) -> str:
-    """Extract tag from an ecosystem ref string.
+class _Dummy:
+    name = "dummy"
+    default_db_path = "./dummy.db"
+    pipelinerun_prefix = "dummy-"
 
-    Parses the tag portion from a reference like
-    ``quay.io/repo:lw-BPRVHPONFDQAA@sha256:...`` and returns ``lw-BPRVHPONFDQAA``.
+    def build_pipelinerun(self, ref, args):
+        return {"ref": ref}
 
-    Falls back to the last 40 characters of the reference if parsing fails.
-    """
-    match = re.search(r":([^@]+)@", ref)
-    if match:
-        return match.group(1)
-    digest_match = re.search(r"@sha256:([a-f0-9]+)", ref)
-    if digest_match:
-        return digest_match.group(1)
-    return ref[-40:]
+    def register_cli(self, subparsers):
+        return None
+
+
+def test_dummy_satisfies_ecosystem_protocol():
+    assert isinstance(_Dummy(), Ecosystem)

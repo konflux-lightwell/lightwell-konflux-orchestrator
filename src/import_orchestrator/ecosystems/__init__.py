@@ -16,21 +16,7 @@ limitations under the License.
 
 from __future__ import annotations
 
-import re
+from import_orchestrator.ecosystems.base import Ecosystem
+from import_orchestrator.ecosystems.java.ecosystem import JavaEcosystem
 
-
-def extract_tag(ref: str) -> str:
-    """Extract tag from an ecosystem ref string.
-
-    Parses the tag portion from a reference like
-    ``quay.io/repo:lw-BPRVHPONFDQAA@sha256:...`` and returns ``lw-BPRVHPONFDQAA``.
-
-    Falls back to the last 40 characters of the reference if parsing fails.
-    """
-    match = re.search(r":([^@]+)@", ref)
-    if match:
-        return match.group(1)
-    digest_match = re.search(r"@sha256:([a-f0-9]+)", ref)
-    if digest_match:
-        return digest_match.group(1)
-    return ref[-40:]
+ECOSYSTEMS: list[Ecosystem] = [JavaEcosystem()]

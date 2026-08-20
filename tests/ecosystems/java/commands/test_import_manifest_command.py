@@ -37,23 +37,23 @@ class TestImportManifestArgParsing:
 
     def test_parses_file_argument(self):
         parser = make_parser()
-        args = parser.parse_args(["import-manifest", "/tmp/consolidated.yaml"])
+        args = parser.parse_args(["java", "import-manifest", "/tmp/consolidated.yaml"])
         assert args.file == Path("/tmp/consolidated.yaml")
         assert args.command == "import-manifest"
 
     def test_file_is_required(self):
         parser = make_parser()
         with pytest.raises(SystemExit):
-            parser.parse_args(["import-manifest"])
+            parser.parse_args(["java", "import-manifest"])
 
     def test_inherits_top_level_db_flag(self):
         parser = make_parser()
-        args = parser.parse_args(["--db", "/tmp/custom.db", "import-manifest", "manifest.yaml"])
+        args = parser.parse_args(["--db", "/tmp/custom.db", "java", "import-manifest", "manifest.yaml"])
         assert args.db == Path("/tmp/custom.db")
 
     def test_has_func_attribute(self):
         parser = make_parser()
-        args = parser.parse_args(["import-manifest", "manifest.yaml"])
+        args = parser.parse_args(["java", "import-manifest", "manifest.yaml"])
         assert hasattr(args, "func")
         assert callable(args.func)
 
@@ -64,7 +64,7 @@ class TestMainImportManifest:
     def test_missing_file_returns_2(self, monkeypatch, capsys):
         monkeypatch.setattr(
             "sys.argv",
-            ["prog", "import-manifest", "/nonexistent/manifest.yaml"],
+            ["prog", "java", "import-manifest", "/nonexistent/manifest.yaml"],
         )
         exit_code = main()
         assert exit_code == 2
@@ -78,7 +78,7 @@ class TestMainImportManifest:
         db_path = tmp_path / "test.db"
         monkeypatch.setattr(
             "sys.argv",
-            ["prog", "--db", str(db_path), "import-manifest", str(manifest)],
+            ["prog", "--db", str(db_path), "java", "import-manifest", str(manifest)],
         )
 
         exit_code = main()
@@ -91,14 +91,14 @@ class TestMainImportManifest:
     def test_works_with_reset_flag(self, monkeypatch, tmp_path: Path):
         db_path = tmp_path / "test.db"
         with ImportDatabase(db_path) as db:
-            db.add_oci_reference("quay.io/ns/repo:old@sha256:old")
+            db.add_item("quay.io/ns/repo:old@sha256:old")
 
         manifest = tmp_path / "consolidated.yaml"
         manifest.write_text(SIMPLE_MANIFEST)
 
         monkeypatch.setattr(
             "sys.argv",
-            ["prog", "--db", str(db_path), "--reset", "import-manifest", str(manifest)],
+            ["prog", "--db", str(db_path), "--reset", "java", "import-manifest", str(manifest)],
         )
 
         exit_code = main()

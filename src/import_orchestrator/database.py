@@ -20,7 +20,7 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-from import_orchestrator.models import ImportStatus, OCIReference
+from import_orchestrator.models import ImportItem, ImportStatus
 
 
 class ImportDatabase:
@@ -29,7 +29,7 @@ class ImportDatabase:
     Used as a context manager to ensure the connection is properly opened and closed::
 
         with ImportDatabase(Path("state.db")) as db:
-            db.add_oci_reference("quay.io/repo:tag@sha256:abc")
+            db.add_item("quay.io/repo:tag@sha256:abc")
     """
 
     def __init__(self, db_path: Path):
@@ -54,9 +54,9 @@ class ImportDatabase:
 
         cursor.execute(
             """
-            CREATE TABLE IF NOT EXISTS oci_references (
+            CREATE TABLE IF NOT EXISTS import_items (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                oci_ref TEXT NOT NULL UNIQUE,
+                ref TEXT NOT NULL UNIQUE,
                 status TEXT NOT NULL CHECK(
                    status IN ('pending', 'triggered', 'running', 'releasing', 'success', 'failed')
                 ),
@@ -75,70 +75,70 @@ class ImportDatabase:
 
         cursor.execute(
             """
-            CREATE INDEX IF NOT EXISTS idx_status ON oci_references(status)
+            CREATE INDEX IF NOT EXISTS idx_status ON import_items(status)
         """
         )
 
         cursor.execute(
             """
-            CREATE INDEX IF NOT EXISTS idx_pipelinerun_name ON oci_references(pipelinerun_name)
+            CREATE INDEX IF NOT EXISTS idx_pipelinerun_name ON import_items(pipelinerun_name)
         """
         )
 
         for col in ("release_name TEXT", "snapshot_name TEXT"):
             try:
-                cursor.execute(f"ALTER TABLE oci_references ADD COLUMN {col}")
+                cursor.execute(f"ALTER TABLE import_items ADD COLUMN {col}")
             except sqlite3.OperationalError:
                 pass  # column already exists
 
         self.conn.commit()
 
-    def add_oci_reference(self, oci_ref: str) -> tuple[OCIReference, bool]:
-        """Add an OCI reference with status 'pending', or return the existing record.
+    def add_item(self, ref: str) -> tuple[ImportItem, bool]:
+        """Add an import item with status 'pending', or return the existing record.
 
         Returns:
-            Tuple of (OCIReference, was_inserted) where was_inserted is True if newly added.
+            Tuple of (ImportItem, was_inserted) where was_inserted is True if newly added.
         """
         assert self.conn is not None
         cursor = self.conn.cursor()
 
         cursor.execute(
             """
-            INSERT OR IGNORE INTO oci_references (oci_ref, status)
+            INSERT OR IGNORE INTO import_items (ref, status)
             VALUES (?, ?)
         """,
-            (oci_ref, ImportStatus.PENDING.value),
+            (ref, ImportStatus.PENDING.value),
         )
         was_inserted = cursor.rowcount > 0
         self.conn.commit()
 
         cursor.execute(
             """
-            SELECT * FROM oci_references WHERE oci_ref = ?
+            SELECT * FROM import_items WHERE ref = ?
         """,
-            (oci_ref,),
+            (ref,),
         )
         row = cursor.fetchone()
-        return self._row_to_oci_reference(row), was_inserted
+        return self._row_to_item(row), was_inserted
 
-    def get_by_status(self, status: ImportStatus) -> list[OCIReference]:
-        """Get all references with the given status, ordered by id."""
+    def get_by_status(self, status: ImportStatus) -> list[ImportItem]:
+        """Get all items with the given status, ordered by id."""
         assert self.conn is not None
         cursor = self.conn.cursor()
 
         cursor.execute(
             """
-            SELECT * FROM oci_references WHERE status = ?
+            SELECT * FROM import_items WHERE status = ?
             ORDER BY id
         """,
             (status.value,),
         )
 
-        return [self._row_to_oci_reference(row) for row in cursor.fetchall()]
+        return [self._row_to_item(row) for row in cursor.fetchall()]
 
     def update_status(
         self,
-        oci_ref_id: int,
+        item_id: int,
         status: ImportStatus,
         pipelinerun_name: str | None = None,
         snapshot_name: str | None = None,
@@ -148,7 +148,7 @@ class ImportDatabase:
         completed_at: datetime | None = None,
         retry_count: int | None = None,
     ) -> None:
-        """Update the status and optional fields for an OCI reference."""
+        """Update the status and optional fields for an import item."""
         assert self.conn is not None
         cursor = self.conn.cursor()
 
@@ -184,11 +184,11 @@ class ImportDatabase:
             fields.append("retry_count = ?")
             values.append(retry_count)
 
-        values.append(oci_ref_id)
+        values.append(item_id)
 
         cursor.execute(
             f"""
-            UPDATE oci_references
+            UPDATE import_items
             SET {", ".join(fields)}
             WHERE id = ?
         """,  # nosec B608 - field names are hardcoded, not user input
@@ -197,36 +197,36 @@ class ImportDatabase:
 
         self.conn.commit()
 
-    def get_by_pipelinerun_name(self, name: str) -> OCIReference | None:
-        """Look up a reference by its PipelineRun name."""
+    def get_by_pipelinerun_name(self, name: str) -> ImportItem | None:
+        """Look up an item by its PipelineRun name."""
         assert self.conn is not None
         cursor = self.conn.cursor()
 
         cursor.execute(
             """
-            SELECT * FROM oci_references WHERE pipelinerun_name = ?
+            SELECT * FROM import_items WHERE pipelinerun_name = ?
         """,
             (name,),
         )
 
         row = cursor.fetchone()
-        return self._row_to_oci_reference(row) if row else None
+        return self._row_to_item(row) if row else None
 
-    def get_retry_candidates(self, max_retries: int) -> list[OCIReference]:
+    def get_retry_candidates(self, max_retries: int) -> list[ImportItem]:
         """Get failed imports that are eligible for retry (retry_count < max_retries)."""
         assert self.conn is not None
         cursor = self.conn.cursor()
 
         cursor.execute(
             """
-            SELECT * FROM oci_references
+            SELECT * FROM import_items
             WHERE status = ? AND retry_count < ?
             ORDER BY id
         """,
             (ImportStatus.FAILED.value, max_retries),
         )
 
-        return [self._row_to_oci_reference(row) for row in cursor.fetchall()]
+        return [self._row_to_item(row) for row in cursor.fetchall()]
 
     def count_in_flight(self) -> int:
         """Count entries actively being processed (total minus pending, success, and failed)."""
@@ -234,7 +234,7 @@ class ImportDatabase:
         cursor = self.conn.cursor()
         cursor.execute(
             """
-            SELECT COUNT(*) FROM oci_references
+            SELECT COUNT(*) FROM import_items
             WHERE status NOT IN (?, ?, ?)
         """,
             (ImportStatus.PENDING.value, ImportStatus.SUCCESS.value, ImportStatus.FAILED.value),
@@ -249,7 +249,7 @@ class ImportDatabase:
         cursor.execute(
             """
             SELECT status, COUNT(*) as count
-            FROM oci_references
+            FROM import_items
             GROUP BY status
         """
         )
@@ -262,11 +262,11 @@ class ImportDatabase:
 
         return stats
 
-    def _row_to_oci_reference(self, row: sqlite3.Row) -> OCIReference:
-        """Convert a database row to an OCIReference dataclass."""
-        return OCIReference(
+    def _row_to_item(self, row: sqlite3.Row) -> ImportItem:
+        """Convert a database row to an ImportItem dataclass."""
+        return ImportItem(
             id=row["id"],
-            oci_ref=row["oci_ref"],
+            ref=row["ref"],
             status=ImportStatus(row["status"]),
             pipelinerun_name=row["pipelinerun_name"],
             snapshot_name=row["snapshot_name"],

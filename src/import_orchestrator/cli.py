@@ -21,15 +21,14 @@ import sys
 import textwrap
 from pathlib import Path
 
-from import_orchestrator.commands import fetch, import_file, import_manifest, orchestrate, trigger
-from import_orchestrator.constants import DEFAULT_DB_PATH
+from import_orchestrator.ecosystems import ECOSYSTEMS
 
 
 def make_parser() -> argparse.ArgumentParser:
-    """Build the top-level argument parser with subcommands."""
+    """Build the top-level argument parser with one subparser per ecosystem."""
     parser = argparse.ArgumentParser(
         prog="import-orchestrator",
-        description="Orchestrate batch PNC import PipelineRuns",
+        description="Orchestrate Konflux import PipelineRuns across ecosystems",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=textwrap.dedent(
             """
@@ -41,22 +40,22 @@ def make_parser() -> argparse.ArgumentParser:
 
         Examples:
           # Fetch OCI references into the database
-          import-orchestrator fetch
+          import-orchestrator java fetch
 
           # Import OCI references from a text file
-          import-orchestrator import-file refs.txt
+          import-orchestrator java import-file refs.txt
 
           # Import OCI references from a consolidated build manifest
-          import-orchestrator import-manifest consolidated.yaml
+          import-orchestrator java import-manifest consolidated.yaml
 
           # Orchestrate imports (up to 10 parallel)
-          import-orchestrator orchestrate --max-parallel 10
+          import-orchestrator java orchestrate --max-parallel 10
 
           # Trigger a single PNC import PipelineRun
-          import-orchestrator trigger 'quay.io/example/image:tag@sha256:abc123...'
+          import-orchestrator java trigger 'quay.io/example/image:tag@sha256:abc123...'
 
           # Full workflow
-          import-orchestrator fetch && import-orchestrator orchestrate
+          import-orchestrator java fetch && import-orchestrator java orchestrate
         """
         ),
     )
@@ -64,8 +63,8 @@ def make_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--db",
         type=Path,
-        default=Path(DEFAULT_DB_PATH),
-        help=f"SQLite database path (default: {DEFAULT_DB_PATH})",
+        default=None,
+        help="SQLite database path (default: per-ecosystem)",
     )
 
     parser.add_argument(
@@ -74,12 +73,9 @@ def make_parser() -> argparse.ArgumentParser:
         help="Reset database (delete existing data before running)",
     )
 
-    subparsers = parser.add_subparsers(dest="command")
-    fetch.register(subparsers)
-    import_file.register(subparsers)
-    import_manifest.register(subparsers)
-    orchestrate.register(subparsers)
-    trigger.register(subparsers)
+    subparsers = parser.add_subparsers(dest="ecosystem_name")
+    for eco in ECOSYSTEMS:
+        eco.register_cli(subparsers)
 
     return parser
 
@@ -96,9 +92,17 @@ def main() -> int:
     parser = make_parser()
     args = parser.parse_args()
 
-    if args.command is None:
+    if getattr(args, "ecosystem_name", None) is None:
         parser.print_help(sys.stderr)
         return 2
+
+    if getattr(args, "func", None) is None:
+        # Ecosystem chosen but no command given.
+        args._ecosystem_parser.print_help(sys.stderr)
+        return 2
+
+    if args.db is None:
+        args.db = Path(args.ecosystem.default_db_path)
 
     _handle_reset(args)
 

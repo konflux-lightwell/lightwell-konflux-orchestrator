@@ -19,28 +19,26 @@ from import_orchestrator.database import ImportDatabase
 from import_orchestrator.engine import (
     ImportOrchestrator,
     ImportTrigger,
+    Ingest,
     IngestResult,
-    OciIngest,
     PipelineMonitor,
-    PipelineRunBuilder,
     ReleaseMonitor,
     TriggerError,
 )
-from import_orchestrator.models import ImportStatus, OCIReference, PipelineRunStatus
+from import_orchestrator.models import ImportItem, ImportStatus, PipelineRunStatus
 
 __version__ = "0.1.0"
 
 __all__ = [
     "ImportDatabase",
+    "ImportItem",
     "ImportOrchestrator",
     "ImportStatus",
     "ImportTrigger",
+    "Ingest",
     "IngestResult",
     "KubeClient",
-    "OCIReference",
-    "OciIngest",
     "PipelineMonitor",
-    "PipelineRunBuilder",
     "PipelineRunStatus",
     "ReleaseMonitor",
     "TriggerError",

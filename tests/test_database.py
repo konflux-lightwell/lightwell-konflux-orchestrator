@@ -32,23 +32,23 @@ def db(tmp_path: Path):
 
 
 class TestImportDatabase:
-    def test_add_oci_reference_inserts_new(self, db: ImportDatabase):
-        ref, was_inserted = db.add_oci_reference("quay.io/repo:tag@sha256:abc")
+    def test_add_item_inserts_new(self, db: ImportDatabase):
+        item, was_inserted = db.add_item("quay.io/repo:tag@sha256:abc")
         assert was_inserted is True
-        assert ref.oci_ref == "quay.io/repo:tag@sha256:abc"
-        assert ref.status == ImportStatus.PENDING
-        assert ref.id is not None
+        assert item.ref == "quay.io/repo:tag@sha256:abc"
+        assert item.status == ImportStatus.PENDING
+        assert item.id is not None
 
-    def test_add_oci_reference_duplicate_returns_existing(self, db: ImportDatabase):
-        ref1, inserted1 = db.add_oci_reference("quay.io/repo:tag@sha256:abc")
-        ref2, inserted2 = db.add_oci_reference("quay.io/repo:tag@sha256:abc")
+    def test_add_item_duplicate_returns_existing(self, db: ImportDatabase):
+        ref1, inserted1 = db.add_item("quay.io/repo:tag@sha256:abc")
+        ref2, inserted2 = db.add_item("quay.io/repo:tag@sha256:abc")
         assert inserted1 is True
         assert inserted2 is False
         assert ref1.id == ref2.id
 
     def test_get_by_status(self, db: ImportDatabase):
-        db.add_oci_reference("quay.io/repo:tag1@sha256:aaa")
-        db.add_oci_reference("quay.io/repo:tag2@sha256:bbb")
+        db.add_item("quay.io/repo:tag1@sha256:aaa")
+        db.add_item("quay.io/repo:tag2@sha256:bbb")
 
         pending = db.get_by_status(ImportStatus.PENDING)
         assert len(pending) == 2
@@ -57,7 +57,7 @@ class TestImportDatabase:
         assert len(running) == 0
 
     def test_update_status(self, db: ImportDatabase):
-        ref, _ = db.add_oci_reference("quay.io/repo:tag@sha256:abc")
+        ref, _ = db.add_item("quay.io/repo:tag@sha256:abc")
         assert ref.id is not None
 
         db.update_status(ref.id, ImportStatus.TRIGGERED, pipelinerun_name="pnc-import-xyz")
@@ -67,7 +67,7 @@ class TestImportDatabase:
         assert triggered[0].pipelinerun_name == "pnc-import-xyz"
 
     def test_update_status_with_timestamps(self, db: ImportDatabase):
-        ref, _ = db.add_oci_reference("quay.io/repo:tag@sha256:abc")
+        ref, _ = db.add_item("quay.io/repo:tag@sha256:abc")
         assert ref.id is not None
 
         now = datetime.now()
@@ -84,7 +84,7 @@ class TestImportDatabase:
         assert success[0].triggered_at is not None
 
     def test_update_status_with_error_and_retry(self, db: ImportDatabase):
-        ref, _ = db.add_oci_reference("quay.io/repo:tag@sha256:abc")
+        ref, _ = db.add_item("quay.io/repo:tag@sha256:abc")
         assert ref.id is not None
 
         db.update_status(
@@ -100,22 +100,22 @@ class TestImportDatabase:
         assert failed[0].retry_count == 1
 
     def test_get_by_pipelinerun_name(self, db: ImportDatabase):
-        ref, _ = db.add_oci_reference("quay.io/repo:tag@sha256:abc")
+        ref, _ = db.add_item("quay.io/repo:tag@sha256:abc")
         assert ref.id is not None
 
         db.update_status(ref.id, ImportStatus.TRIGGERED, pipelinerun_name="pnc-import-xyz")
 
         found = db.get_by_pipelinerun_name("pnc-import-xyz")
         assert found is not None
-        assert found.oci_ref == "quay.io/repo:tag@sha256:abc"
+        assert found.ref == "quay.io/repo:tag@sha256:abc"
 
     def test_get_by_pipelinerun_name_not_found(self, db: ImportDatabase):
         assert db.get_by_pipelinerun_name("nonexistent") is None
 
     def test_get_retry_candidates(self, db: ImportDatabase):
-        ref1, _ = db.add_oci_reference("quay.io/repo:tag1@sha256:aaa")
-        ref2, _ = db.add_oci_reference("quay.io/repo:tag2@sha256:bbb")
-        ref3, _ = db.add_oci_reference("quay.io/repo:tag3@sha256:ccc")
+        ref1, _ = db.add_item("quay.io/repo:tag1@sha256:aaa")
+        ref2, _ = db.add_item("quay.io/repo:tag2@sha256:bbb")
+        ref3, _ = db.add_item("quay.io/repo:tag3@sha256:ccc")
         assert ref1.id is not None and ref2.id is not None and ref3.id is not None
 
         # ref1: failed with 1 retry (eligible when max_retries=3)
@@ -126,13 +126,13 @@ class TestImportDatabase:
 
         candidates = db.get_retry_candidates(max_retries=3)
         assert len(candidates) == 1
-        assert candidates[0].oci_ref == "quay.io/repo:tag1@sha256:aaa"
+        assert candidates[0].ref == "quay.io/repo:tag1@sha256:aaa"
 
     def test_get_statistics(self, db: ImportDatabase):
-        db.add_oci_reference("quay.io/repo:tag1@sha256:aaa")
-        db.add_oci_reference("quay.io/repo:tag2@sha256:bbb")
+        db.add_item("quay.io/repo:tag1@sha256:aaa")
+        db.add_item("quay.io/repo:tag2@sha256:bbb")
 
-        ref3, _ = db.add_oci_reference("quay.io/repo:tag3@sha256:ccc")
+        ref3, _ = db.add_item("quay.io/repo:tag3@sha256:ccc")
         assert ref3.id is not None
         db.update_status(ref3.id, ImportStatus.SUCCESS)
 
@@ -151,7 +151,7 @@ class TestImportDatabase:
     def test_creates_parent_directories(self, tmp_path: Path):
         nested_path = tmp_path / "deep" / "nested" / "dir" / "test.db"
         with ImportDatabase(nested_path) as db:
-            ref, was_inserted = db.add_oci_reference("quay.io/repo:tag@sha256:abc")
+            item, was_inserted = db.add_item("quay.io/repo:tag@sha256:abc")
             assert was_inserted is True
 
     def test_parse_timestamp_handles_none(self, db: ImportDatabase):

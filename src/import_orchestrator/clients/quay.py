@@ -71,7 +71,7 @@ class QuayClient:
         repo = url_parts.path.lstrip("/")
 
         while True:
-            url = f"{host}/api/v1/repository/{repo}/tag/?onlyActiveTags=true&limit={_PAGE_SIZE}&page={page}"
+            url = f"https://{host}/api/v1/repository/{repo}/tag/?onlyActiveTags=true&limit={_PAGE_SIZE}&page={page}"
             response = requests.get(
                 url,
                 headers={

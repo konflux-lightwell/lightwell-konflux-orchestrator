@@ -22,7 +22,6 @@ import sys
 
 from import_orchestrator.clients import KubeClient
 from import_orchestrator.constants import (
-    ARTIFACT_CONFIGS,
     CLUSTER_API,
     DEFAULT_MAX_PARALLEL,
     DEFAULT_MAX_RETRIES,
@@ -31,11 +30,12 @@ from import_orchestrator.constants import (
     NAMESPACE,
 )
 from import_orchestrator.database import ImportDatabase
+from import_orchestrator.ecosystems.base import Ecosystem
+from import_orchestrator.ecosystems.java import config
 from import_orchestrator.engine import ImportOrchestrator, ImportTrigger, PipelineMonitor, ReleaseMonitor
-from import_orchestrator.engine.pipelinerun import PipelineRunBuilder
 
 
-def register(subparsers: argparse._SubParsersAction) -> None:
+def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> None:
     """Register the 'orchestrate' subcommand with the given subparsers."""
     parser = subparsers.add_parser(
         "orchestrate",
@@ -66,12 +66,12 @@ def register(subparsers: argparse._SubParsersAction) -> None:
 
     parser.add_argument(
         "--artifact-type",
-        choices=list(ARTIFACT_CONFIGS),
+        choices=list(config.ARTIFACT_CONFIGS),
         default=os.environ.get("LIGHTWELL_ARTIFACT_TYPE", "STAGE"),
         help="Artifact type (default: STAGE, or LIGHTWELL_ARTIFACT_TYPE env var)",
     )
 
-    parser.set_defaults(func=run)
+    parser.set_defaults(func=run, ecosystem=ecosystem)
 
 
 def _is_database_empty(db: ImportDatabase) -> bool:
@@ -90,17 +90,20 @@ def run(args: argparse.Namespace) -> int:
             )
 
         kube = KubeClient(NAMESPACE, CLUSTER_API, KUBEARCHIVE_API)
-        builder = PipelineRunBuilder(kube=kube, artifact_type=args.artifact_type)
+        eco = args.ecosystem
 
         # Construct the specialized components
         trigger = ImportTrigger(
             db=db,
-            builder=builder,
+            kube=kube,
+            build_pipelinerun=lambda ref: eco.build_pipelinerun(ref, args),
             max_parallel=args.max_parallel,
             max_retries=args.max_retries,
         )
         pipeline_monitor = PipelineMonitor(db=db, kube=kube)
-        release_monitor = ReleaseMonitor(db=db, kube=kube, max_parallel=args.max_parallel)
+        release_monitor = ReleaseMonitor(
+            db=db, kube=kube, max_parallel=args.max_parallel, prefix=eco.pipelinerun_prefix
+        )
 
         # Construct the coordinator
         orchestrator = ImportOrchestrator(

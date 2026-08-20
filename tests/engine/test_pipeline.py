@@ -50,7 +50,7 @@ class TestUpdateStatuses:
 
     def test_updates_triggered_to_running(self, monitor: PipelineMonitor, mock_kube: MagicMock):
         """Verify that TRIGGERED imports are updated to RUNNING when the PipelineRun is running."""
-        ref, _ = monitor.db.add_oci_reference("quay.io/repo:tag@sha256:abc")
+        ref, _ = monitor.db.add_item("quay.io/repo:tag@sha256:abc")
         assert ref.id is not None
 
         monitor.db.update_status(ref.id, ImportStatus.TRIGGERED, pipelinerun_name="pnc-import-abc")
@@ -64,7 +64,7 @@ class TestUpdateStatuses:
 
     def test_updates_running_to_awaiting_release(self, monitor: PipelineMonitor, mock_kube: MagicMock):
         """Verify that RUNNING imports are updated to AWAITING_RELEASE when the PipelineRun succeeds."""
-        ref, _ = monitor.db.add_oci_reference("quay.io/repo:tag@sha256:abc")
+        ref, _ = monitor.db.add_item("quay.io/repo:tag@sha256:abc")
         assert ref.id is not None
 
         monitor.db.update_status(ref.id, ImportStatus.RUNNING, pipelinerun_name="pnc-import-abc")
@@ -78,7 +78,7 @@ class TestUpdateStatuses:
 
     def test_updates_running_to_failed(self, monitor: PipelineMonitor, mock_kube: MagicMock):
         """Verify that RUNNING imports are updated to FAILED when the PipelineRun fails."""
-        ref, _ = monitor.db.add_oci_reference("quay.io/repo:tag@sha256:abc")
+        ref, _ = monitor.db.add_item("quay.io/repo:tag@sha256:abc")
         assert ref.id is not None
 
         monitor.db.update_status(ref.id, ImportStatus.RUNNING, pipelinerun_name="pnc-import-abc")
@@ -92,7 +92,7 @@ class TestUpdateStatuses:
 
     def test_skips_refs_without_pipelinerun_name(self, monitor: PipelineMonitor, mock_kube: MagicMock):
         """Verify that references without a PipelineRun name are skipped."""
-        monitor.db.add_oci_reference("quay.io/repo:tag@sha256:abc")
+        monitor.db.add_item("quay.io/repo:tag@sha256:abc")
 
         monitor.update_statuses()
 
@@ -101,7 +101,7 @@ class TestUpdateStatuses:
 
     def test_skips_when_pr_status_is_none(self, monitor: PipelineMonitor, mock_kube: MagicMock):
         """Verify that references are skipped when kube returns None."""
-        ref, _ = monitor.db.add_oci_reference("quay.io/repo:tag@sha256:abc")
+        ref, _ = monitor.db.add_item("quay.io/repo:tag@sha256:abc")
         assert ref.id is not None
 
         monitor.db.update_status(ref.id, ImportStatus.TRIGGERED, pipelinerun_name="pnc-import-abc")
@@ -116,8 +116,8 @@ class TestUpdateStatuses:
 
     def test_processes_multiple_imports(self, monitor: PipelineMonitor, mock_kube: MagicMock):
         """Verify that multiple imports are processed correctly."""
-        ref1, _ = monitor.db.add_oci_reference("quay.io/repo:tag1@sha256:aaa")
-        ref2, _ = monitor.db.add_oci_reference("quay.io/repo:tag2@sha256:bbb")
+        ref1, _ = monitor.db.add_item("quay.io/repo:tag1@sha256:aaa")
+        ref2, _ = monitor.db.add_item("quay.io/repo:tag2@sha256:bbb")
         assert ref1.id is not None and ref2.id is not None
 
         monitor.db.update_status(ref1.id, ImportStatus.TRIGGERED, pipelinerun_name="pnc-import-1")

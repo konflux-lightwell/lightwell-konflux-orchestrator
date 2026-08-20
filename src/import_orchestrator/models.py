@@ -23,7 +23,7 @@ from typing import Literal
 
 
 class ImportStatus(str, Enum):
-    """Status of an OCI reference import."""
+    """Status of an import item."""
 
     PENDING = "pending"
     TRIGGERED = "triggered"
@@ -34,11 +34,11 @@ class ImportStatus(str, Enum):
 
 
 @dataclass
-class OCIReference:
-    """An OCI reference to be imported."""
+class ImportItem:
+    """An item to be imported, identified by an ecosystem-specific unique ref."""
 
     id: int | None
-    oci_ref: str
+    ref: str
     status: ImportStatus
     pipelinerun_name: str | None = None
     snapshot_name: str | None = None

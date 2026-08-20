@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
-from import_orchestrator.models import ImportStatus, OCIReference, PipelineRunStatus
+from import_orchestrator.models import ImportItem, ImportStatus, PipelineRunStatus
 
 
 class TestImportStatus:
@@ -34,23 +34,23 @@ class TestImportStatus:
             assert ImportStatus(status.value) is status
 
 
-class TestOCIReference:
+class TestImportItem:
     def test_defaults(self):
-        ref = OCIReference(id=1, oci_ref="quay.io/repo:tag@sha256:abc", status=ImportStatus.PENDING)
-        assert ref.pipelinerun_name is None
-        assert ref.triggered_at is None
-        assert ref.completed_at is None
-        assert ref.last_checked_at is None
-        assert ref.error_message is None
-        assert ref.retry_count == 0
+        item = ImportItem(id=1, ref="quay.io/repo:tag@sha256:abc", status=ImportStatus.PENDING)
+        assert item.pipelinerun_name is None
+        assert item.triggered_at is None
+        assert item.completed_at is None
+        assert item.last_checked_at is None
+        assert item.error_message is None
+        assert item.retry_count == 0
 
     def test_all_fields(self):
         from datetime import datetime
 
         now = datetime.now()
-        ref = OCIReference(
+        item = ImportItem(
             id=42,
-            oci_ref="quay.io/repo:tag@sha256:abc",
+            ref="quay.io/repo:tag@sha256:abc",
             status=ImportStatus.RUNNING,
             pipelinerun_name="pnc-import-abc",
             triggered_at=now,
@@ -59,9 +59,9 @@ class TestOCIReference:
             error_message=None,
             retry_count=2,
         )
-        assert ref.id == 42
-        assert ref.retry_count == 2
-        assert ref.pipelinerun_name == "pnc-import-abc"
+        assert item.id == 42
+        assert item.retry_count == 2
+        assert item.pipelinerun_name == "pnc-import-abc"
 
 
 class TestPipelineRunStatus:

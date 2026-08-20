@@ -39,11 +39,11 @@ class IngestResult:
         return self.total - self.newly_added
 
 
-class OciIngest:
-    """Ingests OCI references from external sources into the import database.
+class Ingest:
+    """Ingests items from external sources into the import database.
 
     Handles deduplication and provides counts of what was ingested.
-    This is the single entry point for getting OCI references into
+    This is the single entry point for getting items into
     the system, regardless of the data source.
     """
 
@@ -100,49 +100,6 @@ class OciIngest:
             return IngestResult(total=0, newly_added=0)
         return self.from_lines(refs)
 
-    def from_manifest(self, manifest_path: Path) -> IngestResult:
-        """Ingest OCI references from a consolidated build manifest (YAML).
-
-        Each library entry is expected to have ``output.artifact.tag`` and/or
-        ``output.artifact.digest``.  When both are present the tag and digest are
-        combined into a ``repo:tag@sha256:hex`` reference so the destination image
-        gets a meaningful tag.  When only a digest is present it is used as-is.
-
-        Args:
-            manifest_path: Path to the consolidated YAML manifest.
-
-        Returns:
-            IngestResult with counts of total valid references and newly_added ones.
-        """
-        import yaml  # already a project dependency
-
-        data = yaml.safe_load(manifest_path.read_text())
-        refs: list[str] = []
-        for lib in data.get("libraries", []):
-            artifact = lib.get("output", {}).get("artifact", {})
-            tag_ref = artifact.get("tag", "")
-            digest_ref = artifact.get("digest", "")
-
-            if tag_ref and digest_ref:
-                if "@" not in digest_ref:
-                    raise ValueError(f"Malformed digest reference (missing '@'): {digest_ref}")
-                digest_suffix = digest_ref.split("@", 1)[1]
-                ref = f"{tag_ref}@{digest_suffix}"
-            elif digest_ref:
-                ref = digest_ref
-            elif tag_ref:
-                ref = tag_ref
-            else:
-                continue
-
-            refs.append(ref)
-
-        if not refs:
-            print("WARNING: No OCI references found in manifest", file=sys.stderr)
-            return IngestResult(total=0, newly_added=0)
-
-        return self.from_lines(refs)
-
     def from_lines(self, lines: Iterable[str]) -> IngestResult:
         """Ingest OCI references from an iterable of strings.
 
@@ -158,8 +115,8 @@ class OciIngest:
         valid_refs = [line.strip() for line in lines if self._is_valid_reference(line)]
 
         newly_added = 0
-        for oci_ref in valid_refs:
-            _, was_inserted = self.db.add_oci_reference(oci_ref)
+        for ref in valid_refs:
+            _, was_inserted = self.db.add_item(ref)
             if was_inserted:
                 newly_added += 1
 
