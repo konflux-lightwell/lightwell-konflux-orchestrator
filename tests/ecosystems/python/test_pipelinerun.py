@@ -81,6 +81,13 @@ class TestBuildManifest:
         assert labels["appstudio.openshift.io/component"] == "remediated-build"
         assert labels["pipelines.appstudio.openshift.io/type"] == "build"
 
+    def test_lightwell_package_labels(self):
+        # Package identity is carried in Lightwell-namespaced labels so builds
+        # can be queried/filtered by package and version.
+        labels = _manifest()["metadata"]["labels"]
+        assert labels["lightwell.redhat.com/package"] == "ntplib"
+        assert labels["lightwell.redhat.com/version"] == "0.4.0"
+
     def test_params_are_derived(self):
         params = {p["name"]: p["value"] for p in _manifest()["spec"]["params"]}
         assert params["PACKAGE"] == "ntplib"

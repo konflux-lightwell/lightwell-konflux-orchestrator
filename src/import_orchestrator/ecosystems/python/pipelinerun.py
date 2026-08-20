@@ -77,6 +77,9 @@ def build_pipelinerun_manifest(
                 "appstudio.openshift.io/application": application,
                 "appstudio.openshift.io/component": component,
                 "pipelines.appstudio.openshift.io/type": "build",
+                # Package identity, so builds can be queried/filtered by package.
+                "lightwell.redhat.com/package": package,
+                "lightwell.redhat.com/version": version,
             },
         },
         "spec": spec,
