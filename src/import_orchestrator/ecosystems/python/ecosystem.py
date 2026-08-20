@@ -47,6 +47,7 @@ class PythonEcosystem:
             prefix=self.pipelinerun_prefix,
             repo_base=config.LIGHTWELL_BUILDS_REPO_BASE,
             image_repo_base=config.IMAGE_REPO_BASE,
+            git_auth_secret=config.GIT_AUTH_SECRET,
         )
 
     def register_cli(self, subparsers: argparse._SubParsersAction) -> None:

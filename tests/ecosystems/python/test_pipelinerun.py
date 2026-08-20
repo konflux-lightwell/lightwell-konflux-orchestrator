@@ -53,6 +53,7 @@ def _manifest(**overrides):
         prefix="python-remediated-build-",
         repo_base="https://gitlab.cee.redhat.com/lightwell/lightwell-builds",
         image_repo_base="quay.io/redhat-user-workloads/lightwell-python-tenant",
+        git_auth_secret="lightwell-builds-git-auth",
     )
     kwargs.update(overrides)
     return build_pipelinerun_manifest(**kwargs)
@@ -101,3 +102,10 @@ class TestBuildManifest:
 
     def test_pipeline_spec_embedded(self):
         assert _manifest()["spec"]["pipelineSpec"] == {"tasks": []}
+
+    def test_git_auth_workspace_bound_to_secret(self):
+        # The clone task authenticates via the git-auth workspace, backed by a secret.
+        workspaces = _manifest()["spec"]["workspaces"]
+        assert workspaces == [
+            {"name": "git-auth", "secret": {"secretName": "lightwell-builds-git-auth"}},
+        ]

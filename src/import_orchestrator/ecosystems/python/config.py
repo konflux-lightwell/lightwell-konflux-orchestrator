@@ -42,6 +42,10 @@ LIGHTWELL_BUILDS_REPO_BASE = "https://gitlab.cee.redhat.com/lightwell/lightwell-
 # "<image_repo_base>/<package>:<version>".
 IMAGE_REPO_BASE = "quay.io/redhat-user-workloads/lightwell-python-tenant"
 
+# Secret bound to the git-auth workspace. The clone task uses it to authenticate
+# against the lightwell-builds git repositories.
+GIT_AUTH_SECRET = "lightwell-builds-git-auth"
+
 
 def pipeline_definition_path() -> Path:
     """Return the path to the python-remediated-build pipeline definition.
