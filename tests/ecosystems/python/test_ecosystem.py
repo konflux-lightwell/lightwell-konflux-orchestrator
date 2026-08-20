@@ -50,6 +50,20 @@ def test_build_pipelinerun_from_ref(monkeypatch, tmp_path):
     assert params["VERSION"] == "0.4.0"
 
 
+def test_build_pipelinerun_uses_default_target_labels(monkeypatch, tmp_path):
+    pipeline_file = tmp_path / "tekton" / "pipelines" / "python-remediated-build" / "python-remediated-build.yaml"
+    pipeline_file.parent.mkdir(parents=True)
+    pipeline_file.write_text("spec:\n  tasks: []\n")
+    monkeypatch.setenv("TEKTON_PIPELINE_DIR", str(tmp_path / "tekton"))
+
+    # No target on args -> DEFAULT_TARGET (REMEDIATED) supplies the labels.
+    manifest = PythonEcosystem().build_pipelinerun("ntplib==0.4.0", argparse.Namespace())
+
+    labels = manifest["metadata"]["labels"]
+    assert labels["appstudio.openshift.io/application"] == "remediated-build"
+    assert labels["appstudio.openshift.io/component"] == "remediated-build"
+
+
 def test_build_pipelinerun_rejects_malformed_ref(tmp_path, monkeypatch):
     monkeypatch.setenv("TEKTON_PIPELINE_DIR", str(tmp_path))
     with pytest.raises(TriggerError):

@@ -33,13 +33,16 @@ class PythonEcosystem:
 
     def build_pipelinerun(self, ref: str, args: argparse.Namespace) -> dict:
         package, version = parse_ref(ref)
+        target = getattr(args, "target", config.DEFAULT_TARGET)
+        cfg = config.TARGET_CONFIGS[target]
         pipeline_spec = load_pipeline(config.pipeline_definition_path())
         return build_pipelinerun_manifest(
             package=package,
             version=version,
             pipeline_spec=pipeline_spec,
             namespace=self.namespace,
-            application=config.APPLICATION,
+            application=cfg["app"],
+            component=cfg["component"],
             service_account=config.SERVICE_ACCOUNT,
             prefix=self.pipelinerun_prefix,
             repo_base=config.LIGHTWELL_BUILDS_REPO_BASE,

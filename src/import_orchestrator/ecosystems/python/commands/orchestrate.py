@@ -17,6 +17,7 @@ limitations under the License.
 from __future__ import annotations
 
 import argparse
+import os
 
 from import_orchestrator.commands.orchestrate import run_orchestrate
 from import_orchestrator.constants import (
@@ -25,6 +26,7 @@ from import_orchestrator.constants import (
     DEFAULT_POLL_INTERVAL,
 )
 from import_orchestrator.ecosystems.base import Ecosystem
+from import_orchestrator.ecosystems.python import config
 
 _EMPTY_DB_WARNING = "No package references in database. Run 'import-orchestrator python import-file' first."
 
@@ -56,6 +58,13 @@ def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> No
         type=int,
         default=DEFAULT_MAX_RETRIES,
         help=f"Max retry attempts for failed imports (default: {DEFAULT_MAX_RETRIES})",
+    )
+
+    parser.add_argument(
+        "--target",
+        choices=list(config.TARGET_CONFIGS),
+        default=os.environ.get("LIGHTWELL_PYTHON_TARGET", config.DEFAULT_TARGET),
+        help=f"Build target (default: {config.DEFAULT_TARGET}, or LIGHTWELL_PYTHON_TARGET env var)",
     )
 
     parser.set_defaults(func=run, ecosystem=ecosystem)

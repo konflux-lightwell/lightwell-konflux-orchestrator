@@ -48,7 +48,8 @@ def _manifest(**overrides):
         version="0.4.0",
         pipeline_spec={"tasks": []},
         namespace="lightwell-python-tenant",
-        application="python-remediated-build",
+        application="remediated-build",
+        component="remediated-build",
         prefix="python-remediated-build-",
         repo_base="https://gitlab.cee.redhat.com/lightwell/lightwell-builds",
         image_repo_base="quay.io/redhat-user-workloads/lightwell-python-tenant",
@@ -74,10 +75,10 @@ class TestBuildManifest:
         manifest = _manifest(service_account="build-pipeline-python-remediated-build")
         assert manifest["spec"]["taskRunTemplate"]["serviceAccountName"] == "build-pipeline-python-remediated-build"
 
-    def test_component_label_is_package(self):
+    def test_application_and_component_labels(self):
         labels = _manifest()["metadata"]["labels"]
-        assert labels["appstudio.openshift.io/application"] == "python-remediated-build"
-        assert labels["appstudio.openshift.io/component"] == "ntplib"
+        assert labels["appstudio.openshift.io/application"] == "remediated-build"
+        assert labels["appstudio.openshift.io/component"] == "remediated-build"
         assert labels["pipelines.appstudio.openshift.io/type"] == "build"
 
     def test_params_are_derived(self):

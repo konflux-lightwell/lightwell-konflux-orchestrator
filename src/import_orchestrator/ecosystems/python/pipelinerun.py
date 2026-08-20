@@ -41,6 +41,7 @@ def build_pipelinerun_manifest(
     pipeline_spec: dict[str, Any],
     namespace: str,
     application: str,
+    component: str,
     prefix: str,
     repo_base: str,
     image_repo_base: str,
@@ -74,7 +75,7 @@ def build_pipelinerun_manifest(
             "namespace": namespace,
             "labels": {
                 "appstudio.openshift.io/application": application,
-                "appstudio.openshift.io/component": package,
+                "appstudio.openshift.io/component": component,
                 "pipelines.appstudio.openshift.io/type": "build",
             },
         },
