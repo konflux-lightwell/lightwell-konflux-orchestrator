@@ -44,6 +44,17 @@ class TestTriggerArgParsing:
         args = parser.parse_args(["python", "trigger", "ntplib==0.4.0"])
         assert args.ecosystem.name == "python"
 
+    def test_target_default(self, monkeypatch):
+        monkeypatch.delenv("LIGHTWELL_PYTHON_TARGET", raising=False)
+        parser = make_parser()
+        args = parser.parse_args(["python", "trigger", "ntplib==0.4.0"])
+        assert args.target == "REMEDIATED"
+
+    def test_invalid_target_rejected(self):
+        parser = make_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(["python", "trigger", "--target", "NOPE", "ntplib==0.4.0"])
+
 
 def _args(**overrides):
     base = dict(ref="ntplib==0.4.0", ecosystem=MagicMock())

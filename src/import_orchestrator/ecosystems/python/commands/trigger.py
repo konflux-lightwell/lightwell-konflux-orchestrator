@@ -17,9 +17,11 @@ limitations under the License.
 from __future__ import annotations
 
 import argparse
+import os
 
 from import_orchestrator.commands.trigger import run_trigger
 from import_orchestrator.ecosystems.base import Ecosystem
+from import_orchestrator.ecosystems.python import config
 
 
 def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> None:
@@ -36,6 +38,12 @@ def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> No
     parser.add_argument(
         "ref",
         help="Package reference to build, in the form package==version (e.g. ntplib==0.4.0)",
+    )
+    parser.add_argument(
+        "--target",
+        choices=list(config.TARGET_CONFIGS),
+        default=os.environ.get("LIGHTWELL_PYTHON_TARGET", config.DEFAULT_TARGET),
+        help=f"Build target (default: {config.DEFAULT_TARGET}, or LIGHTWELL_PYTHON_TARGET env var)",
     )
 
     parser.set_defaults(func=run, ecosystem=ecosystem)

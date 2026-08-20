@@ -38,6 +38,12 @@ class TestOrchestrateArgParsing:
         args = parser.parse_args(["python", "orchestrate"])
         assert not hasattr(args, "artifact_type")
 
+    def test_target_default(self, monkeypatch):
+        monkeypatch.delenv("LIGHTWELL_PYTHON_TARGET", raising=False)
+        parser = make_parser()
+        args = parser.parse_args(["python", "orchestrate"])
+        assert args.target == "REMEDIATED"
+
 
 class TestOrchestrateEmptyDbWarning:
     def test_empty_database_prints_python_warning(self, monkeypatch, tmp_path: Path, capsys):
