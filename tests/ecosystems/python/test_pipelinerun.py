@@ -97,8 +97,16 @@ class TestBuildManifest:
         assert params["LIGHTWELL_BUILDS_REPO_URL"] == (
             "https://gitlab.cee.redhat.com/lightwell/lightwell-builds/pypi.org-ntplib"
         )
-        assert params["IMAGE"] == "quay.io/redhat-user-workloads/lightwell-python-tenant/ntplib:0.4.0"
-        assert params["ociStorage"] == "quay.io/redhat-user-workloads/lightwell-python-tenant/ntplib:0.4.0.src"
+        # Built wheels push to the Konflux component repo (<app>/<component>),
+        # which is what the build service account has push rights to; the
+        # package/version is encoded in the tag.
+        assert (
+            params["IMAGE"]
+            == "quay.io/redhat-user-workloads/lightwell-python-tenant/remediated-build/remediated-build:ntplib-0.4.0"
+        )
+        assert params["ociStorage"] == (
+            "quay.io/redhat-user-workloads/lightwell-python-tenant/remediated-build/remediated-build:ntplib-0.4.0.src"
+        )
 
     def test_pipeline_spec_embedded(self):
         assert _manifest()["spec"]["pipelineSpec"] == {"tasks": []}

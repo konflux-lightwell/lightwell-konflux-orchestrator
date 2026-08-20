@@ -56,7 +56,10 @@ def build_pipelinerun_manifest(
     When ``service_account`` is None, no ``taskRunTemplate`` is emitted and the
     cluster's default service account applies.
     """
-    image = f"{image_repo_base}/{package}:{version}"
+    # Push to the Konflux component repository (<tenant>/<application>/<component>),
+    # which is the only repo the build service account can push to. The package and
+    # version are encoded in the tag rather than a per-package repo.
+    image = f"{image_repo_base}/{application}/{component}:{package}-{version}"
     spec: dict[str, Any] = {
         "pipelineSpec": pipeline_spec,
         "params": [
