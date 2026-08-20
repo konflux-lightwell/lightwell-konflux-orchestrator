@@ -45,9 +45,13 @@ def build_pipelinerun_manifest(
     prefix: str,
     repo_base: str,
     image_repo_base: str,
+    git_auth_secret: str,
     service_account: str | None = None,
 ) -> dict[str, Any]:
     """Build a python-remediated-build PipelineRun manifest for one package/version.
+
+    ``git_auth_secret`` names the secret bound to the ``git-auth`` workspace,
+    which the clone task uses to authenticate against the lightwell-builds repo.
 
     When ``service_account`` is None, no ``taskRunTemplate`` is emitted and the
     cluster's default service account applies.
@@ -62,6 +66,9 @@ def build_pipelinerun_manifest(
             {"name": "LIGHTWELL_BUILDS_TAG", "value": f"{package}/{version}"},
             {"name": "IMAGE", "value": image},
             {"name": "ociStorage", "value": f"{image}.src"},
+        ],
+        "workspaces": [
+            {"name": "git-auth", "secret": {"secretName": git_auth_secret}},
         ],
     }
     if service_account:

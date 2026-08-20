@@ -91,6 +91,13 @@ spec:
       type: string
       default: ca-bundle.crt
 
+  workspaces:
+    - name: git-auth
+      description: >-
+        Basic-auth credentials for cloning the lightwell-builds git repository.
+        Bound to a secret by the PipelineRun.
+      optional: true
+
   results:
     - name: IMAGE_URL
       description: OCI artifact repository and tag where the wheels were pushed.
@@ -137,6 +144,9 @@ spec:
           value: $(params.caTrustConfigMapName)
         - name: caTrustConfigMapKey
           value: $(params.caTrustConfigMapKey)
+      workspaces:
+        - name: basic-auth
+          workspace: git-auth
 
     # ── Step 2: git archive source/ → pre-placed sdist → Trusted Artifact ────
     - name: source-to-sdist
