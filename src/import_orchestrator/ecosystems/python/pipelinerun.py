@@ -41,13 +41,31 @@ def build_pipelinerun_manifest(
     pipeline_spec: dict[str, Any],
     namespace: str,
     application: str,
-    service_account: str,
     prefix: str,
     repo_base: str,
     image_repo_base: str,
+    service_account: str | None = None,
 ) -> dict[str, Any]:
-    """Build a python-remediated-build PipelineRun manifest for one package/version."""
+    """Build a python-remediated-build PipelineRun manifest for one package/version.
+
+    When ``service_account`` is None, no ``taskRunTemplate`` is emitted and the
+    cluster's default service account applies.
+    """
     image = f"{image_repo_base}/{package}:{version}"
+    spec: dict[str, Any] = {
+        "pipelineSpec": pipeline_spec,
+        "params": [
+            {"name": "PACKAGE", "value": package},
+            {"name": "VERSION", "value": version},
+            {"name": "LIGHTWELL_BUILDS_REPO_URL", "value": f"{repo_base}/pypi.org-{package}"},
+            {"name": "LIGHTWELL_BUILDS_TAG", "value": f"{package}/{version}"},
+            {"name": "IMAGE", "value": image},
+            {"name": "ociStorage", "value": f"{image}.src"},
+        ],
+    }
+    if service_account:
+        spec["taskRunTemplate"] = {"serviceAccountName": service_account}
+
     return {
         "apiVersion": "tekton.dev/v1",
         "kind": "PipelineRun",
@@ -60,16 +78,5 @@ def build_pipelinerun_manifest(
                 "pipelines.appstudio.openshift.io/type": "build",
             },
         },
-        "spec": {
-            "taskRunTemplate": {"serviceAccountName": service_account},
-            "pipelineSpec": pipeline_spec,
-            "params": [
-                {"name": "PACKAGE", "value": package},
-                {"name": "VERSION", "value": version},
-                {"name": "LIGHTWELL_BUILDS_REPO_URL", "value": f"{repo_base}/pypi.org-{package}"},
-                {"name": "LIGHTWELL_BUILDS_TAG", "value": f"{package}/{version}"},
-                {"name": "IMAGE", "value": image},
-                {"name": "ociStorage", "value": f"{image}.src"},
-            ],
-        },
+        "spec": spec,
     }

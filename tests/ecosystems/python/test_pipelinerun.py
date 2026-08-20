@@ -42,18 +42,19 @@ class TestParseRef:
             parse_ref("ntplib==")
 
 
-def _manifest():
-    return build_pipelinerun_manifest(
+def _manifest(**overrides):
+    kwargs = dict(
         package="ntplib",
         version="0.4.0",
         pipeline_spec={"tasks": []},
         namespace="lightwell-python-tenant",
         application="python-remediated-build",
-        service_account="build-pipeline-python-remediated-build",
         prefix="python-remediated-build-",
         repo_base="https://gitlab.cee.redhat.com/lightwell/lightwell-builds",
         image_repo_base="quay.io/redhat-user-workloads/lightwell-python-tenant",
     )
+    kwargs.update(overrides)
+    return build_pipelinerun_manifest(**kwargs)
 
 
 class TestBuildManifest:
@@ -62,9 +63,15 @@ class TestBuildManifest:
         assert manifest["kind"] == "PipelineRun"
         assert manifest["metadata"]["generateName"] == "python-remediated-build-"
 
-    def test_namespace_and_service_account(self):
-        manifest = _manifest()
-        assert manifest["metadata"]["namespace"] == "lightwell-python-tenant"
+    def test_namespace(self):
+        assert _manifest()["metadata"]["namespace"] == "lightwell-python-tenant"
+
+    def test_service_account_omitted_by_default(self):
+        # No service account -> no taskRunTemplate, so the cluster default applies.
+        assert "taskRunTemplate" not in _manifest()["spec"]
+
+    def test_service_account_included_when_provided(self):
+        manifest = _manifest(service_account="build-pipeline-python-remediated-build")
         assert manifest["spec"]["taskRunTemplate"]["serviceAccountName"] == "build-pipeline-python-remediated-build"
 
     def test_component_label_is_package(self):

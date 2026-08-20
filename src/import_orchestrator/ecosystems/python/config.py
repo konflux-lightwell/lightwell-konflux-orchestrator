@@ -26,7 +26,7 @@ PIPELINERUN_PREFIX = "python-remediated-build-"
 # Konflux application/component and service account for the build pipeline.
 # TODO: confirm these against the cluster once the python tenant is provisioned.
 APPLICATION = "python-remediated-build"
-SERVICE_ACCOUNT = "build-pipeline-python-remediated-build"
+SERVICE_ACCOUNT = "build-pipeline-remediated-build"
 
 # Base of the per-package lightwell-builds source repositories. Each package
 # lives at "<repo_base>/pypi.org-<package>".
