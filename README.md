@@ -4,7 +4,7 @@ CLI tool for orchestrating batch import PipelineRuns across ecosystems with inte
 
 ## Overview
 
-This tool provides batch orchestration for importing builds into Konflux. Commands are grouped per ecosystem; the `java` ecosystem imports PNC (Project Newcastle) builds. It manages multiple concurrent imports with SQLite-based state persistence, monitors actual PipelineRun counts for intelligent throttling, and automatically retries transient failures.
+This tool orchestrates the release of Lightwell artifacts through Konflux. Commands are grouped per ecosystem (e.g. `java`, `python`), each encapsulating the logic for triggering Konflux PipelineRuns with intelligent throttling and automatic retry on transient failures.
 
 ## Ecosystems
 
@@ -46,7 +46,7 @@ pip install -e ".[dev]"
 
 ## Usage
 
-### Basic Commands
+### Java Ecosystem
 
 ```bash
 # Show help

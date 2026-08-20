@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import yaml
+
 
 def parse_manifest(manifest_path: Path) -> list[str]:
     """Parse a PNC consolidated build manifest and return a list of OCI refs.
@@ -36,8 +38,6 @@ def parse_manifest(manifest_path: Path) -> list[str]:
     Raises:
         ValueError: If a digest reference is malformed (missing '@').
     """
-    import yaml  # already a project dependency
-
     data = yaml.safe_load(manifest_path.read_text())
     refs: list[str] = []
     for lib in data.get("libraries", []):
