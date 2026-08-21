@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # Lint, unit tests, and security scans, driven by the existing tox envs.
+  checks:
+    name: ${{ matrix.toxenv }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        toxenv: [ruff, py311, bandit, pip-audit]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install tox
+      - run: tox -e ${{ matrix.toxenv }}
+
+  # Build the container image on every PR to catch Dockerfile breakage;
+  # publish only on merges to main.
+  container-build:
+    name: container-build
+    needs: [checks]
+    runs-on: ubuntu-latest
+    env:
+      IMAGE_REGISTRY: quay.io/light-castle/lightwell-konflux-orchestrator
+      PUBLISH: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Compute short SHA
+        id: vars
+        run: echo "sha_short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+      - name: Build image
+        id: build
+        uses: redhat-actions/buildah-build@9dc2ade9b5db229966b5025ae266311e12f349c4 # v2
+        with:
+          image: ${{ env.IMAGE_REGISTRY }}
+          tags: ${{ steps.vars.outputs.sha_short }} latest
+          containerfiles: ./Dockerfile
+          context: .
+      - name: Log in to Quay
+        if: env.PUBLISH == 'true'
+        uses: redhat-actions/podman-login@4934294ad0449894bcd1e9f191899d7292469603 # v1
+        with:
+          registry: quay.io
+          username: ${{ secrets.QUAY_USERNAME }}
+          password: ${{ secrets.QUAY_TOKEN }}
+      - name: Push image
+        if: env.PUBLISH == 'true'
+        uses: redhat-actions/push-to-registry@5860fc963bf8f2b3221773a023141612f010c469 # v2
+        with:
+          image: ${{ steps.build.outputs.image }}
+          tags: ${{ steps.build.outputs.tags }}
+          registry: quay.io
