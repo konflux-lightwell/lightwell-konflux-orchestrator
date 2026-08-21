@@ -18,8 +18,8 @@ jobs:
       matrix:
         toxenv: [ruff, py311, bandit, pip-audit]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.11"
           cache: pip
@@ -36,24 +36,29 @@ jobs:
       IMAGE_REGISTRY: quay.io/light-castle/lightwell-konflux-orchestrator
       PUBLISH: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Compute short SHA
         id: vars
         run: echo "sha_short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
-      - uses: docker/setup-buildx-action@v3
+      - name: Build image
+        id: build
+        uses: redhat-actions/buildah-build@9dc2ade9b5db229966b5025ae266311e12f349c4 # v2
+        with:
+          image: ${{ env.IMAGE_REGISTRY }}
+          tags: ${{ steps.vars.outputs.sha_short }} latest
+          containerfiles: ./Dockerfile
+          context: .
       - name: Log in to Quay
         if: env.PUBLISH == 'true'
-        uses: docker/login-action@v3
+        uses: redhat-actions/podman-login@4934294ad0449894bcd1e9f191899d7292469603 # v1
         with:
           registry: quay.io
           username: ${{ secrets.QUAY_USERNAME }}
           password: ${{ secrets.QUAY_TOKEN }}
-      - name: Build and push
-        uses: docker/build-push-action@v6
+      - name: Push image
+        if: env.PUBLISH == 'true'
+        uses: redhat-actions/push-to-registry@5860fc963bf8f2b3221773a023141612f010c469 # v2
         with:
-          context: .
-          file: ./Dockerfile
-          push: ${{ env.PUBLISH == 'true' }}
-          tags: |
-            ${{ env.IMAGE_REGISTRY }}:${{ steps.vars.outputs.sha_short }}
-            ${{ env.IMAGE_REGISTRY }}:latest
+          image: ${{ steps.build.outputs.image }}
+          tags: ${{ steps.build.outputs.tags }}
+          registry: quay.io
