@@ -52,10 +52,10 @@ class TestOrchestrateEmptyDbWarning:
             ["prog", "--db", str(tmp_path / "test.db"), "python", "orchestrate"],
         )
 
-        with patch.object(
-            __import__("import_orchestrator.engine.orchestrator", fromlist=["ImportOrchestrator"]).ImportOrchestrator,
-            "run_until_complete",
-            return_value=0,
+        orchestrator_mod = __import__("import_orchestrator.engine.orchestrator", fromlist=["ImportOrchestrator"])
+        with (
+            patch("import_orchestrator.commands.orchestrate.KubeClient"),
+            patch.object(orchestrator_mod.ImportOrchestrator, "run_until_complete", return_value=0),
         ):
             exit_code = main()
 
