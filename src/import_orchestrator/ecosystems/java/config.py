@@ -37,6 +37,12 @@ ARTIFACT_CONFIGS: dict[str, dict[str, str]] = {
         "source_repo": "quay.io/light-castle/secure-pnc",
         "dest_repo": "quay.io/redhat-user-workloads/lightwell-poc-tenant/pnc-import-remediated/pnc-import-remediated",
     },
+    "NOVEL": {
+        "app": "pnc-import-novel",
+        "service_account": "build-pipeline-pnc-import-novel",
+        "source_repo": "quay.io/light-castle/secure-pnc",
+        "dest_repo": "quay.io/redhat-user-workloads/lightwell-poc-tenant/pnc-import-novel/pnc-import-novel",
+    },
     "STAGE": {
         "app": "pnc-import-stage",
         "service_account": "build-pipeline-pnc-import-stage",
