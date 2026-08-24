@@ -41,7 +41,7 @@ def test_verification_public_key_secret():
 
 
 def test_artifact_configs_has_required_keys():
-    assert set(ARTIFACT_CONFIGS.keys()) == {"REBUILD", "REMEDIATED", "STAGE"}
+    assert set(ARTIFACT_CONFIGS.keys()) == {"REBUILD", "REMEDIATED", "NOVEL", "STAGE"}
 
 
 def test_artifact_configs_entries_have_required_fields():

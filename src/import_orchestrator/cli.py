@@ -35,7 +35,7 @@ def make_parser() -> argparse.ArgumentParser:
         Environment Variables:
           QUAY_TOKEN                Required for fetch
           KONFLUX_TOKEN or KUBECONFIG  Required for cluster auth
-          LIGHTWELL_ARTIFACT_TYPE   STAGE, REBUILD or REMEDIATED (default: STAGE)
+          LIGHTWELL_ARTIFACT_TYPE   STAGE, REBUILD, REMEDIATED or NOVEL (default: STAGE)
           TEKTON_PIPELINE_DIR   Path to the pipeline definitions (defaults to {repo_root}/tekton)
 
         Examples:
