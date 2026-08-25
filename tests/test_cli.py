@@ -109,6 +109,12 @@ class TestParserOrchestrate:
         args = parser.parse_args(["java", "orchestrate", "--artifact-type", "REBUILD"])
         assert args.artifact_type == "REBUILD"
 
+    def test_artifact_type_novel(self, monkeypatch):
+        monkeypatch.delenv("LIGHTWELL_ARTIFACT_TYPE", raising=False)
+        parser = make_parser()
+        args = parser.parse_args(["java", "orchestrate", "--artifact-type", "NOVEL"])
+        assert args.artifact_type == "NOVEL"
+
     def test_artifact_type_from_env_var(self, monkeypatch):
         monkeypatch.setenv("LIGHTWELL_ARTIFACT_TYPE", "REMEDIATED")
         parser = make_parser()

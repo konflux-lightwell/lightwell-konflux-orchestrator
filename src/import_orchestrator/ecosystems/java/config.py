@@ -37,6 +37,17 @@ ARTIFACT_CONFIGS: dict[str, dict[str, str]] = {
         "source_repo": "quay.io/light-castle/secure-pnc",
         "dest_repo": "quay.io/redhat-user-workloads/lightwell-poc-tenant/pnc-import-remediated/pnc-import-remediated",
     },
+    # Novel (predisclosure) fixes. Built by the same secure PNC path (source is
+    # secure-pnc, same as REMEDIATED), but imported into a distinct Konflux
+    # Application so the novel ReleasePlan/ReleasePlanAdmission route them to the
+    # novel Pulp repos (java-novel-landing / osv-java-novel). See
+    # releng/konflux-release-data ReleasePlanAdmission pnc-import-java-pulp-novel-prod.
+    "NOVEL": {
+        "app": "pnc-import-novel",
+        "service_account": "build-pipeline-pnc-import-novel",
+        "source_repo": "quay.io/light-castle/secure-pnc",
+        "dest_repo": "quay.io/redhat-user-workloads/lightwell-poc-tenant/pnc-import-novel/pnc-import-novel",
+    },
     "STAGE": {
         "app": "pnc-import-stage",
         "service_account": "build-pipeline-pnc-import-stage",

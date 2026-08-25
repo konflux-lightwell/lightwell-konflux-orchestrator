@@ -41,7 +41,16 @@ def test_verification_public_key_secret():
 
 
 def test_artifact_configs_has_required_keys():
-    assert set(ARTIFACT_CONFIGS.keys()) == {"REBUILD", "REMEDIATED", "STAGE"}
+    assert set(ARTIFACT_CONFIGS.keys()) == {"REBUILD", "REMEDIATED", "NOVEL", "STAGE"}
+
+
+def test_novel_artifact_config_routes_to_novel_application():
+    novel = ARTIFACT_CONFIGS["NOVEL"]
+    assert novel["app"] == "pnc-import-novel"
+    assert novel["service_account"] == "build-pipeline-pnc-import-novel"
+    # Novel builds share the secure PNC source registry with REMEDIATED.
+    assert novel["source_repo"] == "quay.io/light-castle/secure-pnc"
+    assert novel["dest_repo"].endswith("/pnc-import-novel/pnc-import-novel")
 
 
 def test_artifact_configs_entries_have_required_fields():
