@@ -1,0 +1,49 @@
+name: Policy Bundle
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "policy/**"
+      - "hack/push-policy-bundle.sh"
+  pull_request:
+    paths:
+      - "policy/**"
+      - "hack/push-policy-bundle.sh"
+
+permissions:
+  contents: read
+
+env:
+  IMAGE_REGISTRY: quay.io
+  IMAGE_NAME: light-castle/ec-policy
+  ORAS_VERSION: "1.2.2"
+
+jobs:
+  push-policy-bundle:
+    name: push-policy-bundle
+    runs-on: ubuntu-latest
+    env:
+      PUBLISH: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install oras
+        run: |
+          curl -sLO "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_linux_amd64.tar.gz"
+          tar -zxf "oras_${ORAS_VERSION}_linux_amd64.tar.gz" oras
+          sudo mv oras /usr/local/bin/
+          rm "oras_${ORAS_VERSION}_linux_amd64.tar.gz"
+          oras version
+
+      - name: Log in to Quay
+        if: env.PUBLISH == 'true'
+        run: oras login "${{ env.IMAGE_REGISTRY }}" -u "${{ secrets.QUAY_USERNAME }}" -p "${{ secrets.QUAY_TOKEN }}"
+
+      - name: Compute short SHA
+        id: vars
+        run: echo "sha_short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Push policy bundle
+        if: env.PUBLISH == 'true'
+        run: ./hack/push-policy-bundle.sh "${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.sha_short }}" latest

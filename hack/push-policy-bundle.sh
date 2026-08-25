@@ -2,11 +2,11 @@
 # Push the Rego policy directory as an OCI artifact.
 #
 # Usage:
-#   ./hack/push-policy-bundle.sh [<image-ref>]
+#   ./hack/push-policy-bundle.sh [<image-ref> [<extra-tag>...]]
 #
 # Examples:
 #   ./hack/push-policy-bundle.sh quay.io/light-castle/ec-policy:latest
-#   ./hack/push-policy-bundle.sh quay.io/light-castle/ec-policy:$(git rev-parse --short HEAD)
+#   ./hack/push-policy-bundle.sh quay.io/light-castle/ec-policy:$(git rev-parse --short HEAD) latest
 #
 # Prerequisites:
 #   - oras CLI (https://oras.land)
@@ -23,6 +23,8 @@ POLICY_DIR="${REPO_ROOT}/policy"
 
 DEFAULT_IMAGE="quay.io/light-castle/ec-policy:latest"
 IMAGE="${1:-${DEFAULT_IMAGE}}"
+shift || true
+EXTRA_TAGS=("$@")
 
 if ! command -v oras &>/dev/null; then
   echo "ERROR: oras not found. Install from https://oras.land/docs/installation" >&2
@@ -36,8 +38,14 @@ echo ""
 cd "${REPO_ROOT}"
 oras push "${IMAGE}" \
   --annotation "org.opencontainers.image.revision=$(git rev-parse HEAD 2>/dev/null || echo 'unknown')" \
-  --annotation "org.opencontainers.image.source=https://gitlab.cee.redhat.com/lightwell/konflux-definitions/pnc-import-orchestrator" \
+  --annotation "org.opencontainers.image.source=https://github.com/konflux-lightwell/lightwell-konflux-orchestrator" \
   policy/
+
+REPO="${IMAGE%%:*}"
+for TAG in "${EXTRA_TAGS[@]+"${EXTRA_TAGS[@]}"}"; do
+  echo "Tagging ${REPO}:${TAG}"
+  oras tag "${IMAGE}" "${TAG}"
+done
 
 echo ""
 echo "Pushed. Pinned digest reference for ECP:"
