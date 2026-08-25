@@ -25,6 +25,7 @@ import rego.v1
 
 import data.lib.json as j
 import data.lib.metadata
+import data.lib.oci
 import data.lib.rule_data
 
 # ---------------------------------------------------------------------------
@@ -266,6 +267,174 @@ _allowed_distribution_targets := rule_data.get("oci_verify_import_allowed_distri
 _distribution_target_rule_data_errors contains error if {
 	some e in j.validate_schema(
 		rule_data.get("oci_verify_import_allowed_distribution_targets"),
+		_string_list_schema,
+	)
+	error := {"message": e.message, "severity": e.severity}
+}
+
+# ---------------------------------------------------------------------------
+# Content-class gate (novel vs backport)
+#
+# Derive a content class from the GAV index attached to the released image as an
+# OCI referrer, and deny if that class is not allowed on this release stream.
+# This keeps novel (predisclosure) content out of the remediated repo using data
+# we produce (gav-index.json `vulns[]`), independent of the distribution-target
+# annotation. Novel vs backport is decided by vuln-id prefix:
+#   any id with a configured novel prefix (e.g. "LW-")  -> novel
+#   else, vulns present but none novel                   -> backport
+#   else (no referrer / no vulns)                        -> deny (fail-closed)
+# ---------------------------------------------------------------------------
+
+# METADATA
+# title: GAV index referrer present
+# description: >-
+#   Verify a GAV index artifact is attached to the released image via the OCI
+#   Referrers API. Absence means we cannot classify the content, which is a
+#   policy violation (fail-closed).
+# custom:
+#   short_name: gav_index_referrer_present
+#   failure_msg: >-
+#     no GAV index referrer (artifactType %q) is attached to the released image
+#   collections:
+#     - lightwell
+deny contains result if {
+	_content_class_gate_enabled
+	count(_gav_index_referrers) == 0
+	result := metadata.result_helper(rego.metadata.chain(), [_gav_index_artifact_type])
+}
+
+# METADATA
+# title: Content class derivable
+# description: >-
+#   Confirm a content class (novel | backport) can be derived from the GAV
+#   index. A GAV index with no vulns cannot be classified (fail-closed).
+# custom:
+#   short_name: content_class_derivable
+#   failure_msg: >-
+#     could not derive a content class from the GAV index (no vulns to classify
+#     as novel vs backport)
+#   collections:
+#     - lightwell
+deny contains result if {
+	_content_class_gate_enabled
+	count(_gav_index_referrers) > 0
+	not _content_class
+	result := metadata.result_helper(rego.metadata.chain(), [])
+}
+
+# METADATA
+# title: Content class permitted
+# description: >-
+#   Verify the derived content class is allowed on this release stream. The
+#   remediated stream allows only "backport"; the novel stream allows only
+#   "novel". This is what keeps novel (predisclosure) content out of the
+#   remediated repo.
+# custom:
+#   short_name: content_class_permitted
+#   failure_msg: >-
+#     content class %q is not allowed on this release stream. Allowed: %v
+#   collections:
+#     - lightwell
+deny contains result if {
+	_content_class_gate_enabled
+	class := _content_class
+	not class in _allowed_content_classes
+	result := metadata.result_helper(rego.metadata.chain(), [class, _allowed_content_classes])
+}
+
+# METADATA
+# title: Content class ruleData provided
+# description: >-
+#   Confirm oci_verify_import_allowed_content_classes was provided in ruleData.
+# custom:
+#   short_name: content_class_rule_data_provided
+#   failure_msg: '%s'
+#   collections:
+#     - lightwell
+deny contains result if {
+	_content_class_gate_enabled
+	some e in _allowed_content_classes_rule_data_errors
+	result := metadata.result_helper_with_severity(rego.metadata.chain(), [e.message], e.severity)
+}
+
+# METADATA
+# title: Novel vuln-id prefixes ruleData provided
+# description: >-
+#   Confirm oci_verify_import_novel_vuln_id_prefixes was provided in ruleData.
+# custom:
+#   short_name: novel_vuln_id_prefixes_rule_data_provided
+#   failure_msg: '%s'
+#   collections:
+#     - lightwell
+deny contains result if {
+	_content_class_gate_enabled
+	some e in _novel_vuln_id_prefixes_rule_data_errors
+	result := metadata.result_helper_with_severity(rego.metadata.chain(), [e.message], e.severity)
+}
+
+# ---------------------------------------------------------------------------
+# Helpers — classify the build from its GAV index referrer
+# ---------------------------------------------------------------------------
+
+# The content-class gate is opt-in per release stream: it is active only when
+# the ECP provides oci_verify_import_allowed_content_classes. Streams with no
+# novel/backport distinction (e.g. validated/REBUILD) simply omit it and are
+# unaffected. When enabled, the gate is fail-closed (missing GAV index or
+# unclassifiable vulns are denied).
+_content_class_gate_enabled if count(_allowed_content_classes) > 0
+
+# The artifact type oci-verify-import uses when attaching the GAV index to the
+# mirrored image (see tekton/tasks/oci-verify-import/0.1/oci-verify-import.yaml).
+_gav_index_artifact_type := "application/vnd.redhat.gav-index-build+json"
+
+# GAV index referrers on the released image.
+_gav_index_referrers contains r if {
+	some r in ec.oci.image_referrers(input.image.ref)
+	r.artifactType == _gav_index_artifact_type
+}
+
+# All vuln ids across the GAV index referrer(s). doc.vulns may be absent on a
+# legacy index; `some v in doc.vulns` then contributes nothing (fail-closed).
+_gav_index_vulns contains v if {
+	some r in _gav_index_referrers
+	doc := oci.parsed_blob_from_image(r.ref)
+	some v in doc.vulns
+}
+
+_is_novel_vuln(v) if {
+	some prefix in _novel_vuln_id_prefixes
+	startswith(v, prefix)
+}
+
+_has_novel_vuln if {
+	some v in _gav_index_vulns
+	_is_novel_vuln(v)
+}
+
+# Content class: any novel id -> novel; else vulns present -> backport;
+# else undefined (caught by the content_class_derivable deny above).
+_content_class := "novel" if _has_novel_vuln
+
+_content_class := "backport" if {
+	not _has_novel_vuln
+	count(_gav_index_vulns) > 0
+}
+
+_allowed_content_classes := rule_data.get("oci_verify_import_allowed_content_classes")
+
+_novel_vuln_id_prefixes := rule_data.get("oci_verify_import_novel_vuln_id_prefixes")
+
+_allowed_content_classes_rule_data_errors contains error if {
+	some e in j.validate_schema(
+		rule_data.get("oci_verify_import_allowed_content_classes"),
+		_string_list_schema,
+	)
+	error := {"message": e.message, "severity": e.severity}
+}
+
+_novel_vuln_id_prefixes_rule_data_errors contains error if {
+	some e in j.validate_schema(
+		rule_data.get("oci_verify_import_novel_vuln_id_prefixes"),
 		_string_list_schema,
 	)
 	error := {"message": e.message, "severity": e.severity}

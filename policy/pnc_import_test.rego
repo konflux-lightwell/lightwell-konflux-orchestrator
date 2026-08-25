@@ -191,9 +191,7 @@ _mock_v02(source_image, key_fingerprint) := {"statement": {
 	"predicate": {
 		"buildType": "tekton.dev/v1/PipelineRun",
 		"invocation": {"parameters": {"SOURCE_IMAGE": source_image}},
-		"buildConfig": {"tasks": [{"name": "verify-and-mirror", "results": [
-			{"name": "VERIFICATION_KEY_FINGERPRINT", "value": key_fingerprint},
-		]}]},
+		"buildConfig": {"tasks": [{"name": "verify-and-mirror", "results": [{"name": "VERIFICATION_KEY_FINGERPRINT", "value": key_fingerprint}]}]},
 	},
 }}
 
@@ -213,13 +211,9 @@ _mock_v1(source_image, key_fingerprint) := {"statement": {
 	"predicate": {
 		"buildDefinition": {
 			"buildType": "https://tekton.dev/chains/v2/slsa-tekton",
-			"externalParameters": {"runSpec": {"params": [
-				{"name": "SOURCE_IMAGE", "value": source_image},
-			]}},
+			"externalParameters": {"runSpec": {"params": [{"name": "SOURCE_IMAGE", "value": source_image}]}},
 		},
-		"runDetails": {"byproducts": [
-			{"name": "pipelineRunResults/VERIFICATION_KEY_FINGERPRINT", "content": base64.encode(json.marshal(key_fingerprint))},
-		]},
+		"runDetails": {"byproducts": [{"name": "pipelineRunResults/VERIFICATION_KEY_FINGERPRINT", "content": base64.encode(json.marshal(key_fingerprint))}]},
 	},
 }}
 
@@ -232,3 +226,97 @@ _mock_manifest_validated(_) := {"annotations": {"dev.lightwell.distribution-targ
 _mock_manifest_remediated(_) := {"annotations": {"dev.lightwell.distribution-target": "remediated"}}
 
 _mock_manifest_no_annotation(_) := {"annotations": {}}
+
+# ---------------------------------------------------------------------------
+# Content-class gate (novel vs backport)
+#
+# These assert on specific deny CODES (presence/absence), so they don't need to
+# satisfy the unrelated source-registry / signing-key / distribution-target
+# rules — those may fire with other codes and are ignored here.
+# ---------------------------------------------------------------------------
+
+_gav_artifact_type := "application/vnd.redhat.gav-index-build+json"
+
+_referrer_ref := "quay.io/redhat-user-workloads/lightwell-poc-tenant/pnc-import/pnc-import@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+# ec.oci.* builtins are mocked with functions (matching the manifest mocks
+# above). parsed_blob_from_image(ref) walks image_manifest(ref).layers[0].digest
+# -> blob; we mock the manifest layer and the blob body (a JSON string).
+_mock_gav_referrers(_) := [{"artifactType": _gav_artifact_type, "ref": _referrer_ref}]
+
+_mock_no_referrers(_) := []
+
+_mock_gav_manifest(_) := {"layers": [{"digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]}
+
+_mock_blob_novel(_) := "{\"vulns\": [\"LW-2026-4259\"]}"
+
+_mock_blob_backport(_) := "{\"vulns\": [\"CVE-2021-37533\"]}"
+
+_mock_blob_mixed(_) := "{\"vulns\": [\"CVE-2025-48924\", \"LW-2026-0092\"]}"
+
+_allowed_backport := ["backport"]
+
+_allowed_novel := ["novel"]
+
+_novel_prefixes := ["LW-"]
+
+# novel build is rejected on the remediated stream
+test_novel_denied_in_remediated_stream if {
+	deny := pnc_import.deny with input.image.ref as _image_ref
+		with ec.oci.image_referrers as _mock_gav_referrers
+		with ec.oci.image_manifest as _mock_gav_manifest
+		with ec.oci.blob as _mock_blob_novel
+		with data.rule_data_custom.oci_verify_import_allowed_content_classes as _allowed_backport
+		with data.rule_data_custom.oci_verify_import_novel_vuln_id_prefixes as _novel_prefixes
+	some r in deny
+	r.code == "pnc_import.content_class_permitted"
+}
+
+# backport (CVE-only) build passes the content-class check on remediated
+test_backport_allowed_in_remediated_stream if {
+	deny := pnc_import.deny with input.image.ref as _image_ref
+		with ec.oci.image_referrers as _mock_gav_referrers
+		with ec.oci.image_manifest as _mock_gav_manifest
+		with ec.oci.blob as _mock_blob_backport
+		with data.rule_data_custom.oci_verify_import_allowed_content_classes as _allowed_backport
+		with data.rule_data_custom.oci_verify_import_novel_vuln_id_prefixes as _novel_prefixes
+	not _has_code(deny, "pnc_import.content_class_permitted")
+}
+
+# novel build passes on the novel stream
+test_novel_allowed_in_novel_stream if {
+	deny := pnc_import.deny with input.image.ref as _image_ref
+		with ec.oci.image_referrers as _mock_gav_referrers
+		with ec.oci.image_manifest as _mock_gav_manifest
+		with ec.oci.blob as _mock_blob_novel
+		with data.rule_data_custom.oci_verify_import_allowed_content_classes as _allowed_novel
+		with data.rule_data_custom.oci_verify_import_novel_vuln_id_prefixes as _novel_prefixes
+	not _has_code(deny, "pnc_import.content_class_permitted")
+}
+
+# mixed build (CVE + LW) classifies as novel -> rejected on remediated
+test_mixed_build_is_novel if {
+	deny := pnc_import.deny with input.image.ref as _image_ref
+		with ec.oci.image_referrers as _mock_gav_referrers
+		with ec.oci.image_manifest as _mock_gav_manifest
+		with ec.oci.blob as _mock_blob_mixed
+		with data.rule_data_custom.oci_verify_import_allowed_content_classes as _allowed_backport
+		with data.rule_data_custom.oci_verify_import_novel_vuln_id_prefixes as _novel_prefixes
+	some r in deny
+	r.code == "pnc_import.content_class_permitted"
+}
+
+# no gav-index referrer -> fail closed
+test_missing_gav_index_denied if {
+	deny := pnc_import.deny with input.image.ref as _image_ref
+		with ec.oci.image_referrers as _mock_no_referrers
+		with data.rule_data_custom.oci_verify_import_allowed_content_classes as _allowed_backport
+		with data.rule_data_custom.oci_verify_import_novel_vuln_id_prefixes as _novel_prefixes
+	some r in deny
+	r.code == "pnc_import.gav_index_referrer_present"
+}
+
+_has_code(deny, code) if {
+	some r in deny
+	r.code == code
+}
