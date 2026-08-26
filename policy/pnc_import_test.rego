@@ -228,95 +228,177 @@ _mock_manifest_remediated(_) := {"annotations": {"dev.lightwell.distribution-tar
 _mock_manifest_no_annotation(_) := {"annotations": {}}
 
 # ---------------------------------------------------------------------------
-# Content-class gate (novel vs backport)
+# Vulnerability-class gate (per release stream)
 #
-# These assert on specific deny CODES (presence/absence), so they don't need to
-# satisfy the unrelated source-registry / signing-key / distribution-target
-# rules — those may fire with other codes and are ignored here.
+# Assert on specific deny CODES (presence/absence); unrelated source/signing/
+# distribution-target rules may fire with other codes and are ignored here.
+# ec.oci.* builtins are mocked with functions; parsed_blob_from_image walks
+# image_manifest(ref).layers[0].digest -> blob (a JSON string of gavs+vulns).
 # ---------------------------------------------------------------------------
 
 _gav_artifact_type := "application/vnd.redhat.gav-index-build+json"
 
 _referrer_ref := "quay.io/redhat-user-workloads/lightwell-poc-tenant/pnc-import/pnc-import@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
-# ec.oci.* builtins are mocked with functions (matching the manifest mocks
-# above). parsed_blob_from_image(ref) walks image_manifest(ref).layers[0].digest
-# -> blob; we mock the manifest layer and the blob body (a JSON string).
 _mock_gav_referrers(_) := [{"artifactType": _gav_artifact_type, "ref": _referrer_ref}]
 
 _mock_no_referrers(_) := []
 
 _mock_gav_manifest(_) := {"layers": [{"digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]}
 
-_mock_blob_novel(_) := "{\"vulns\": [\"LW-2026-4259\"]}"
+# gav-index blob variants (returned by the mocked ec.oci.blob)
+_blob_cve(_) := "{\"gavs\": [\"g:a:1\"], \"vulns\": [\"CVE-2021-37533\"]}"
 
-_mock_blob_backport(_) := "{\"vulns\": [\"CVE-2021-37533\"]}"
+_blob_ltwl(_) := "{\"gavs\": [\"g:a:1\"], \"vulns\": [\"LW-2026-4259\"]}"
 
-_mock_blob_mixed(_) := "{\"vulns\": [\"CVE-2025-48924\", \"LW-2026-0092\"]}"
+_blob_mixed(_) := "{\"gavs\": [\"g:a:1\"], \"vulns\": [\"CVE-2025-48924\", \"LW-2026-0092\"]}"
 
-_allowed_backport := ["backport"]
+_blob_clean(_) := "{\"gavs\": [\"g:a:1\"], \"vulns\": []}"
 
-_allowed_novel := ["novel"]
+_blob_nogav(_) := "{\"gavs\": [], \"vulns\": [\"CVE-2021-37533\"]}"
 
 _novel_prefixes := ["LW-"]
 
-# novel build is rejected on the remediated stream
-test_novel_denied_in_remediated_stream if {
-	deny := pnc_import.deny with input.image.ref as _image_ref
-		with ec.oci.image_referrers as _mock_gav_referrers
-		with ec.oci.image_manifest as _mock_gav_manifest
-		with ec.oci.blob as _mock_blob_novel
-		with data.rule_data_custom.oci_verify_import_allowed_content_classes as _allowed_backport
-		with data.rule_data_custom.oci_verify_import_novel_vuln_id_prefixes as _novel_prefixes
-	some r in deny
-	r.code == "pnc_import.content_class_permitted"
-}
-
-# backport (CVE-only) build passes the content-class check on remediated
-test_backport_allowed_in_remediated_stream if {
-	deny := pnc_import.deny with input.image.ref as _image_ref
-		with ec.oci.image_referrers as _mock_gav_referrers
-		with ec.oci.image_manifest as _mock_gav_manifest
-		with ec.oci.blob as _mock_blob_backport
-		with data.rule_data_custom.oci_verify_import_allowed_content_classes as _allowed_backport
-		with data.rule_data_custom.oci_verify_import_novel_vuln_id_prefixes as _novel_prefixes
-	not _has_code(deny, "pnc_import.content_class_permitted")
-}
-
-# novel build passes on the novel stream
-test_novel_allowed_in_novel_stream if {
-	deny := pnc_import.deny with input.image.ref as _image_ref
-		with ec.oci.image_referrers as _mock_gav_referrers
-		with ec.oci.image_manifest as _mock_gav_manifest
-		with ec.oci.blob as _mock_blob_novel
-		with data.rule_data_custom.oci_verify_import_allowed_content_classes as _allowed_novel
-		with data.rule_data_custom.oci_verify_import_novel_vuln_id_prefixes as _novel_prefixes
-	not _has_code(deny, "pnc_import.content_class_permitted")
-}
-
-# mixed build (CVE + LW) classifies as novel -> rejected on remediated
-test_mixed_build_is_novel if {
-	deny := pnc_import.deny with input.image.ref as _image_ref
-		with ec.oci.image_referrers as _mock_gav_referrers
-		with ec.oci.image_manifest as _mock_gav_manifest
-		with ec.oci.blob as _mock_blob_mixed
-		with data.rule_data_custom.oci_verify_import_allowed_content_classes as _allowed_backport
-		with data.rule_data_custom.oci_verify_import_novel_vuln_id_prefixes as _novel_prefixes
-	some r in deny
-	r.code == "pnc_import.content_class_permitted"
-}
-
-# no gav-index referrer -> fail closed
-test_missing_gav_index_denied if {
-	deny := pnc_import.deny with input.image.ref as _image_ref
-		with ec.oci.image_referrers as _mock_no_referrers
-		with data.rule_data_custom.oci_verify_import_allowed_content_classes as _allowed_backport
-		with data.rule_data_custom.oci_verify_import_novel_vuln_id_prefixes as _novel_prefixes
-	some r in deny
-	r.code == "pnc_import.gav_index_referrer_present"
-}
+_cve_prefixes := ["CVE-"]
 
 _has_code(deny, code) if {
 	some r in deny
 	r.code == code
+}
+
+# ---- validated: no CVE, no LTWL ----
+test_validated_accepts_clean if {
+	deny := pnc_import.deny with input.image.ref as _image_ref
+		with ec.oci.image_referrers as _mock_gav_referrers
+		with ec.oci.image_manifest as _mock_gav_manifest
+		with ec.oci.blob as _blob_clean
+		with data.rule_data_custom.oci_verify_import_stream as "validated"
+		with data.rule_data_custom.oci_verify_import_novel_vuln_id_prefixes as _novel_prefixes
+		with data.rule_data_custom.oci_verify_import_cve_vuln_id_prefixes as _cve_prefixes
+	not _has_code(deny, "pnc_import.validated_excludes_cve")
+	not _has_code(deny, "pnc_import.validated_excludes_ltwl")
+	not _has_code(deny, "pnc_import.gav_present")
+}
+
+test_validated_rejects_cve if {
+	deny := pnc_import.deny with input.image.ref as _image_ref
+		with ec.oci.image_referrers as _mock_gav_referrers
+		with ec.oci.image_manifest as _mock_gav_manifest
+		with ec.oci.blob as _blob_cve
+		with data.rule_data_custom.oci_verify_import_stream as "validated"
+		with data.rule_data_custom.oci_verify_import_novel_vuln_id_prefixes as _novel_prefixes
+		with data.rule_data_custom.oci_verify_import_cve_vuln_id_prefixes as _cve_prefixes
+	_has_code(deny, "pnc_import.validated_excludes_cve")
+}
+
+test_validated_rejects_ltwl if {
+	deny := pnc_import.deny with input.image.ref as _image_ref
+		with ec.oci.image_referrers as _mock_gav_referrers
+		with ec.oci.image_manifest as _mock_gav_manifest
+		with ec.oci.blob as _blob_ltwl
+		with data.rule_data_custom.oci_verify_import_stream as "validated"
+		with data.rule_data_custom.oci_verify_import_novel_vuln_id_prefixes as _novel_prefixes
+		with data.rule_data_custom.oci_verify_import_cve_vuln_id_prefixes as _cve_prefixes
+	_has_code(deny, "pnc_import.validated_excludes_ltwl")
+}
+
+# ---- backport: >=1 CVE, no LTWL ----
+test_backport_accepts_cve if {
+	deny := pnc_import.deny with input.image.ref as _image_ref
+		with ec.oci.image_referrers as _mock_gav_referrers
+		with ec.oci.image_manifest as _mock_gav_manifest
+		with ec.oci.blob as _blob_cve
+		with data.rule_data_custom.oci_verify_import_stream as "backport"
+		with data.rule_data_custom.oci_verify_import_novel_vuln_id_prefixes as _novel_prefixes
+		with data.rule_data_custom.oci_verify_import_cve_vuln_id_prefixes as _cve_prefixes
+	not _has_code(deny, "pnc_import.backport_requires_cve")
+	not _has_code(deny, "pnc_import.backport_excludes_ltwl")
+}
+
+test_backport_rejects_mixed_ltwl if {
+	deny := pnc_import.deny with input.image.ref as _image_ref
+		with ec.oci.image_referrers as _mock_gav_referrers
+		with ec.oci.image_manifest as _mock_gav_manifest
+		with ec.oci.blob as _blob_mixed
+		with data.rule_data_custom.oci_verify_import_stream as "backport"
+		with data.rule_data_custom.oci_verify_import_novel_vuln_id_prefixes as _novel_prefixes
+		with data.rule_data_custom.oci_verify_import_cve_vuln_id_prefixes as _cve_prefixes
+	_has_code(deny, "pnc_import.backport_excludes_ltwl")
+}
+
+test_backport_rejects_no_cve if {
+	deny := pnc_import.deny with input.image.ref as _image_ref
+		with ec.oci.image_referrers as _mock_gav_referrers
+		with ec.oci.image_manifest as _mock_gav_manifest
+		with ec.oci.blob as _blob_ltwl
+		with data.rule_data_custom.oci_verify_import_stream as "backport"
+		with data.rule_data_custom.oci_verify_import_novel_vuln_id_prefixes as _novel_prefixes
+		with data.rule_data_custom.oci_verify_import_cve_vuln_id_prefixes as _cve_prefixes
+	_has_code(deny, "pnc_import.backport_requires_cve")
+}
+
+# ---- predisclosure: >=1 LTWL (CVEs allowed) ----
+test_predisclosure_accepts_ltwl if {
+	deny := pnc_import.deny with input.image.ref as _image_ref
+		with ec.oci.image_referrers as _mock_gav_referrers
+		with ec.oci.image_manifest as _mock_gav_manifest
+		with ec.oci.blob as _blob_ltwl
+		with data.rule_data_custom.oci_verify_import_stream as "predisclosure"
+		with data.rule_data_custom.oci_verify_import_novel_vuln_id_prefixes as _novel_prefixes
+		with data.rule_data_custom.oci_verify_import_cve_vuln_id_prefixes as _cve_prefixes
+	not _has_code(deny, "pnc_import.predisclosure_requires_ltwl")
+}
+
+test_predisclosure_accepts_mixed if {
+	deny := pnc_import.deny with input.image.ref as _image_ref
+		with ec.oci.image_referrers as _mock_gav_referrers
+		with ec.oci.image_manifest as _mock_gav_manifest
+		with ec.oci.blob as _blob_mixed
+		with data.rule_data_custom.oci_verify_import_stream as "predisclosure"
+		with data.rule_data_custom.oci_verify_import_novel_vuln_id_prefixes as _novel_prefixes
+		with data.rule_data_custom.oci_verify_import_cve_vuln_id_prefixes as _cve_prefixes
+	not _has_code(deny, "pnc_import.predisclosure_requires_ltwl")
+}
+
+test_predisclosure_rejects_cve_only if {
+	deny := pnc_import.deny with input.image.ref as _image_ref
+		with ec.oci.image_referrers as _mock_gav_referrers
+		with ec.oci.image_manifest as _mock_gav_manifest
+		with ec.oci.blob as _blob_cve
+		with data.rule_data_custom.oci_verify_import_stream as "predisclosure"
+		with data.rule_data_custom.oci_verify_import_novel_vuln_id_prefixes as _novel_prefixes
+		with data.rule_data_custom.oci_verify_import_cve_vuln_id_prefixes as _cve_prefixes
+	_has_code(deny, "pnc_import.predisclosure_requires_ltwl")
+}
+
+# ---- GAV present + missing referrer ----
+test_gav_present_required if {
+	deny := pnc_import.deny with input.image.ref as _image_ref
+		with ec.oci.image_referrers as _mock_gav_referrers
+		with ec.oci.image_manifest as _mock_gav_manifest
+		with ec.oci.blob as _blob_nogav
+		with data.rule_data_custom.oci_verify_import_stream as "backport"
+		with data.rule_data_custom.oci_verify_import_novel_vuln_id_prefixes as _novel_prefixes
+		with data.rule_data_custom.oci_verify_import_cve_vuln_id_prefixes as _cve_prefixes
+	_has_code(deny, "pnc_import.gav_present")
+}
+
+test_missing_referrer_denied if {
+	deny := pnc_import.deny with input.image.ref as _image_ref
+		with ec.oci.image_referrers as _mock_no_referrers
+		with data.rule_data_custom.oci_verify_import_stream as "backport"
+		with data.rule_data_custom.oci_verify_import_novel_vuln_id_prefixes as _novel_prefixes
+		with data.rule_data_custom.oci_verify_import_cve_vuln_id_prefixes as _cve_prefixes
+	_has_code(deny, "pnc_import.gav_index_referrer_present")
+}
+
+# ---- gate inert when no stream configured ----
+test_gate_inert_without_stream if {
+	deny := pnc_import.deny with input.image.ref as _image_ref
+		with ec.oci.image_referrers as _mock_gav_referrers
+		with ec.oci.image_manifest as _mock_gav_manifest
+		with ec.oci.blob as _blob_ltwl
+	not _has_code(deny, "pnc_import.predisclosure_requires_ltwl")
+	not _has_code(deny, "pnc_import.gav_index_referrer_present")
+	not _has_code(deny, "pnc_import.gav_present")
 }
