@@ -273,24 +273,25 @@ _distribution_target_rule_data_errors contains error if {
 }
 
 # ---------------------------------------------------------------------------
-# Content-class gate (novel vs backport)
+# Vulnerability-class gate (per release stream)
 #
-# Derive a content class from the GAV index attached to the released image as an
-# OCI referrer, and deny if that class is not allowed on this release stream.
-# This keeps novel (predisclosure) content out of the remediated repo using data
-# we produce (gav-index.json `vulns[]`), independent of the distribution-target
-# annotation. Novel vs backport is decided by vuln-id prefix:
-#   any id with a configured novel prefix (e.g. "LW-")  -> novel
-#   else, vulns present but none novel                   -> backport
-#   else (no referrer / no vulns)                        -> deny (fail-closed)
+# Implements the per-stream content policy (Andrew McNamara, 2026-08-26),
+# derived from the GAV index attached to the released image as an OCI referrer:
+#   predisclosure : must have >=1 LTWL (LW-) vuln; GAV present.
+#   backport      : must have >=1 CVE vuln; GAV present; must have NO LTWL vuln.
+#   validated     : GAV present; must have NO CVE and NO LTWL vuln.
+#
+# Opt-in per stream via the oci_verify_import_stream ruleData key
+# (validated | backport | predisclosure). Streams that omit it are unaffected.
+# Fail-closed: when a stream is configured, a missing GAV index referrer or a
+# missing GAV is denied.
 # ---------------------------------------------------------------------------
 
 # METADATA
 # title: GAV index referrer present
 # description: >-
 #   Verify a GAV index artifact is attached to the released image via the OCI
-#   Referrers API. Absence means we cannot classify the content, which is a
-#   policy violation (fail-closed).
+#   Referrers API. Absence means the content cannot be classified (fail-closed).
 # custom:
 #   short_name: gav_index_referrer_present
 #   failure_msg: >-
@@ -298,77 +299,133 @@ _distribution_target_rule_data_errors contains error if {
 #   collections:
 #     - lightwell
 deny contains result if {
-	_content_class_gate_enabled
+	_stream_gate_enabled
 	count(_gav_index_referrers) == 0
 	result := metadata.result_helper(rego.metadata.chain(), [_gav_index_artifact_type])
 }
 
 # METADATA
-# title: Content class derivable
+# title: GAV present
 # description: >-
-#   Confirm a content class (novel | backport) can be derived from the GAV
-#   index. A GAV index with no vulns cannot be classified (fail-closed).
+#   Every release stream requires at least one GAV in the GAV index.
 # custom:
-#   short_name: content_class_derivable
-#   failure_msg: >-
-#     could not derive a content class from the GAV index (no vulns to classify
-#     as novel vs backport)
+#   short_name: gav_present
+#   failure_msg: 'the GAV index contains no GAVs'
 #   collections:
 #     - lightwell
 deny contains result if {
-	_content_class_gate_enabled
+	_stream_gate_enabled
 	count(_gav_index_referrers) > 0
-	not _content_class
+	not _has_gav
 	result := metadata.result_helper(rego.metadata.chain(), [])
 }
 
 # METADATA
-# title: Content class permitted
+# title: Predisclosure requires an LTWL vulnerability
 # description: >-
-#   Verify the derived content class is allowed on this release stream. The
-#   remediated stream allows only "backport"; the novel stream allows only
-#   "novel". This is what keeps novel (predisclosure) content out of the
-#   remediated repo.
+#   The predisclosure (novel) stream must carry at least one LTWL (LW-) vuln id.
 # custom:
-#   short_name: content_class_permitted
-#   failure_msg: >-
-#     content class %q is not allowed on this release stream. Allowed: %v
+#   short_name: predisclosure_requires_ltwl
+#   failure_msg: 'predisclosure stream requires at least one LTWL (novel) vuln id, found none'
 #   collections:
 #     - lightwell
 deny contains result if {
-	_content_class_gate_enabled
-	class := _content_class
-	not class in _allowed_content_classes
-	result := metadata.result_helper(rego.metadata.chain(), [class, _allowed_content_classes])
+	_stream == "predisclosure"
+	count(_gav_index_referrers) > 0
+	not _has_ltwl
+	result := metadata.result_helper(rego.metadata.chain(), [])
 }
 
 # METADATA
-# title: Content class ruleData provided
+# title: Backport requires a CVE vulnerability
 # description: >-
-#   Confirm oci_verify_import_allowed_content_classes was provided in ruleData.
+#   The backport (remediated) stream must carry at least one CVE vuln id.
 # custom:
-#   short_name: content_class_rule_data_provided
+#   short_name: backport_requires_cve
+#   failure_msg: 'backport stream requires at least one CVE vuln id, found none'
+#   collections:
+#     - lightwell
+deny contains result if {
+	_stream == "backport"
+	count(_gav_index_referrers) > 0
+	not _has_cve
+	result := metadata.result_helper(rego.metadata.chain(), [])
+}
+
+# METADATA
+# title: Backport excludes LTWL vulnerabilities
+# description: >-
+#   The backport (remediated) stream must not carry any LTWL (LW-) vuln id —
+#   novel content must not reach the remediated repo.
+# custom:
+#   short_name: backport_excludes_ltwl
+#   failure_msg: 'backport stream must not contain LTWL (novel) vuln ids: %v'
+#   collections:
+#     - lightwell
+deny contains result if {
+	_stream == "backport"
+	_has_ltwl
+	result := metadata.result_helper(rego.metadata.chain(), [_ltwl_vulns])
+}
+
+# METADATA
+# title: Validated excludes CVE vulnerabilities
+# description: >-
+#   The validated (rebuild) stream is clean rebuilds and must carry no CVE vuln id.
+# custom:
+#   short_name: validated_excludes_cve
+#   failure_msg: 'validated stream must not contain CVE vuln ids: %v'
+#   collections:
+#     - lightwell
+deny contains result if {
+	_stream == "validated"
+	_has_cve
+	result := metadata.result_helper(rego.metadata.chain(), [_cve_vulns])
+}
+
+# METADATA
+# title: Validated excludes LTWL vulnerabilities
+# description: >-
+#   The validated (rebuild) stream must carry no LTWL (LW-) vuln id.
+# custom:
+#   short_name: validated_excludes_ltwl
+#   failure_msg: 'validated stream must not contain LTWL vuln ids: %v'
+#   collections:
+#     - lightwell
+deny contains result if {
+	_stream == "validated"
+	_has_ltwl
+	result := metadata.result_helper(rego.metadata.chain(), [_ltwl_vulns])
+}
+
+# METADATA
+# title: Stream ruleData valid
+# description: >-
+#   oci_verify_import_stream must be one of validated | backport | predisclosure.
+# custom:
+#   short_name: stream_rule_data_valid
+#   failure_msg: 'oci_verify_import_stream %q is not one of validated, backport, predisclosure'
+#   collections:
+#     - lightwell
+deny contains result if {
+	_stream_gate_enabled
+	not _stream in {"validated", "backport", "predisclosure"}
+	result := metadata.result_helper(rego.metadata.chain(), [_stream])
+}
+
+# METADATA
+# title: Vuln-id prefix ruleData provided
+# description: >-
+#   When a stream is configured, both oci_verify_import_novel_vuln_id_prefixes
+#   and oci_verify_import_cve_vuln_id_prefixes must be provided.
+# custom:
+#   short_name: vuln_prefix_rule_data_provided
 #   failure_msg: '%s'
 #   collections:
 #     - lightwell
 deny contains result if {
-	_content_class_gate_enabled
-	some e in _allowed_content_classes_rule_data_errors
-	result := metadata.result_helper_with_severity(rego.metadata.chain(), [e.message], e.severity)
-}
-
-# METADATA
-# title: Novel vuln-id prefixes ruleData provided
-# description: >-
-#   Confirm oci_verify_import_novel_vuln_id_prefixes was provided in ruleData.
-# custom:
-#   short_name: novel_vuln_id_prefixes_rule_data_provided
-#   failure_msg: '%s'
-#   collections:
-#     - lightwell
-deny contains result if {
-	_content_class_gate_enabled
-	some e in _novel_vuln_id_prefixes_rule_data_errors
+	_stream_gate_enabled
+	some e in _vuln_prefix_rule_data_errors
 	result := metadata.result_helper_with_severity(rego.metadata.chain(), [e.message], e.severity)
 }
 
@@ -376,65 +433,68 @@ deny contains result if {
 # Helpers — classify the build from its GAV index referrer
 # ---------------------------------------------------------------------------
 
-# The content-class gate is opt-in per release stream: it is active only when
-# the ECP provides oci_verify_import_allowed_content_classes. Streams with no
-# novel/backport distinction (e.g. validated/REBUILD) simply omit it and are
-# unaffected. When enabled, the gate is fail-closed (missing GAV index or
-# unclassifiable vulns are denied).
-_content_class_gate_enabled if count(_allowed_content_classes) > 0
+# The gate is opt-in per stream: active only when oci_verify_import_stream is a
+# string. rule_data.get returns [] for absent keys, so is_string distinguishes.
+_stream := rule_data.get("oci_verify_import_stream")
 
-# The artifact type oci-verify-import uses when attaching the GAV index to the
+_stream_gate_enabled if is_string(_stream)
+
+# Artifact type oci-verify-import uses when attaching the GAV index to the
 # mirrored image (see tekton/tasks/oci-verify-import/0.1/oci-verify-import.yaml).
 _gav_index_artifact_type := "application/vnd.redhat.gav-index-build+json"
 
-# GAV index referrers on the released image.
 _gav_index_referrers contains r if {
 	some r in ec.oci.image_referrers(input.image.ref)
 	r.artifactType == _gav_index_artifact_type
 }
 
-# All vuln ids across the GAV index referrer(s). doc.vulns may be absent on a
-# legacy index; `some v in doc.vulns` then contributes nothing (fail-closed).
 _gav_index_vulns contains v if {
 	some r in _gav_index_referrers
 	doc := oci.parsed_blob_from_image(r.ref)
 	some v in doc.vulns
 }
 
+_gav_index_gavs contains g if {
+	some r in _gav_index_referrers
+	doc := oci.parsed_blob_from_image(r.ref)
+	some g in doc.gavs
+}
+
+_has_gav if count(_gav_index_gavs) > 0
+
 _is_novel_vuln(v) if {
 	some prefix in _novel_vuln_id_prefixes
 	startswith(v, prefix)
 }
 
-_has_novel_vuln if {
-	some v in _gav_index_vulns
-	_is_novel_vuln(v)
+_is_cve_vuln(v) if {
+	some prefix in _cve_vuln_id_prefixes
+	startswith(v, prefix)
 }
 
-# Content class: any novel id -> novel; else vulns present -> backport;
-# else undefined (caught by the content_class_derivable deny above).
-_content_class := "novel" if _has_novel_vuln
+_ltwl_vulns := {v | some v in _gav_index_vulns; _is_novel_vuln(v)}
 
-_content_class := "backport" if {
-	not _has_novel_vuln
-	count(_gav_index_vulns) > 0
-}
+_cve_vulns := {v | some v in _gav_index_vulns; _is_cve_vuln(v)}
 
-_allowed_content_classes := rule_data.get("oci_verify_import_allowed_content_classes")
+_has_ltwl if count(_ltwl_vulns) > 0
+
+_has_cve if count(_cve_vulns) > 0
 
 _novel_vuln_id_prefixes := rule_data.get("oci_verify_import_novel_vuln_id_prefixes")
 
-_allowed_content_classes_rule_data_errors contains error if {
+_cve_vuln_id_prefixes := rule_data.get("oci_verify_import_cve_vuln_id_prefixes")
+
+_vuln_prefix_rule_data_errors contains error if {
 	some e in j.validate_schema(
-		rule_data.get("oci_verify_import_allowed_content_classes"),
+		rule_data.get("oci_verify_import_novel_vuln_id_prefixes"),
 		_string_list_schema,
 	)
 	error := {"message": e.message, "severity": e.severity}
 }
 
-_novel_vuln_id_prefixes_rule_data_errors contains error if {
+_vuln_prefix_rule_data_errors contains error if {
 	some e in j.validate_schema(
-		rule_data.get("oci_verify_import_novel_vuln_id_prefixes"),
+		rule_data.get("oci_verify_import_cve_vuln_id_prefixes"),
 		_string_list_schema,
 	)
 	error := {"message": e.message, "severity": e.severity}
