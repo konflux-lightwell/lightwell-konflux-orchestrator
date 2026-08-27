@@ -402,3 +402,96 @@ test_gate_inert_without_stream if {
 	not _has_code(deny, "pnc_import.gav_index_referrer_present")
 	not _has_code(deny, "pnc_import.gav_present")
 }
+
+# ---------------------------------------------------------------------------
+# Real gav-index fixtures (pulled from quay.io/light-castle) — full stream matrix
+#
+# gavs/vulns are the actual values from these real builds:
+#   novel_pure      org.yaml:snakeyaml:1.29.0.rhlw-00015        vulns=[LW-2026-4259]
+#   novel_mixed     org.apache.commons:commons-lang3:3.17.0...  vulns=[CVE-2025-48924, LW-2026-0092/0103/0104]
+#   backport_cve    com.fasterxml...jackson-databind:2.13.4...  vulns=[CVE-2026-54512]
+#   validated_clean ognl:ognl:3.1.15                            vulns=[]
+# ---------------------------------------------------------------------------
+
+_real_novel_pure := "{\"gavs\": [\"org.yaml:snakeyaml:1.29.0.rhlw-00015\"], \"vulns\": [\"LW-2026-4259\"]}"
+
+_real_novel_mixed := "{\"gavs\": [\"org.apache.commons:commons-lang3:3.17.0.rhlw-00007\"], \"vulns\": [\"CVE-2025-48924\", \"LW-2026-0092\", \"LW-2026-0103\", \"LW-2026-0104\"]}"
+
+_real_backport_cve := "{\"gavs\": [\"com.fasterxml.jackson.core:jackson-databind:2.13.4.rhlw-00007\"], \"vulns\": [\"CVE-2026-54512\"]}"
+
+_real_validated_clean := "{\"gavs\": [\"ognl:ognl:3.1.15\"], \"vulns\": []}"
+
+# content-gate deny codes for a real gav-index blob (value-mocked) on a stream
+_real_denies(blob, stream) := codes if {
+	deny := pnc_import.deny with input.image.ref as _image_ref
+		with ec.oci.image_referrers as _mock_gav_referrers
+		with ec.oci.image_manifest as _mock_gav_manifest
+		with ec.oci.blob as blob
+		with data.rule_data_custom.oci_verify_import_stream as stream
+		with data.rule_data_custom.oci_verify_import_novel_vuln_id_prefixes as _novel_prefixes
+		with data.rule_data_custom.oci_verify_import_cve_vuln_id_prefixes as _cve_prefixes
+	codes := {r.code | some r in deny; startswith(r.code, "pnc_import.")}
+}
+
+# --- novel_pure (snakeyaml, LW- only) ---
+test_real_novel_pure_accepted_on_predisclosure if {
+	c := _real_denies(_real_novel_pure, "predisclosure")
+	not "pnc_import.predisclosure_requires_ltwl" in c
+	not "pnc_import.gav_present" in c
+	not "pnc_import.gav_index_referrer_present" in c
+}
+
+test_real_novel_pure_rejected_on_backport if {
+	"pnc_import.backport_excludes_ltwl" in _real_denies(_real_novel_pure, "backport")
+}
+
+test_real_novel_pure_rejected_on_validated if {
+	"pnc_import.validated_excludes_ltwl" in _real_denies(_real_novel_pure, "validated")
+}
+
+# --- novel_mixed (commons-lang3, CVE + 3x LW-) ---
+test_real_novel_mixed_accepted_on_predisclosure if {
+	not "pnc_import.predisclosure_requires_ltwl" in _real_denies(_real_novel_mixed, "predisclosure")
+}
+
+test_real_novel_mixed_rejected_on_backport if {
+	"pnc_import.backport_excludes_ltwl" in _real_denies(_real_novel_mixed, "backport")
+}
+
+test_real_novel_mixed_rejected_on_validated if {
+	c := _real_denies(_real_novel_mixed, "validated")
+	"pnc_import.validated_excludes_ltwl" in c
+	"pnc_import.validated_excludes_cve" in c
+}
+
+# --- backport_cve (jackson-databind, CVE only) ---
+test_real_backport_accepted_on_backport if {
+	c := _real_denies(_real_backport_cve, "backport")
+	not "pnc_import.backport_requires_cve" in c
+	not "pnc_import.backport_excludes_ltwl" in c
+	not "pnc_import.gav_present" in c
+}
+
+test_real_backport_rejected_on_validated if {
+	"pnc_import.validated_excludes_cve" in _real_denies(_real_backport_cve, "validated")
+}
+
+test_real_backport_rejected_on_predisclosure if {
+	"pnc_import.predisclosure_requires_ltwl" in _real_denies(_real_backport_cve, "predisclosure")
+}
+
+# --- validated_clean (ognl, no vulns) ---
+test_real_validated_accepted_on_validated if {
+	c := _real_denies(_real_validated_clean, "validated")
+	not "pnc_import.validated_excludes_cve" in c
+	not "pnc_import.validated_excludes_ltwl" in c
+	not "pnc_import.gav_present" in c
+}
+
+test_real_validated_rejected_on_backport if {
+	"pnc_import.backport_requires_cve" in _real_denies(_real_validated_clean, "backport")
+}
+
+test_real_validated_rejected_on_predisclosure if {
+	"pnc_import.predisclosure_requires_ltwl" in _real_denies(_real_validated_clean, "predisclosure")
+}
