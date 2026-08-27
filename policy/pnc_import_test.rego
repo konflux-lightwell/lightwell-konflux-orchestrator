@@ -495,3 +495,70 @@ test_real_validated_rejected_on_backport if {
 test_real_validated_rejected_on_predisclosure if {
 	"pnc_import.predisclosure_requires_ltwl" in _real_denies(_real_validated_clean, "predisclosure")
 }
+
+# ---------------------------------------------------------------------------
+# Review follow-ups (PR #19): multiple-referrer dedup + invalid ruleData
+# ---------------------------------------------------------------------------
+
+_referrer_ref2 := "quay.io/redhat-user-workloads/lightwell-poc-tenant/pnc-import/pnc-import@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+
+# two gav-index referrers (re-import/re-push case) with identical layer blobs
+_two_gav_referrers(_) := [
+	{"artifactType": _gav_artifact_type, "ref": _referrer_ref},
+	{"artifactType": _gav_artifact_type, "ref": _referrer_ref2},
+]
+
+# Multiple identical gav-index referrers deduplicate cleanly (Rego sets):
+# vuln set collapses to 1 and predisclosure still accepts the novel build.
+test_multiple_referrers_deduplicate if {
+	vulns := pnc_import._gav_index_vulns with input.image.ref as _image_ref
+		with ec.oci.image_referrers as _two_gav_referrers
+		with ec.oci.image_manifest as _mock_gav_manifest
+		with ec.oci.blob as _blob_ltwl
+	count(vulns) == 1
+
+	deny := pnc_import.deny with input.image.ref as _image_ref
+		with ec.oci.image_referrers as _two_gav_referrers
+		with ec.oci.image_manifest as _mock_gav_manifest
+		with ec.oci.blob as _blob_ltwl
+		with data.rule_data_custom.oci_verify_import_stream as "predisclosure"
+		with data.rule_data_custom.oci_verify_import_novel_vuln_id_prefixes as _novel_prefixes
+		with data.rule_data_custom.oci_verify_import_cve_vuln_id_prefixes as _cve_prefixes
+	not _has_code(deny, "pnc_import.predisclosure_requires_ltwl")
+}
+
+# Invalid stream value is rejected by stream_rule_data_valid.
+test_invalid_stream_value_denied if {
+	deny := pnc_import.deny with input.image.ref as _image_ref
+		with ec.oci.image_referrers as _mock_gav_referrers
+		with ec.oci.image_manifest as _mock_gav_manifest
+		with ec.oci.blob as _blob_cve
+		with data.rule_data_custom.oci_verify_import_stream as "invalid"
+		with data.rule_data_custom.oci_verify_import_novel_vuln_id_prefixes as _novel_prefixes
+		with data.rule_data_custom.oci_verify_import_cve_vuln_id_prefixes as _cve_prefixes
+	_has_code(deny, "pnc_import.stream_rule_data_valid")
+}
+
+# Empty novel prefix list (with a stream set) is rejected.
+test_empty_novel_prefixes_denied if {
+	deny := pnc_import.deny with input.image.ref as _image_ref
+		with ec.oci.image_referrers as _mock_gav_referrers
+		with ec.oci.image_manifest as _mock_gav_manifest
+		with ec.oci.blob as _blob_cve
+		with data.rule_data_custom.oci_verify_import_stream as "backport"
+		with data.rule_data_custom.oci_verify_import_novel_vuln_id_prefixes as []
+		with data.rule_data_custom.oci_verify_import_cve_vuln_id_prefixes as _cve_prefixes
+	_has_code(deny, "pnc_import.vuln_prefix_rule_data_provided")
+}
+
+# Empty CVE prefix list (with a stream set) is rejected.
+test_empty_cve_prefixes_denied if {
+	deny := pnc_import.deny with input.image.ref as _image_ref
+		with ec.oci.image_referrers as _mock_gav_referrers
+		with ec.oci.image_manifest as _mock_gav_manifest
+		with ec.oci.blob as _blob_cve
+		with data.rule_data_custom.oci_verify_import_stream as "backport"
+		with data.rule_data_custom.oci_verify_import_novel_vuln_id_prefixes as _novel_prefixes
+		with data.rule_data_custom.oci_verify_import_cve_vuln_id_prefixes as []
+	_has_code(deny, "pnc_import.vuln_prefix_rule_data_provided")
+}
