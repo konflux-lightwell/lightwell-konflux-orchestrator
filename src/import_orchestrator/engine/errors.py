@@ -19,3 +19,15 @@ from __future__ import annotations
 
 class TriggerError(Exception):
     """Non-recoverable error during the PipelineRun trigger process."""
+
+
+class PipelineRunRetryableError(TriggerError):
+    """A confirmed-absent attempt may safely advance to the next attempt."""
+
+
+class PipelineRunReconciliationError(TriggerError):
+    """A PipelineRun may exist, so the current attempt must not be retried."""
+
+    def __init__(self, name: str, message: str):
+        super().__init__(message)
+        self.name = name

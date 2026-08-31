@@ -22,6 +22,7 @@ import pytest
 from import_orchestrator.database import ImportDatabase
 from import_orchestrator.ecosystems.java.pipelinerun import TriggerError
 from import_orchestrator.engine import ImportTrigger
+from import_orchestrator.engine.errors import PipelineRunReconciliationError, PipelineRunRetryableError
 from import_orchestrator.models import ImportItem, ImportStatus
 
 
@@ -178,6 +179,25 @@ class TestTriggerNextBatch:
             "POST conflicted with a mismatched identity",
         ],
     )
+    def test_reconciliation_failure_preserves_attempt_without_retry(
+        self, trigger: ImportTrigger, mock_kube: MagicMock, mock_build: MagicMock, message: str
+    ):
+        """An unresolved current attempt is persisted without making it retryable."""
+        ref, _ = trigger.db.add_item("quay.io/repo:tag@sha256:abc")
+        assert ref.id is not None
+        mock_kube.create_pipelinerun.side_effect = PipelineRunReconciliationError("pnc-import-current", message)
+
+        assert trigger.trigger_next_batch() == 0
+        failed = trigger.db.get_by_status(ImportStatus.FAILED)
+        assert len(failed) == 1
+        assert failed[0].pipelinerun_name == "pnc-import-current"
+        assert failed[0].retry_count == trigger.max_retries
+
+        mock_build.reset_mock()
+        assert trigger.trigger_next_batch() == 0
+        mock_build.assert_not_called()
+        assert mock_kube.create_pipelinerun.call_count == 1
+
     def test_clears_cached_fields_on_retry(self, trigger: ImportTrigger):
         """Verify that snapshot and release names are cleared when retrying a failed import."""
         ref, _ = trigger.db.add_item("quay.io/repo:tag@sha256:abc")
@@ -199,15 +219,50 @@ class TestTriggerNextBatch:
         assert triggered_refs[0].release_name is None or triggered_refs[0].release_name == ""
 
     def test_marks_failure_with_incremented_retry_count(self, trigger: ImportTrigger, mock_kube: MagicMock):
-        """Verify that TriggerError failures increment retry count."""
+        """Verify that generic trigger failures are terminal instead of advancing attempts."""
         trigger.db.add_item("quay.io/repo:tag@sha256:abc")
         mock_kube.create_pipelinerun.side_effect = TriggerError("validation error")
 
         triggered = trigger.trigger_next_batch()
         assert triggered == 0
 
-        # Should be marked as failed with retry_count = 1
+        # Generic trigger failures are not a confirmed-absence outcome.
         failed = trigger.db.get_by_status(ImportStatus.FAILED)
         assert len(failed) == 1
-        assert failed[0].retry_count == 1
+        assert failed[0].retry_count == trigger.max_retries
         assert "validation error" in failed[0].error_message
+
+        trigger.trigger_next_batch()
+        mock_kube.create_pipelinerun.assert_called_once()
+
+    def test_malformed_manifest_failure_does_not_advance_attempt(
+        self, trigger: ImportTrigger, mock_kube: MagicMock, mock_build: MagicMock
+    ):
+        """A manifest validation failure is terminal and cannot create a later attempt."""
+        mock_build.return_value = {"kind": "PipelineRun"}
+        mock_kube.create_pipelinerun.side_effect = TriggerError("metadata.name and import identity are required")
+
+        trigger.db.add_item("quay.io/repo:tag@sha256:abc")
+        assert trigger.trigger_next_batch() == 0
+        mock_build.reset_mock()
+
+        assert trigger.trigger_next_batch() == 0
+        mock_build.assert_not_called()
+        assert mock_kube.create_pipelinerun.call_count == 1
+
+    def test_confirmed_absence_failure_allows_next_attempt(
+        self, trigger: ImportTrigger, mock_kube: MagicMock, mock_build: MagicMock
+    ):
+        """Only confirmed absence opts the engine into a newly numbered attempt."""
+        trigger.db.add_item("quay.io/repo:tag@sha256:abc")
+        mock_kube.create_pipelinerun.side_effect = [
+            PipelineRunRetryableError("confirmed absence"),
+            "pnc-import-next",
+        ]
+
+        assert trigger.trigger_next_batch() == 0
+        assert trigger.trigger_next_batch() == 1
+        assert mock_build.call_args_list == [
+            call("quay.io/repo:tag@sha256:abc", 0),
+            call("quay.io/repo:tag@sha256:abc", 2),
+        ]
