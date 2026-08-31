@@ -34,7 +34,7 @@ class Ecosystem(Protocol):
     pipelinerun_prefix: str
     namespace: str
 
-    def build_pipelinerun(self, ref: str, args: argparse.Namespace) -> dict:
+    def build_pipelinerun(self, ref: str, args: argparse.Namespace, *, attempt: int = 0) -> dict:
         """Build a PipelineRun manifest dict for one import item (by its ref)."""
         ...
 

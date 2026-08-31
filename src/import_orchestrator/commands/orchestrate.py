@@ -48,7 +48,7 @@ def run_orchestrate(args: argparse.Namespace, empty_db_warning: str) -> int:
         trigger = ImportTrigger(
             db=db,
             kube=kube,
-            build_pipelinerun=lambda ref: eco.build_pipelinerun(ref, args),
+            build_pipelinerun=lambda ref, attempt: eco.build_pipelinerun(ref, args, attempt=attempt),
             max_parallel=args.max_parallel,
             max_retries=args.max_retries,
         )

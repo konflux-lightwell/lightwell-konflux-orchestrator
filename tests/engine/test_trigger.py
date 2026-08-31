@@ -15,7 +15,7 @@ limitations under the License.
 """
 
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 
 import pytest
 
@@ -66,7 +66,7 @@ class TestTriggerImport:
         name = trigger.trigger_import(item)
 
         assert name == "pnc-import-12345"
-        mock_build.assert_called_once_with("quay.io/repo:tag@sha256:abc")
+        mock_build.assert_called_once_with("quay.io/repo:tag@sha256:abc", 0)
         mock_kube.create_pipelinerun.assert_called_once_with({"kind": "PipelineRun"})
 
     def test_raises_when_kube_returns_none(self, trigger: ImportTrigger, mock_kube: MagicMock):
@@ -159,6 +159,25 @@ class TestTriggerNextBatch:
         assert len(triggered_refs) == 1
         assert triggered_refs[0].retry_count == 2
 
+    def test_retry_builds_a_new_pipeline_run_attempt(self, trigger: ImportTrigger, mock_build: MagicMock):
+        """A retry after a terminal PipelineRun failure receives a new attempt number."""
+        ref, _ = trigger.db.add_item("quay.io/repo:tag@sha256:abc")
+        assert ref.id is not None
+        trigger.db.update_status(ref.id, ImportStatus.FAILED)
+
+        trigger.trigger_next_batch()
+
+        mock_build.assert_called_once_with("quay.io/repo:tag@sha256:abc", 1)
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "pre-create GET failed",
+            "pre-create identity mismatch",
+            "POST timed out and reconciliation failed",
+            "POST conflicted with a mismatched identity",
+        ],
+    )
     def test_clears_cached_fields_on_retry(self, trigger: ImportTrigger):
         """Verify that snapshot and release names are cleared when retrying a failed import."""
         ref, _ = trigger.db.add_item("quay.io/repo:tag@sha256:abc")

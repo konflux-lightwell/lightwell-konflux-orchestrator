@@ -19,6 +19,12 @@ from __future__ import annotations
 from typing import Any
 
 from import_orchestrator.engine.errors import TriggerError
+from import_orchestrator.pipelinerun import (
+    IMPORT_IDENTITY_ANNOTATION,
+    build_execution_spec_fingerprint,
+    build_import_identity,
+    build_pipelinerun_name,
+)
 
 __all__ = ["TriggerError", "build_pipelinerun_manifest", "parse_ref"]
 
@@ -47,6 +53,7 @@ def build_pipelinerun_manifest(
     image_repo_base: str,
     git_auth_secret: str,
     service_account: str | None = None,
+    attempt: int = 0,
 ) -> dict[str, Any]:
     """Build a python-remediated-build PipelineRun manifest for one package/version.
 
@@ -76,13 +83,29 @@ def build_pipelinerun_manifest(
     }
     if service_account:
         spec["taskRunTemplate"] = {"serviceAccountName": service_account}
+    execution_spec_fingerprint = build_execution_spec_fingerprint(
+        {
+            "spec": spec,
+            "application": application,
+            "component": component,
+        }
+    )
+    identity = build_import_identity(
+        "python",
+        package=package,
+        version=version,
+        destination_image=image,
+        attempt=attempt,
+        execution_spec_fingerprint=execution_spec_fingerprint,
+    )
 
     return {
         "apiVersion": "tekton.dev/v1",
         "kind": "PipelineRun",
         "metadata": {
-            "generateName": prefix,
+            "name": build_pipelinerun_name(prefix, identity),
             "namespace": namespace,
+            "annotations": {IMPORT_IDENTITY_ANNOTATION: identity},
             "labels": {
                 "appstudio.openshift.io/application": application,
                 "appstudio.openshift.io/component": component,

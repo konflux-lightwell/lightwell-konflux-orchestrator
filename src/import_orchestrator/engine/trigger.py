@@ -27,6 +27,10 @@ from import_orchestrator.models import ImportItem, ImportStatus
 from import_orchestrator.utils import extract_tag
 
 
+def _attempt_for_item(item: ImportItem) -> int:
+    return item.retry_count + 1 if item.status == ImportStatus.FAILED else 0
+
+
 class ImportTrigger:
     """Triggers PNC import PipelineRuns and manages the PENDING -> TRIGGERED transition.
 
@@ -38,7 +42,7 @@ class ImportTrigger:
         self,
         db: ImportDatabase,
         kube: KubeClient,
-        build_pipelinerun: Callable[[str], dict],
+        build_pipelinerun: Callable[[str, int], dict],
         max_parallel: int,
         max_retries: int,
     ):
@@ -48,7 +52,7 @@ class ImportTrigger:
         self.max_parallel = max_parallel
         self.max_retries = max_retries
 
-    def trigger_import(self, item: ImportItem) -> str | None:
+    def trigger_import(self, item: ImportItem, attempt: int = 0) -> str | None:
         """Build and submit a PipelineRun for the given import item.
 
         Returns:
@@ -57,7 +61,7 @@ class ImportTrigger:
         Raises:
             TriggerError: If the manifest build or PipelineRun creation fails.
         """
-        manifest = self.build_pipelinerun(item.ref)
+        manifest = self.build_pipelinerun(item.ref, attempt)
         pr_name = self.kube.create_pipelinerun(manifest)
         if pr_name is None:
             raise TriggerError("PipelineRun creation failed (API returned no name)")
@@ -92,9 +96,10 @@ class ImportTrigger:
         assert item.id is not None
 
         tag = extract_tag(item.ref)  # used only for log messages
+        attempt = _attempt_for_item(item)
 
         try:
-            pr_name = self.trigger_import(item)
+            pr_name = self.trigger_import(item, attempt)
             new_retry_count = item.retry_count + 1 if item.status == ImportStatus.FAILED else 0
 
             self.db.update_status(
