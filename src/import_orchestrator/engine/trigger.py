@@ -22,21 +22,13 @@ from datetime import datetime
 
 from import_orchestrator.clients.kube import KubeClient
 from import_orchestrator.database import ImportDatabase
-from import_orchestrator.engine.errors import PipelineRunReconciliationError, PipelineRunRetryableError, TriggerError
+from import_orchestrator.engine.errors import PipelineRunReconciliationError, TriggerError
 from import_orchestrator.models import ImportItem, ImportStatus
 from import_orchestrator.utils import extract_tag
 
 
 def _attempt_for_item(item: ImportItem) -> int:
     return item.retry_count + 1 if item.status == ImportStatus.FAILED else 0
-
-
-def _failure_persistence(item: ImportItem, error: TriggerError, max_retries: int) -> tuple[str | None, int]:
-    if isinstance(error, PipelineRunRetryableError):
-        return None, item.retry_count + 1
-    if isinstance(error, PipelineRunReconciliationError):
-        return error.name, max_retries
-    return None, max_retries
 
 
 class ImportTrigger:
@@ -136,14 +128,14 @@ class ImportTrigger:
     ) -> None:
         """Record a trigger failure in the database with appropriate retry semantics."""
         assert item.id is not None
-        pipelinerun_name, retry_count = _failure_persistence(item, error, self.max_retries)
+        pipelinerun_name = error.name if isinstance(error, PipelineRunReconciliationError) else None
 
         self.db.update_status(
             item.id,
             ImportStatus.FAILED,
             pipelinerun_name=pipelinerun_name,
             error_message=f"PipelineRun trigger failed: {error}",
-            retry_count=retry_count,
+            retry_count=self.max_retries,
         )
 
         print(

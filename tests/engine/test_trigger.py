@@ -15,14 +15,14 @@ limitations under the License.
 """
 
 from pathlib import Path
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock
 
 import pytest
 
 from import_orchestrator.database import ImportDatabase
 from import_orchestrator.ecosystems.java.pipelinerun import TriggerError
 from import_orchestrator.engine import ImportTrigger
-from import_orchestrator.engine.errors import PipelineRunReconciliationError, PipelineRunRetryableError
+from import_orchestrator.engine.errors import PipelineRunReconciliationError
 from import_orchestrator.models import ImportItem, ImportStatus
 
 
@@ -218,10 +218,10 @@ class TestTriggerNextBatch:
         assert triggered_refs[0].snapshot_name is None or triggered_refs[0].snapshot_name == ""
         assert triggered_refs[0].release_name is None or triggered_refs[0].release_name == ""
 
-    def test_marks_failure_with_incremented_retry_count(self, trigger: ImportTrigger, mock_kube: MagicMock):
-        """Verify that generic trigger failures are terminal instead of advancing attempts."""
+    def test_marks_generic_failure_as_non_retryable(self, trigger: ImportTrigger, mock_kube: MagicMock):
+        """Verify that bounded PipelineRun creation failures do not re-enter the engine."""
         trigger.db.add_item("quay.io/repo:tag@sha256:abc")
-        mock_kube.create_pipelinerun.side_effect = TriggerError("validation error")
+        mock_kube.create_pipelinerun.side_effect = TriggerError("PipelineRun creation retry budget exhausted")
 
         triggered = trigger.trigger_next_batch()
         assert triggered == 0
@@ -230,7 +230,7 @@ class TestTriggerNextBatch:
         failed = trigger.db.get_by_status(ImportStatus.FAILED)
         assert len(failed) == 1
         assert failed[0].retry_count == trigger.max_retries
-        assert "validation error" in failed[0].error_message
+        assert "retry budget exhausted" in failed[0].error_message
 
         trigger.trigger_next_batch()
         mock_kube.create_pipelinerun.assert_called_once()
@@ -249,20 +249,3 @@ class TestTriggerNextBatch:
         assert trigger.trigger_next_batch() == 0
         mock_build.assert_not_called()
         assert mock_kube.create_pipelinerun.call_count == 1
-
-    def test_confirmed_absence_failure_allows_next_attempt(
-        self, trigger: ImportTrigger, mock_kube: MagicMock, mock_build: MagicMock
-    ):
-        """Only confirmed absence opts the engine into a newly numbered attempt."""
-        trigger.db.add_item("quay.io/repo:tag@sha256:abc")
-        mock_kube.create_pipelinerun.side_effect = [
-            PipelineRunRetryableError("confirmed absence"),
-            "pnc-import-next",
-        ]
-
-        assert trigger.trigger_next_batch() == 0
-        assert trigger.trigger_next_batch() == 1
-        assert mock_build.call_args_list == [
-            call("quay.io/repo:tag@sha256:abc", 0),
-            call("quay.io/repo:tag@sha256:abc", 2),
-        ]
