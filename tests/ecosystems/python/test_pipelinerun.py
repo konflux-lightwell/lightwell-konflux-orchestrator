@@ -16,6 +16,8 @@ limitations under the License.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from import_orchestrator.ecosystems.python.pipelinerun import (
@@ -60,10 +62,30 @@ def _manifest(**overrides):
 
 
 class TestBuildManifest:
-    def test_kind_and_generate_name(self):
+    def test_kind_and_deterministic_name(self):
         manifest = _manifest()
         assert manifest["kind"] == "PipelineRun"
-        assert manifest["metadata"]["generateName"] == "python-remediated-build-"
+        name = manifest["metadata"]["name"]
+        assert name == _manifest()["metadata"]["name"]
+        assert re.fullmatch(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?", name)
+        assert name != _manifest(package="other-package")["metadata"]["name"]
+        assert "generateName" not in manifest["metadata"]
+
+    def test_import_identity_is_annotated(self):
+        manifest = _manifest()
+        assert manifest["metadata"]["annotations"]["lightwell.redhat.com/import-identity"]
+
+    def test_attempt_changes_deterministic_identity(self):
+        first = _manifest(attempt=0)
+        retry = _manifest(attempt=1)
+        assert first["metadata"]["name"] != retry["metadata"]["name"]
+        assert first["metadata"]["annotations"] != retry["metadata"]["annotations"]
+
+    def test_execution_spec_fingerprint_changes_with_pipeline_definition(self):
+        first = _manifest(pipeline_spec={"tasks": []})
+        changed = _manifest(pipeline_spec={"tasks": [{"name": "different"}]})
+        assert first["metadata"]["name"] != changed["metadata"]["name"]
+        assert first["metadata"]["annotations"] != changed["metadata"]["annotations"]
 
     def test_namespace(self):
         assert _manifest()["metadata"]["namespace"] == "lightwell-python-tenant"

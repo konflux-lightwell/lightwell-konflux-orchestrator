@@ -31,7 +31,7 @@ class PythonEcosystem:
     pipelinerun_prefix = config.PIPELINERUN_PREFIX
     namespace = config.NAMESPACE
 
-    def build_pipelinerun(self, ref: str, args: argparse.Namespace) -> dict:
+    def build_pipelinerun(self, ref: str, args: argparse.Namespace, *, attempt: int = 0) -> dict:
         package, version = parse_ref(ref)
         target = getattr(args, "target", config.DEFAULT_TARGET)
         cfg = config.TARGET_CONFIGS[target]
@@ -48,6 +48,7 @@ class PythonEcosystem:
             repo_base=config.LIGHTWELL_BUILDS_REPO_BASE,
             image_repo_base=config.IMAGE_REPO_BASE,
             git_auth_secret=config.GIT_AUTH_SECRET,
+            attempt=attempt,
         )
 
     def register_cli(self, subparsers: argparse._SubParsersAction) -> None:

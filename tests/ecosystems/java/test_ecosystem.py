@@ -55,7 +55,14 @@ def test_build_pipelinerun_sets_source_and_dest(monkeypatch, tmp_path):
     manifest = eco.build_pipelinerun("quay.io/repo:lw-ABC@sha256:deadbeef", _args("STAGE"))
 
     assert manifest["kind"] == "PipelineRun"
-    assert manifest["metadata"]["generateName"] == "pnc-import-"
+    assert (
+        manifest["metadata"]["name"]
+        == eco.build_pipelinerun("quay.io/repo:lw-ABC@sha256:deadbeef", _args("STAGE"))["metadata"]["name"]
+    )
+    assert "generateName" not in manifest["metadata"]
+    assert manifest["metadata"]["annotations"]["lightwell.redhat.com/import-identity"]
+    retry = eco.build_pipelinerun("quay.io/repo:lw-ABC@sha256:deadbeef", _args("STAGE"), attempt=1)
+    assert retry["metadata"]["name"] != manifest["metadata"]["name"]
     params = {p["name"]: p["value"] for p in manifest["spec"]["params"]}
     assert params["SOURCE_IMAGE"] == "quay.io/repo:lw-ABC@sha256:deadbeef"
     assert params["IMAGE"].endswith(":lw-ABC")

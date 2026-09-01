@@ -23,26 +23,7 @@ import requests
 
 from import_orchestrator.clients.kube_api import KubeAPI, KubeAuth, resolve_auth
 from import_orchestrator.models import PipelineRunStatus
-
-
-def _api_error_detail(exc: requests.RequestException) -> str:
-    """Extract a human-readable message from a failed Kubernetes API response.
-
-    Kubernetes returns a Status object whose ``message`` field explains why a
-    request was rejected (e.g. pipeline validation errors). Surface it so a 400
-    is actionable instead of an opaque "Bad Request".
-    """
-    response = getattr(exc, "response", None)
-    if response is None:
-        return str(exc)
-    try:
-        body = response.json()
-    except (ValueError, AttributeError):
-        body = None
-    if isinstance(body, dict) and body.get("message"):
-        return f"{exc}: {body['message']}"
-    text = (getattr(response, "text", "") or "").strip()
-    return f"{exc}: {text}" if text else str(exc)
+from import_orchestrator.pipelinerun_creator import create_pipelinerun
 
 
 class KubeClient:
@@ -174,29 +155,12 @@ class KubeClient:
             return None
 
     def create_pipelinerun(self, manifest: dict) -> str | None:
-        """Create a PipelineRun from a manifest dict and return its generated name.
+        """Create or reuse an owned PipelineRun from a manifest dict.
 
-        Raises TriggerError if the API rejects the request (e.g. an invalid
-        pipeline definition), including the cluster's error message. Returns
-        None only if the PipelineRun was created but its name is absent from
-        the response.
+        A deterministic name and immutable import identity are required so an
+        existing object can be safely distinguished from another import.
         """
-        try:
-            result = self._api.create(
-                f"/apis/tekton.dev/v1/namespaces/{self.namespace}/pipelineruns",
-                manifest,
-            )
-        except requests.RequestException as e:
-            # Imported lazily: engine.errors pulls in the engine package, which
-            # imports clients, so a module-level import would be circular.
-            from import_orchestrator.engine.errors import TriggerError
-
-            raise TriggerError(f"failed to create PipelineRun: {_api_error_detail(e)}") from e
-
-        try:
-            return result["metadata"]["name"]
-        except KeyError:
-            return None
+        return create_pipelinerun(self._api, self.namespace, manifest)
 
     def find_release_for_snapshot(self, snapshot_name: str) -> str | None:
         """Find an active (non-terminally-failed) Release for the given snapshot."""

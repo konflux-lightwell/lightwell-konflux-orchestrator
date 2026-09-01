@@ -22,6 +22,12 @@ from typing import Any
 from import_orchestrator.constants import NAMESPACE
 from import_orchestrator.engine.errors import TriggerError
 from import_orchestrator.engine.pipeline_loader import load_pipeline
+from import_orchestrator.pipelinerun import (
+    IMPORT_IDENTITY_ANNOTATION,
+    build_execution_spec_fingerprint,
+    build_import_identity,
+    build_pipelinerun_name,
+)
 
 __all__ = [
     "TriggerError",
@@ -58,27 +64,45 @@ def build_pipelinerun_manifest(
     prefix: str,
     verification_secret: str,
     namespace: str = NAMESPACE,
+    attempt: int = 0,
 ) -> dict[str, Any]:
+    spec = {
+        "taskRunTemplate": {"serviceAccountName": service_account},
+        "pipelineSpec": pipeline_spec,
+        "params": [
+            {"name": "SOURCE_IMAGE", "value": source_image},
+            {"name": "IMAGE", "value": dest_image},
+            {"name": "VERIFICATION_PUBLIC_KEY_SECRET", "value": verification_secret},
+        ],
+    }
+    execution_spec_fingerprint = build_execution_spec_fingerprint(
+        {
+            "spec": spec,
+            "application": app,
+        }
+    )
+    identity = build_import_identity(
+        "java",
+        source_image=source_image,
+        destination_image=dest_image,
+        attempt=attempt,
+        execution_spec_fingerprint=execution_spec_fingerprint,
+    )
     return {
         "apiVersion": "tekton.dev/v1",
         "kind": "PipelineRun",
         "metadata": {
-            "generateName": prefix,
+            "name": build_pipelinerun_name(prefix, identity),
             "namespace": namespace,
-            "annotations": {"test.appstudio.openshift.io/ignore-supersession": "true"},
+            "annotations": {
+                "test.appstudio.openshift.io/ignore-supersession": "true",
+                IMPORT_IDENTITY_ANNOTATION: identity,
+            },
             "labels": {
                 "appstudio.openshift.io/application": app,
                 "appstudio.openshift.io/component": app,
                 "pipelines.appstudio.openshift.io/type": "build",
             },
         },
-        "spec": {
-            "taskRunTemplate": {"serviceAccountName": service_account},
-            "pipelineSpec": pipeline_spec,
-            "params": [
-                {"name": "SOURCE_IMAGE", "value": source_image},
-                {"name": "IMAGE", "value": dest_image},
-                {"name": "VERIFICATION_PUBLIC_KEY_SECRET", "value": verification_secret},
-            ],
-        },
+        "spec": spec,
     }
