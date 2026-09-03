@@ -45,6 +45,17 @@ def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> No
         default=os.environ.get("LIGHTWELL_PYTHON_TARGET", config.DEFAULT_TARGET),
         help=f"Build target (default: {config.DEFAULT_TARGET}, or LIGHTWELL_PYTHON_TARGET env var)",
     )
+    parser.add_argument(
+        "--builds-tag",
+        default=None,
+        help=(
+            "Git ref (branch or tag) in the lightwell-builds repo to build from. "
+            "When omitted, defaults to the '<package>/<version>' tag derived from "
+            "the ref argument -- by convention the tag the validated build "
+            "publishes. The tag's existence is not checked here; a missing ref "
+            "fails later when the pipeline clones it."
+        ),
+    )
 
     parser.set_defaults(func=run, ecosystem=ecosystem)
 

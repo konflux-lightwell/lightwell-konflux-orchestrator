@@ -47,6 +47,7 @@ def build_pipelinerun_manifest(
     image_repo_base: str,
     git_auth_secret: str,
     service_account: str | None = None,
+    builds_tag: str | None = None,
 ) -> dict[str, Any]:
     """Build a python-remediated-build PipelineRun manifest for one package/version.
 
@@ -55,18 +56,23 @@ def build_pipelinerun_manifest(
 
     When ``service_account`` is None, no ``taskRunTemplate`` is emitted and the
     cluster's default service account applies.
+
+    ``builds_tag`` is the git ref (branch or tag) cloned from the lightwell-builds
+    repo. When None, it defaults to the validated ``<package>/<version>`` tag; a
+    caller passes the remediation branch to build patched source instead.
     """
     # Push to the Konflux component repository (<tenant>/<application>/<component>),
     # which is the only repo the build service account can push to. The package and
     # version are encoded in the tag rather than a per-package repo.
     image = f"{image_repo_base}/{application}/{component}:{package}-{version}"
+    tag = builds_tag or f"{package}/{version}"
     spec: dict[str, Any] = {
         "pipelineSpec": pipeline_spec,
         "params": [
             {"name": "PACKAGE", "value": package},
             {"name": "VERSION", "value": version},
             {"name": "LIGHTWELL_BUILDS_REPO_URL", "value": f"{repo_base}/pypi.org-{package}"},
-            {"name": "LIGHTWELL_BUILDS_TAG", "value": f"{package}/{version}"},
+            {"name": "LIGHTWELL_BUILDS_TAG", "value": tag},
             {"name": "IMAGE", "value": image},
             {"name": "ociStorage", "value": f"{image}.src"},
         ],

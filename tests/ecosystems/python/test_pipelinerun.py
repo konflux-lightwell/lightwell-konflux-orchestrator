@@ -94,6 +94,22 @@ class TestBuildManifest:
         assert params["PACKAGE"] == "ntplib"
         assert params["VERSION"] == "0.4.0"
         assert params["LIGHTWELL_BUILDS_TAG"] == "ntplib/0.4.0"
+
+    def test_builds_tag_defaults_to_validated_version_tag(self):
+        # With no builds_tag, the tag falls back to the validated <package>/<version>.
+        params = {p["name"]: p["value"] for p in _manifest(builds_tag=None)["spec"]["params"]}
+        assert params["LIGHTWELL_BUILDS_TAG"] == "ntplib/0.4.0"
+
+    def test_builds_tag_override(self):
+        # An explicit builds_tag (the remediation branch balor-fianna pushed)
+        # overrides the validated version tag; repo URL is unaffected.
+        params = {
+            p["name"]: p["value"] for p in _manifest(builds_tag="CVE-2025-1234/0.4.0/pipeline-9")["spec"]["params"]
+        }
+        assert params["LIGHTWELL_BUILDS_TAG"] == "CVE-2025-1234/0.4.0/pipeline-9"
+        assert params["LIGHTWELL_BUILDS_REPO_URL"] == (
+            "https://gitlab.cee.redhat.com/lightwell/lightwell-builds/pypi.org-ntplib"
+        )
         assert params["LIGHTWELL_BUILDS_REPO_URL"] == (
             "https://gitlab.cee.redhat.com/lightwell/lightwell-builds/pypi.org-ntplib"
         )
