@@ -34,6 +34,7 @@ class PythonEcosystem:
     def build_pipelinerun(self, ref: str, args: argparse.Namespace) -> dict:
         package, version = parse_ref(ref)
         target = getattr(args, "target", config.DEFAULT_TARGET)
+        builds_tag = getattr(args, "builds_tag", None)
         cfg = config.TARGET_CONFIGS[target]
         pipeline_spec = load_pipeline(config.pipeline_definition_path())
         return build_pipelinerun_manifest(
@@ -48,6 +49,7 @@ class PythonEcosystem:
             repo_base=config.LIGHTWELL_BUILDS_REPO_BASE,
             image_repo_base=config.IMAGE_REPO_BASE,
             git_auth_secret=config.GIT_AUTH_SECRET,
+            builds_tag=builds_tag,
         )
 
     def register_cli(self, subparsers: argparse._SubParsersAction) -> None:
