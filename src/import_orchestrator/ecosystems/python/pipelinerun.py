@@ -57,9 +57,11 @@ def build_pipelinerun_manifest(
     When ``service_account`` is None, no ``taskRunTemplate`` is emitted and the
     cluster's default service account applies.
 
-    ``builds_tag`` is the git ref (branch or tag) cloned from the lightwell-builds
-    repo. When None, it defaults to the validated ``<package>/<version>`` tag; a
-    caller passes the remediation branch to build patched source instead.
+    ``builds_tag`` is the git revision -- branch, tag, or commit SHA -- cloned
+    from the lightwell-builds repo (it is passed straight through as the clone
+    task's ``revision``, which accepts any of the three). When None, it defaults
+    to the validated ``<package>/<version>`` tag; a caller passes the remediation
+    branch or a pinned commit to build patched source instead.
     """
     # Push to the Konflux component repository (<tenant>/<application>/<component>),
     # which is the only repo the build service account can push to. The package and

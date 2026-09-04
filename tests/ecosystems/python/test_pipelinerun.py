@@ -124,6 +124,13 @@ class TestBuildManifest:
             "quay.io/redhat-user-workloads/lightwell-python-tenant/remediated-build/remediated-build:foolib-0.4.0.src"
         )
 
+    def test_builds_tag_accepts_commit_sha(self):
+        # A commit SHA passes through as the revision unchanged, exactly like a
+        # branch or tag -- the clone task's revision param accepts any of them.
+        sha = "deadbeefcafe1234567890abcdef1234567890ab"
+        params = {p["name"]: p["value"] for p in _manifest(builds_tag=sha)["spec"]["params"]}
+        assert params["LIGHTWELL_BUILDS_TAG"] == sha
+
     def test_pipeline_spec_embedded(self):
         assert _manifest()["spec"]["pipelineSpec"] == {"tasks": []}
 
