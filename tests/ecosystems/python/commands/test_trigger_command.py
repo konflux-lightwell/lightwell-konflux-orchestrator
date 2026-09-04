@@ -55,6 +55,34 @@ class TestTriggerArgParsing:
         with pytest.raises(SystemExit):
             parser.parse_args(["python", "trigger", "--target", "NOPE", "ntplib==0.4.0"])
 
+    def test_builds_tag_defaults_to_none(self):
+        parser = make_parser()
+        args = parser.parse_args(["python", "trigger", "ntplib==0.4.0"])
+        assert args.builds_tag is None
+
+    def test_builds_tag_parsed(self):
+        parser = make_parser()
+        args = parser.parse_args(
+            ["python", "trigger", "--builds-tag", "CVE-2025-1234/0.4.0/pipeline-9", "ntplib==0.4.0"]
+        )
+        assert args.builds_tag == "CVE-2025-1234/0.4.0/pipeline-9"
+
+    def test_builds_tag_accepts_commit_sha(self):
+        # A commit SHA is a valid git revision, accepted verbatim like a branch or tag.
+        parser = make_parser()
+        args = parser.parse_args(
+            ["python", "trigger", "--builds-tag", "deadbeefcafe1234567890abcdef1234567890ab", "ntplib==0.4.0"]
+        )
+        assert args.builds_tag == "deadbeefcafe1234567890abcdef1234567890ab"
+
+    def test_builds_ref_alias_parsed(self):
+        # --builds-ref is a synonym for --builds-tag and writes the same dest.
+        parser = make_parser()
+        args = parser.parse_args(
+            ["python", "trigger", "--builds-ref", "deadbeefcafe1234567890abcdef1234567890ab", "ntplib==0.4.0"]
+        )
+        assert args.builds_tag == "deadbeefcafe1234567890abcdef1234567890ab"
+
 
 def _args(**overrides):
     base = dict(ref="ntplib==0.4.0", ecosystem=MagicMock())

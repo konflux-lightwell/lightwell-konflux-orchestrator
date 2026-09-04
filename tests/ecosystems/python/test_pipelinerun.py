@@ -27,11 +27,11 @@ from import_orchestrator.ecosystems.python.pipelinerun import (
 
 class TestParseRef:
     def test_splits_package_and_version(self):
-        assert parse_ref("ntplib==0.4.0") == ("ntplib", "0.4.0")
+        assert parse_ref("foolib==0.4.0") == ("foolib", "0.4.0")
 
     def test_rejects_missing_separator(self):
         with pytest.raises(TriggerError):
-            parse_ref("ntplib-0.4.0")
+            parse_ref("foolib-0.4.0")
 
     def test_rejects_empty_package(self):
         with pytest.raises(TriggerError):
@@ -39,12 +39,12 @@ class TestParseRef:
 
     def test_rejects_empty_version(self):
         with pytest.raises(TriggerError):
-            parse_ref("ntplib==")
+            parse_ref("foolib==")
 
 
 def _manifest(**overrides):
     kwargs = dict(
-        package="ntplib",
+        package="foolib",
         version="0.4.0",
         pipeline_spec={"tasks": []},
         namespace="lightwell-python-tenant",
@@ -86,27 +86,50 @@ class TestBuildManifest:
         # Package identity is carried in Lightwell-namespaced labels so builds
         # can be queried/filtered by package and version.
         labels = _manifest()["metadata"]["labels"]
-        assert labels["lightwell.redhat.com/package"] == "ntplib"
+        assert labels["lightwell.redhat.com/package"] == "foolib"
         assert labels["lightwell.redhat.com/version"] == "0.4.0"
 
     def test_params_are_derived(self):
         params = {p["name"]: p["value"] for p in _manifest()["spec"]["params"]}
-        assert params["PACKAGE"] == "ntplib"
+        assert params["PACKAGE"] == "foolib"
         assert params["VERSION"] == "0.4.0"
-        assert params["LIGHTWELL_BUILDS_TAG"] == "ntplib/0.4.0"
+        assert params["LIGHTWELL_BUILDS_TAG"] == "foolib/0.4.0"
+
+    def test_builds_tag_defaults_to_validated_version_tag(self):
+        # With no builds_tag, the tag falls back to the validated <package>/<version>.
+        params = {p["name"]: p["value"] for p in _manifest(builds_tag=None)["spec"]["params"]}
+        assert params["LIGHTWELL_BUILDS_TAG"] == "foolib/0.4.0"
+
+    def test_builds_tag_override(self):
+        # An explicit builds_tag (the remediation branch balor-fianna pushed)
+        # overrides the validated version tag; repo URL is unaffected.
+        params = {
+            p["name"]: p["value"] for p in _manifest(builds_tag="CVE-2025-1234/0.4.0/pipeline-9")["spec"]["params"]
+        }
+        assert params["LIGHTWELL_BUILDS_TAG"] == "CVE-2025-1234/0.4.0/pipeline-9"
         assert params["LIGHTWELL_BUILDS_REPO_URL"] == (
-            "https://gitlab.cee.redhat.com/lightwell/lightwell-builds/pypi.org-ntplib"
+            "https://gitlab.cee.redhat.com/lightwell/lightwell-builds/pypi.org-foolib"
+        )
+        assert params["LIGHTWELL_BUILDS_REPO_URL"] == (
+            "https://gitlab.cee.redhat.com/lightwell/lightwell-builds/pypi.org-foolib"
         )
         # Built wheels push to the Konflux component repo (<app>/<component>),
         # which is what the build service account has push rights to; the
         # package/version is encoded in the tag.
         assert (
             params["IMAGE"]
-            == "quay.io/redhat-user-workloads/lightwell-python-tenant/remediated-build/remediated-build:ntplib-0.4.0"
+            == "quay.io/redhat-user-workloads/lightwell-python-tenant/remediated-build/remediated-build:foolib-0.4.0"
         )
         assert params["ociStorage"] == (
-            "quay.io/redhat-user-workloads/lightwell-python-tenant/remediated-build/remediated-build:ntplib-0.4.0.src"
+            "quay.io/redhat-user-workloads/lightwell-python-tenant/remediated-build/remediated-build:foolib-0.4.0.src"
         )
+
+    def test_builds_tag_accepts_commit_sha(self):
+        # A commit SHA passes through as the revision unchanged, exactly like a
+        # branch or tag -- the clone task's revision param accepts any of them.
+        sha = "deadbeefcafe1234567890abcdef1234567890ab"
+        params = {p["name"]: p["value"] for p in _manifest(builds_tag=sha)["spec"]["params"]}
+        assert params["LIGHTWELL_BUILDS_TAG"] == sha
 
     def test_pipeline_spec_embedded(self):
         assert _manifest()["spec"]["pipelineSpec"] == {"tasks": []}

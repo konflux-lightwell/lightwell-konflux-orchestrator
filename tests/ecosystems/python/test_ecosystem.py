@@ -42,11 +42,11 @@ def test_build_pipelinerun_from_ref(monkeypatch, tmp_path):
     pipeline_file.write_text("spec:\n  tasks: []\n")
     monkeypatch.setenv("TEKTON_PIPELINE_DIR", str(tmp_path / "tekton"))
 
-    manifest = PythonEcosystem().build_pipelinerun("ntplib==0.4.0", argparse.Namespace())
+    manifest = PythonEcosystem().build_pipelinerun("foolib==0.4.0", argparse.Namespace())
 
     assert manifest["metadata"]["namespace"] == "lightwell-python-tenant"
     params = {p["name"]: p["value"] for p in manifest["spec"]["params"]}
-    assert params["PACKAGE"] == "ntplib"
+    assert params["PACKAGE"] == "foolib"
     assert params["VERSION"] == "0.4.0"
 
 
@@ -57,14 +57,27 @@ def test_build_pipelinerun_uses_default_target_labels(monkeypatch, tmp_path):
     monkeypatch.setenv("TEKTON_PIPELINE_DIR", str(tmp_path / "tekton"))
 
     # No target on args -> DEFAULT_TARGET (REMEDIATED) supplies the labels.
-    manifest = PythonEcosystem().build_pipelinerun("ntplib==0.4.0", argparse.Namespace())
+    manifest = PythonEcosystem().build_pipelinerun("foolib==0.4.0", argparse.Namespace())
 
     labels = manifest["metadata"]["labels"]
     assert labels["appstudio.openshift.io/application"] == "remediated-build"
     assert labels["appstudio.openshift.io/component"] == "remediated-build"
 
 
+def test_build_pipelinerun_threads_builds_tag(monkeypatch, tmp_path):
+    pipeline_file = tmp_path / "tekton" / "pipelines" / "python-remediated-build" / "python-remediated-build.yaml"
+    pipeline_file.parent.mkdir(parents=True)
+    pipeline_file.write_text("spec:\n  tasks: []\n")
+    monkeypatch.setenv("TEKTON_PIPELINE_DIR", str(tmp_path / "tekton"))
+
+    args = argparse.Namespace(builds_tag="CVE-2025-1234/0.4.0/pipeline-9")
+    manifest = PythonEcosystem().build_pipelinerun("foolib==0.4.0", args)
+
+    params = {p["name"]: p["value"] for p in manifest["spec"]["params"]}
+    assert params["LIGHTWELL_BUILDS_TAG"] == "CVE-2025-1234/0.4.0/pipeline-9"
+
+
 def test_build_pipelinerun_rejects_malformed_ref(tmp_path, monkeypatch):
     monkeypatch.setenv("TEKTON_PIPELINE_DIR", str(tmp_path))
     with pytest.raises(TriggerError):
-        PythonEcosystem().build_pipelinerun("ntplib-0.4.0", argparse.Namespace())
+        PythonEcosystem().build_pipelinerun("foolib-0.4.0", argparse.Namespace())
