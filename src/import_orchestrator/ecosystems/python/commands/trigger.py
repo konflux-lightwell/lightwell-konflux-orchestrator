@@ -47,13 +47,16 @@ def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> No
     )
     parser.add_argument(
         "--builds-tag",
+        "--builds-ref",
+        dest="builds_tag",
         default=None,
         help=(
-            "Git ref (branch or tag) in the lightwell-builds repo to build from. "
-            "When omitted, defaults to the '<package>/<version>' tag derived from "
-            "the ref argument -- by convention the tag the validated build "
-            "publishes. The tag's existence is not checked here; a missing ref "
-            "fails later when the pipeline clones it."
+            "Git revision -- branch, tag, or commit SHA -- in the lightwell-builds "
+            "repo to build from (--builds-ref is a synonym). When omitted, defaults "
+            "to the '<package>/<version>' tag derived from the ref argument -- by "
+            "convention the tag the validated build publishes. The revision's "
+            "existence is not checked here; a missing one fails later when the "
+            "pipeline clones it."
         ),
     )
 
