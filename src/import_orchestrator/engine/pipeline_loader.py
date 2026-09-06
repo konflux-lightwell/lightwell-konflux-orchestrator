@@ -34,3 +34,31 @@ def load_pipeline(pipeline_path: Path) -> dict[str, Any]:
         return pipeline["spec"]
     except (yaml.YAMLError, KeyError, TypeError) as e:
         raise TriggerError(f"failed to load pipeline from {pipeline_path}: {e}") from e
+
+
+def load_pipeline_overrides(pipeline_path: Path) -> dict[str, Any]:
+    """Load optional runtime overrides (overrides.yaml) located alongside the pipeline definition."""
+    overrides_file = pipeline_path.parent / "overrides.yaml"
+    if not overrides_file.exists():
+        return {}
+    try:
+        with open(overrides_file) as f:
+            data = yaml.safe_load(f)
+        return data if isinstance(data, dict) else {}
+    except yaml.YAMLError as e:
+        raise TriggerError(f"failed to load overrides from {overrides_file}: {e}") from e
+
+
+def apply_pipeline_overrides(manifest: dict[str, Any], pipeline_path: Path) -> dict[str, Any]:
+    """Apply runtime overrides from overrides.yaml alongside pipeline_path to a PipelineRun manifest."""
+    overrides = load_pipeline_overrides(pipeline_path)
+    if not overrides:
+        return manifest
+
+    spec = manifest.setdefault("spec", {})
+    for key, value in overrides.items():
+        if key == "taskRunTemplate" and isinstance(value, dict) and isinstance(spec.get("taskRunTemplate"), dict):
+            spec["taskRunTemplate"].update(value)
+        else:
+            spec[key] = value
+    return manifest

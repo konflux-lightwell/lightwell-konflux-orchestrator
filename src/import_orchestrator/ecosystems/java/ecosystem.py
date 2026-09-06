@@ -24,8 +24,8 @@ from import_orchestrator.ecosystems.java.pipelinerun import (
     build_pipelinerun_manifest,
     digest_pin_image,
     extract_tag_from_image,
-    load_pipeline,
 )
+from import_orchestrator.engine.pipeline_loader import apply_pipeline_overrides, load_pipeline
 
 
 class JavaEcosystem:
@@ -44,8 +44,9 @@ class JavaEcosystem:
         tag = getattr(args, "tag", None) or extract_tag_from_image(source_image)
         dest_image = f"{cfg['dest_repo']}:{tag}"
 
-        pipeline_spec = load_pipeline(config.pipeline_definition_path())
-        return build_pipelinerun_manifest(
+        pipeline_path = config.pipeline_definition_path()
+        pipeline_spec = load_pipeline(pipeline_path)
+        manifest = build_pipelinerun_manifest(
             source_image=source_image,
             dest_image=dest_image,
             pipeline_spec=pipeline_spec,
@@ -55,6 +56,7 @@ class JavaEcosystem:
             verification_secret=config.VERIFICATION_PUBLIC_KEY_SECRET,
             namespace=self.namespace,
         )
+        return apply_pipeline_overrides(manifest, pipeline_path)
 
     def register_cli(self, subparsers: argparse._SubParsersAction) -> None:
         from import_orchestrator.commands import import_file

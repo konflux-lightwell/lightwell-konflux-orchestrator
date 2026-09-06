@@ -64,6 +64,20 @@ def test_build_pipelinerun_uses_default_target_labels(monkeypatch, tmp_path):
     assert labels["appstudio.openshift.io/component"] == "remediated-build"
 
 
+def test_build_pipelinerun_applies_overrides(monkeypatch, tmp_path):
+    pipeline_file = tmp_path / "tekton" / "pipelines" / "python-remediated-build" / "python-remediated-build.yaml"
+    pipeline_file.parent.mkdir(parents=True)
+    pipeline_file.write_text("spec:\n  tasks: []\n")
+
+    overrides_file = tmp_path / "tekton" / "pipelines" / "python-remediated-build" / "overrides.yaml"
+    overrides_file.write_text("timeouts:\n  pipeline: 1h\n")
+    monkeypatch.setenv("TEKTON_PIPELINE_DIR", str(tmp_path / "tekton"))
+
+    manifest = PythonEcosystem().build_pipelinerun("ntplib==0.4.0", argparse.Namespace())
+
+    assert manifest["spec"]["timeouts"] == {"pipeline": "1h"}
+
+
 def test_build_pipelinerun_rejects_malformed_ref(tmp_path, monkeypatch):
     monkeypatch.setenv("TEKTON_PIPELINE_DIR", str(tmp_path))
     with pytest.raises(TriggerError):
