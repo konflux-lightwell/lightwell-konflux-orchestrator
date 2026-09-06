@@ -1,0 +1,12 @@
+# Runtime overrides applied to PipelineRuns generated for pnc-import
+taskRunSpecs:
+  - pipelineTaskName: sast-shell-check
+    stepSpecs:
+      - name: sast-shell-check
+        computeResources:
+          requests:
+            cpu: "1"
+            memory: "5Gi"
+          limits:
+            cpu: "8"
+            memory: "5Gi"

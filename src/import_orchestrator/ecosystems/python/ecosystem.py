@@ -20,7 +20,7 @@ import argparse
 
 from import_orchestrator.ecosystems.python import config
 from import_orchestrator.ecosystems.python.pipelinerun import build_pipelinerun_manifest, parse_ref
-from import_orchestrator.engine.pipeline_loader import load_pipeline
+from import_orchestrator.engine.pipeline_loader import apply_pipeline_overrides, load_pipeline
 
 
 class PythonEcosystem:
@@ -35,8 +35,9 @@ class PythonEcosystem:
         package, version = parse_ref(ref)
         target = getattr(args, "target", config.DEFAULT_TARGET)
         cfg = config.TARGET_CONFIGS[target]
-        pipeline_spec = load_pipeline(config.pipeline_definition_path())
-        return build_pipelinerun_manifest(
+        pipeline_path = config.pipeline_definition_path()
+        pipeline_spec = load_pipeline(pipeline_path)
+        manifest = build_pipelinerun_manifest(
             package=package,
             version=version,
             pipeline_spec=pipeline_spec,
@@ -49,6 +50,7 @@ class PythonEcosystem:
             image_repo_base=config.IMAGE_REPO_BASE,
             git_auth_secret=config.GIT_AUTH_SECRET,
         )
+        return apply_pipeline_overrides(manifest, pipeline_path)
 
     def register_cli(self, subparsers: argparse._SubParsersAction) -> None:
         from import_orchestrator.commands import import_file
