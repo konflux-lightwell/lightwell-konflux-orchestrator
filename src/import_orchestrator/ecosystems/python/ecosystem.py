@@ -20,7 +20,7 @@ import argparse
 
 from import_orchestrator.ecosystems.python import config
 from import_orchestrator.ecosystems.python.pipelinerun import build_pipelinerun_manifest, parse_ref
-from import_orchestrator.engine.pipeline_loader import load_pipeline
+from import_orchestrator.engine.pipeline_loader import apply_pipeline_overrides, load_pipeline
 
 
 class PythonEcosystem:
@@ -37,8 +37,9 @@ class PythonEcosystem:
         builds_tag = getattr(args, "builds_tag", None)
         fix_type = getattr(args, "fix_type", "Backport")
         cfg = config.TARGET_CONFIGS[target]
-        pipeline_spec = load_pipeline(config.pipeline_definition_path())
-        return build_pipelinerun_manifest(
+        pipeline_path = config.pipeline_definition_path()
+        pipeline_spec = load_pipeline(pipeline_path)
+        manifest = build_pipelinerun_manifest(
             package=package,
             version=version,
             pipeline_spec=pipeline_spec,
@@ -54,6 +55,7 @@ class PythonEcosystem:
             fix_type=fix_type,
             wheel_server_url=getattr(args, "wheel_server_url", None),
         )
+        return apply_pipeline_overrides(manifest, pipeline_path)
 
     def target_skip_release(self, target: str) -> bool:
         return config.TARGET_CONFIGS.get(target, {}).get("skip_release", False)

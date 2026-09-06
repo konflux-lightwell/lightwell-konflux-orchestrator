@@ -61,6 +61,31 @@ def test_build_pipelinerun_sets_source_and_dest(monkeypatch, tmp_path):
     assert params["IMAGE"].endswith(":lw-ABC")
 
 
+def test_build_pipelinerun_applies_overrides(monkeypatch, tmp_path):
+    pipeline_file = tmp_path / "tekton" / "pipelines" / "pnc-import" / "pnc-import.yaml"
+    pipeline_file.parent.mkdir(parents=True)
+    pipeline_file.write_text("spec:\n  tasks: []\n")
+
+    overrides_file = tmp_path / "tekton" / "pipelines" / "pnc-import" / "overrides.yaml"
+    overrides_file.write_text(
+        "taskRunSpecs:\n"
+        "  - pipelineTaskName: sast-shell-check\n"
+        "    stepSpecs:\n"
+        "      - name: sast-shell-check\n"
+        "        computeResources:\n"
+        "          limits:\n"
+        "            memory: 5Gi\n"
+    )
+    monkeypatch.setenv("TEKTON_PIPELINE_DIR", str(tmp_path / "tekton"))
+
+    eco = JavaEcosystem()
+    manifest = eco.build_pipelinerun("quay.io/repo:lw-ABC@sha256:deadbeef", _args("STAGE"))
+
+    assert "taskRunSpecs" in manifest["spec"]
+    assert manifest["spec"]["taskRunSpecs"][0]["pipelineTaskName"] == "sast-shell-check"
+    assert manifest["spec"]["taskRunSpecs"][0]["stepSpecs"][0]["computeResources"]["limits"]["memory"] == "5Gi"
+
+
 def test_build_pipelinerun_missing_digest_raises(tmp_path, monkeypatch):
     monkeypatch.setenv("TEKTON_PIPELINE_DIR", str(tmp_path))
     with pytest.raises(TriggerError):
