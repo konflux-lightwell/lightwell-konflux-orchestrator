@@ -77,7 +77,90 @@ class TestResolveAuth:
         monkeypatch.setenv("KUBECONFIG", str(kc_path))
         monkeypatch.delenv("KONFLUX_TOKEN", raising=False)
 
-        with pytest.raises(RuntimeError, match="no 'token' field"):
+        with pytest.raises(RuntimeError, match="has no 'token' field in"):
+            resolve_auth("unused")
+
+    def test_raises_when_kubeconfig_missing(self, tmp_path, monkeypatch):
+        kc_path = tmp_path / "nonexistent"
+        monkeypatch.setenv("KUBECONFIG", str(kc_path))
+        monkeypatch.delenv("KONFLUX_TOKEN", raising=False)
+
+        with pytest.raises(RuntimeError, match="Kubeconfig file not found"):
+            resolve_auth("unused")
+
+    def test_raises_when_kubeconfig_invalid_yaml(self, tmp_path, monkeypatch):
+        kc_path = tmp_path / "invalid.yaml"
+        kc_path.write_text(":\n invalid")
+        monkeypatch.setenv("KUBECONFIG", str(kc_path))
+        monkeypatch.delenv("KONFLUX_TOKEN", raising=False)
+
+        with pytest.raises(RuntimeError, match="Failed to parse kubeconfig YAML"):
+            resolve_auth("unused")
+
+    def test_raises_when_no_current_context(self, tmp_path, monkeypatch):
+        kc_path = tmp_path / "kubeconfig"
+        kc_path.write_text(yaml.dump({"contexts": []}))
+        monkeypatch.setenv("KUBECONFIG", str(kc_path))
+        monkeypatch.delenv("KONFLUX_TOKEN", raising=False)
+
+        with pytest.raises(RuntimeError, match="No 'current-context' set"):
+            resolve_auth("unused")
+
+    def test_raises_when_context_not_found(self, tmp_path, monkeypatch):
+        kubeconfig = {
+            "current-context": "ctx-x",
+            "contexts": [{"name": "ctx-y", "context": {}}],
+        }
+        kc_path = tmp_path / "kubeconfig"
+        kc_path.write_text(yaml.dump(kubeconfig))
+        monkeypatch.setenv("KUBECONFIG", str(kc_path))
+        monkeypatch.delenv("KONFLUX_TOKEN", raising=False)
+
+        with pytest.raises(RuntimeError, match="Context 'ctx-x' not found"):
+            resolve_auth("unused")
+
+    def test_raises_when_cluster_not_found(self, tmp_path, monkeypatch):
+        kubeconfig = {
+            "current-context": "ctx",
+            "contexts": [{"name": "ctx", "context": {"cluster": "missing-cluster", "user": "u"}}],
+            "clusters": [],
+        }
+        kc_path = tmp_path / "kubeconfig"
+        kc_path.write_text(yaml.dump(kubeconfig))
+        monkeypatch.setenv("KUBECONFIG", str(kc_path))
+        monkeypatch.delenv("KONFLUX_TOKEN", raising=False)
+
+        with pytest.raises(RuntimeError, match="Cluster 'missing-cluster' not found"):
+            resolve_auth("unused")
+
+    def test_raises_when_user_not_found(self, tmp_path, monkeypatch):
+        kubeconfig = {
+            "current-context": "ctx",
+            "contexts": [{"name": "ctx", "context": {"cluster": "c", "user": "missing-user"}}],
+            "clusters": [{"name": "c", "cluster": {"server": "https://x"}}],
+            "users": [],
+        }
+        kc_path = tmp_path / "kubeconfig"
+        kc_path.write_text(yaml.dump(kubeconfig))
+        monkeypatch.setenv("KUBECONFIG", str(kc_path))
+        monkeypatch.delenv("KONFLUX_TOKEN", raising=False)
+
+        with pytest.raises(RuntimeError, match="User 'missing-user' not found"):
+            resolve_auth("unused")
+
+    def test_raises_when_cluster_has_no_server(self, tmp_path, monkeypatch):
+        kubeconfig = {
+            "current-context": "ctx",
+            "contexts": [{"name": "ctx", "context": {"cluster": "c", "user": "u"}}],
+            "clusters": [{"name": "c", "cluster": {}}],
+            "users": [{"name": "u", "user": {"token": "t"}}],
+        }
+        kc_path = tmp_path / "kubeconfig"
+        kc_path.write_text(yaml.dump(kubeconfig))
+        monkeypatch.setenv("KUBECONFIG", str(kc_path))
+        monkeypatch.delenv("KONFLUX_TOKEN", raising=False)
+
+        with pytest.raises(RuntimeError, match="has no 'server' URL"):
             resolve_auth("unused")
 
     def test_custom_kubeconfig_path(self, tmp_path, monkeypatch):
