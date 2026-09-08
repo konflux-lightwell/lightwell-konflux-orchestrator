@@ -1,0 +1,52 @@
+"""
+Copyright (C) 2026 Lightwell
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+         http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+PYTHON_SDIST_DEFAULT_DB_PATH = "./python_sdist_import_state.db"
+NAMESPACE = "lightwell-python-tenant"
+PIPELINERUN_PREFIX = "python-sdist-ingest-"
+
+# Konflux application and component for sdist mirroring.
+APPLICATION = os.environ.get("LIGHTWELL_PYTHON_SDIST_APP", "python-sdist-mirror")
+COMPONENT = os.environ.get("LIGHTWELL_PYTHON_SDIST_COMPONENT", "python-sdist-mirror")
+
+# Service account used for sdist ingestion PipelineRuns.
+# Defaults to build-pipeline-python-sdist-mirror (created upon component onboarding),
+# configurable via LIGHTWELL_PYTHON_SDIST_SERVICE_ACCOUNT for pre-provisioning testing.
+SERVICE_ACCOUNT = os.environ.get(
+    "LIGHTWELL_PYTHON_SDIST_SERVICE_ACCOUNT",
+    "build-pipeline-python-sdist-mirror",
+)
+
+# Base of the destination image repository. sdist artifacts are pushed to
+# "<image_repo_base>/<app>/<component>:<package>-<version>".
+IMAGE_REPO_BASE = "quay.io/redhat-user-workloads/lightwell-python-tenant"
+
+
+def pipeline_definition_path() -> Path:
+    """Return the path to the python-sdist-ingest pipeline definition.
+
+    Configurable via TEKTON_PIPELINE_DIR; otherwise falls back to the repo layout.
+    """
+    pipeline_subpath = Path("pipelines") / "python-sdist-ingest" / "python-sdist-ingest.yaml"
+    if pipeline_dir := os.environ.get("TEKTON_PIPELINE_DIR"):
+        return Path(pipeline_dir) / pipeline_subpath
+    project_root = Path(__file__).resolve().parents[4]
+    return project_root / "tekton" / pipeline_subpath

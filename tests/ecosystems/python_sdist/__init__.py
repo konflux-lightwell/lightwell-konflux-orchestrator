@@ -13,12 +13,3 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 """
-
-from __future__ import annotations
-
-from import_orchestrator.ecosystems.base import Ecosystem
-from import_orchestrator.ecosystems.java.ecosystem import JavaEcosystem
-from import_orchestrator.ecosystems.python.ecosystem import PythonEcosystem
-from import_orchestrator.ecosystems.python_sdist.ecosystem import PythonSdistEcosystem
-
-ECOSYSTEMS: list[Ecosystem] = [JavaEcosystem(), PythonEcosystem(), PythonSdistEcosystem()]
