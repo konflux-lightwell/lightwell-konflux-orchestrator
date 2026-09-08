@@ -54,11 +54,12 @@ class PythonEcosystem:
 
     def register_cli(self, subparsers: argparse._SubParsersAction) -> None:
         from import_orchestrator.commands import import_file
-        from import_orchestrator.ecosystems.python.commands import orchestrate, trigger
+        from import_orchestrator.ecosystems.python.commands import orchestrate, run, trigger
 
         eco_parser = subparsers.add_parser("python", help="Python CVE-remediated wheel builds")
         eco_sub = eco_parser.add_subparsers(dest="command")
         import_file.register(eco_sub, self)
         orchestrate.register(eco_sub, self)
+        run.register(eco_sub, self)
         trigger.register(eco_sub, self)
         eco_parser.set_defaults(_ecosystem_parser=eco_parser)

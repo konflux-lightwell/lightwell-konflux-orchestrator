@@ -101,6 +101,10 @@ def main() -> int:
         args._ecosystem_parser.print_help(sys.stderr)
         return 2
 
+    # Record whether the user supplied --db before we fill in the default, so
+    # commands like 'run' can distinguish an explicit persistent database from
+    # the implicit per-ecosystem default.
+    args.db_explicit = args.db is not None
     if args.db is None:
         args.db = Path(args.ecosystem.default_db_path)
 
