@@ -58,7 +58,13 @@ class JavaEcosystem:
 
     def register_cli(self, subparsers: argparse._SubParsersAction) -> None:
         from import_orchestrator.commands import import_file
-        from import_orchestrator.ecosystems.java.commands import fetch, import_manifest, orchestrate, trigger
+        from import_orchestrator.ecosystems.java.commands import (
+            fetch,
+            import_manifest,
+            orchestrate,
+            run,
+            trigger,
+        )
 
         eco_parser = subparsers.add_parser("java", help="Java (PNC) OCI image imports")
         eco_sub = eco_parser.add_subparsers(dest="command")
@@ -66,5 +72,6 @@ class JavaEcosystem:
         import_file.register(eco_sub, self)
         import_manifest.register(eco_sub, self)
         orchestrate.register(eco_sub, self)
+        run.register(eco_sub, self)
         trigger.register(eco_sub, self)
         eco_parser.set_defaults(_ecosystem_parser=eco_parser)
