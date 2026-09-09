@@ -144,6 +144,10 @@ spec:
           value: $(params.caTrustConfigMapName)
         - name: caTrustConfigMapKey
           value: $(params.caTrustConfigMapKey)
+        - name: depth
+          value: "0"
+        - name: fetchTags
+          value: "true"
       workspaces:
         - name: basic-auth
           workspace: git-auth
@@ -154,7 +158,7 @@ spec:
         resolver: bundles
         params:
           - name: bundle
-            value: quay.io/konflux-ci/tekton-catalog/task-source-to-sdist:0.1@sha256:67ab78a7cf18c7305f284d2640ca5d204b9ce1be892cc97fef122dfc84458337
+            value: quay.io/konflux-ci/tekton-catalog/task-source-to-sdist:0.1@sha256:f7edb8d147999daf3e4dec1f1e5ce616f17647550a0fa1e8a6d939e8a084a32b
           - name: name
             value: source-to-sdist
           - name: kind
@@ -199,6 +203,8 @@ spec:
           value: $(params.PACKAGE)
         - name: VERSION
           value: $(params.VERSION)
+        - name: COMPUTED_VERSION
+          value: $(tasks.source-to-sdist.results.COMPUTED_VERSION)
         - name: IMAGE
           value: $(params.IMAGE)
         - name: IMAGE_EXPIRES_AFTER
