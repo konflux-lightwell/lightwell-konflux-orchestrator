@@ -84,11 +84,46 @@ class TestUpdateStatuses:
         monitor.db.update_status(ref.id, ImportStatus.RUNNING, pipelinerun_name="pnc-import-abc")
 
         mock_kube.get_pipelinerun_status.return_value = PipelineRunStatus(name="pnc-import-abc", status="False")
+        mock_kube.get_pipelinerun_failure_detail.return_value = None
 
         monitor.update_statuses()
 
         failed = monitor.db.get_by_status(ImportStatus.FAILED)
         assert len(failed) == 1
+
+    def test_failure_captures_diagnostics_in_error_message(self, monitor: PipelineMonitor, mock_kube: MagicMock):
+        """Verify that the captured failure detail is stored as the error message."""
+        ref, _ = monitor.db.add_item("quay.io/repo:tag@sha256:abc")
+        assert ref.id is not None
+
+        monitor.db.update_status(ref.id, ImportStatus.RUNNING, pipelinerun_name="pnc-import-abc")
+
+        mock_kube.get_pipelinerun_status.return_value = PipelineRunStatus(name="pnc-import-abc", status="False")
+        mock_kube.get_pipelinerun_failure_detail.return_value = (
+            "TaskRun pnc-import-abc-build: Failed - step failed\n  step 'build' terminated: reason=Error exitCode=1"
+        )
+
+        monitor.update_statuses()
+
+        failed = monitor.db.get_by_status(ImportStatus.FAILED)
+        assert len(failed) == 1
+        assert "exitCode=1" in failed[0].error_message
+        mock_kube.get_pipelinerun_failure_detail.assert_called_once_with("pnc-import-abc")
+
+    def test_failure_falls_back_to_generic_message(self, monitor: PipelineMonitor, mock_kube: MagicMock):
+        """Verify the generic message is used when no diagnostics can be gathered."""
+        ref, _ = monitor.db.add_item("quay.io/repo:tag@sha256:abc")
+        assert ref.id is not None
+
+        monitor.db.update_status(ref.id, ImportStatus.RUNNING, pipelinerun_name="pnc-import-abc")
+
+        mock_kube.get_pipelinerun_status.return_value = PipelineRunStatus(name="pnc-import-abc", status="False")
+        mock_kube.get_pipelinerun_failure_detail.return_value = None
+
+        monitor.update_statuses()
+
+        failed = monitor.db.get_by_status(ImportStatus.FAILED)
+        assert failed[0].error_message == "PipelineRun failed"
 
     def test_skips_refs_without_pipelinerun_name(self, monitor: PipelineMonitor, mock_kube: MagicMock):
         """Verify that references without a PipelineRun name are skipped."""

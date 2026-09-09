@@ -51,6 +51,11 @@ class KubeClient:
     Authenticates using either a KUBECONFIG file or the KONFLUX_TOKEN environment variable.
     """
 
+    # Diagnostics captured on failure are bounded so a runaway build log cannot
+    # bloat the ImportItem's error_message (and any Jira comment derived from it).
+    _MAX_LOG_LINES = 20
+    _MAX_DETAIL_CHARS = 4000
+
     def __init__(self, namespace: str, cluster_api: str, kubearchive_api: str = ""):
         self.namespace = namespace
         self.cluster_api = cluster_api
@@ -111,6 +116,117 @@ class KubeClient:
                 pass
 
         return None
+
+    def get_pipelinerun_failure_detail(self, name: str) -> str | None:
+        """Best-effort human-readable diagnostics for a failed PipelineRun.
+
+        Walks the PipelineRun's ``Succeeded`` condition and each failed child
+        TaskRun (via ``status.childReferences``) to capture the failure reason,
+        the failing step's termination info, and a tail of that step's
+        container logs. Each source is optional: whatever can be gathered is
+        returned, degrading to ``None`` only when no PipelineRun data is
+        available at all. Callers (e.g. balor-fianna) surface this as the
+        ImportItem's ``error_message`` instead of the opaque "PipelineRun
+        failed".
+        """
+        pr = self._fetch_resource(
+            f"/apis/tekton.dev/v1/namespaces/{self.namespace}/pipelineruns/{name}",
+        )
+        if pr is None:
+            return None
+
+        parts: list[str] = []
+
+        cond = self._succeeded_condition(pr)
+        if cond is not None:
+            header = " - ".join(p for p in (cond.get("reason", ""), cond.get("message", "")) if p)
+            if header:
+                parts.append(f"PipelineRun {name}: {header}")
+
+        for child in pr.get("status", {}).get("childReferences", []):
+            if child.get("kind") != "TaskRun":
+                continue
+            tr_name = child.get("name")
+            if not tr_name:
+                continue
+            detail = self._taskrun_failure_detail(tr_name)
+            if detail:
+                parts.append(detail)
+
+        if not parts:
+            return None
+        return "\n".join(parts)[: self._MAX_DETAIL_CHARS]
+
+    def _taskrun_failure_detail(self, tr_name: str) -> str | None:
+        """Return failure diagnostics for a single TaskRun, or None if it did not fail."""
+        tr = self._fetch_resource(
+            f"/apis/tekton.dev/v1/namespaces/{self.namespace}/taskruns/{tr_name}",
+        )
+        if tr is None:
+            return None
+
+        cond = self._succeeded_condition(tr)
+        if cond is None or cond.get("status") != "False":
+            return None
+
+        header = " - ".join(p for p in (cond.get("reason", ""), cond.get("message", "")) if p)
+        lines = [f"TaskRun {tr_name}: {header}" if header else f"TaskRun {tr_name}: failed"]
+
+        status = tr.get("status", {})
+        pod_name = status.get("podName", "")
+        for step in status.get("steps", []):
+            term = step.get("terminated")
+            if not term or term.get("reason") == "Completed":
+                continue
+            step_name = step.get("name", "")
+            exit_code = term.get("exitCode")
+            step_line = f"  step '{step_name}' terminated: reason={term.get('reason')} exitCode={exit_code}"
+            if term.get("message"):
+                step_line += f" message={term['message']}"
+            lines.append(step_line)
+
+            container = step.get("container") or (f"step-{step_name}" if step_name else "")
+            if pod_name and container:
+                log_tail = self._pod_log_tail(pod_name, container)
+                if log_tail:
+                    lines.append(f"  logs ({container}):\n{log_tail}")
+
+        return "\n".join(lines)
+
+    def _pod_log_tail(self, pod_name: str, container: str) -> str | None:
+        """Best-effort tail of a container's logs; None if unavailable."""
+        try:
+            text = self._api.get_text(
+                f"/api/v1/namespaces/{self.namespace}/pods/{pod_name}/log",
+                container=container,
+                tailLines=self._MAX_LOG_LINES,
+            )
+        except requests.RequestException:
+            return None
+        stripped = text.strip()
+        return stripped or None
+
+    def _fetch_resource(self, api_path: str) -> dict | None:
+        """GET a resource from the live cluster, falling back to KubeArchive."""
+        try:
+            return self._api.get(api_path)
+        except requests.RequestException:
+            pass
+        if self._ka_api is not None:
+            try:
+                return self._ka_api.get(api_path)
+            except requests.RequestException:
+                pass
+        return None
+
+    @staticmethod
+    def _succeeded_condition(resource: dict) -> dict | None:
+        """Return the ``Succeeded`` condition, falling back to the first condition."""
+        conditions = resource.get("status", {}).get("conditions", [])
+        for cond in conditions:
+            if cond.get("type") == "Succeeded":
+                return cond
+        return conditions[0] if conditions else None
 
     def count_running_imports(self, prefix: str) -> int:
         """Count running PipelineRuns whose names start with the given prefix."""
