@@ -14,8 +14,8 @@ Two ecosystems are available today. Each uses its own default database (`--db` o
 
 | Ecosystem | Default database | Description | Commands |
 |-----------|------------------|-------------|----------|
-| `java` | `./java_import_state.db` | PNC OCI image imports | `fetch`, `import-file`, `import-manifest`, `orchestrate`, `trigger` |
-| `python` | `./python_import_state.db` | CVE-remediated Python wheel builds | `import-file`, `orchestrate`, `trigger` |
+| `java` | `./java_import_state.db` | PNC OCI image imports | `fetch`, `import-file`, `import-manifest`, `orchestrate`, `run`, `trigger` |
+| `python` | `./python_import_state.db` | CVE-remediated Python wheel builds | `import-file`, `orchestrate`, `run`, `trigger` |
 
 The `python` ecosystem identifies each build by a `package==version` reference (e.g. `ntplib==0.4.0`) instead of an OCI image, and runs the `python-remediated-build` pipeline. It has no `fetch` or `import-manifest` commands; populate its database with `import-file` (one `package==version` per line).
 
@@ -60,6 +60,7 @@ import-orchestrator java import-file --help
 import-orchestrator java orchestrate --help
 import-orchestrator java import-manifest --help
 import-orchestrator java trigger --help
+import-orchestrator java run --help
 
 # Typical workflow: fetch then orchestrate
 QUAY_TOKEN=<token> import-orchestrator java fetch
@@ -75,6 +76,15 @@ import-orchestrator java orchestrate --max-parallel 10
 
 # Trigger a single PNC import PipelineRun
 import-orchestrator java trigger 'quay.io/light-castle/rebuild-pnc:tag@sha256:abc123...'
+
+# Run a single reference end-to-end (trigger + monitor + release), then print
+# a JSON result to stdout. Uses a throwaway database unless --db is given.
+import-orchestrator java run 'quay.io/light-castle/rebuild-pnc:tag@sha256:abc123...'
+
+# Same, but persist state to a database and also write the result to a file
+import-orchestrator --db ./one-off.db java run \
+  'quay.io/light-castle/rebuild-pnc:tag@sha256:abc123...' \
+  --artifact-type REBUILD --output-json ./result.json
 
 # Fetch only (populate database for inspection)
 QUAY_TOKEN=<token> import-orchestrator java fetch
@@ -101,6 +111,7 @@ import-orchestrator python --help
 import-orchestrator python import-file --help
 import-orchestrator python orchestrate --help
 import-orchestrator python trigger --help
+import-orchestrator python run --help
 
 # Import package references from a file, then orchestrate
 import-orchestrator python import-file packages.txt
@@ -108,6 +119,14 @@ import-orchestrator python orchestrate --max-parallel 5
 
 # Trigger a single build
 import-orchestrator python trigger 'ntplib==0.4.0'
+
+# Run a single package end-to-end (trigger + monitor + release), then print
+# a JSON result to stdout. Uses a throwaway database unless --db is given.
+import-orchestrator python run 'ntplib==0.4.0'
+
+# Same, but persist state to a database and also write the result to a file
+import-orchestrator --db ./one-off.db python run 'ntplib==0.4.0' \
+  --output-json ./result.json
 ```
 
 The `import-file` input lists one `package==version` per line; blank lines and lines starting with `#` are ignored:
@@ -134,12 +153,12 @@ Global options are placed before the ecosystem: `import-orchestrator [--db PATH]
 Fetches OCI references from Quay and stores them in the database.
 
 ```bash
-import-orchestrator java fetch [--artifact-type {STAGE,REBUILD,REMEDIATED}]
+import-orchestrator java fetch [--artifact-type {STAGE,REBUILD,REMEDIATED,NOVEL}]
 ```
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--artifact-type` | `STAGE` (or `LIGHTWELL_ARTIFACT_TYPE` env var) | Artifact type: STAGE, REBUILD, or REMEDIATED |
+| `--artifact-type` | `STAGE` (or `LIGHTWELL_ARTIFACT_TYPE` env var) | Artifact type: STAGE, REBUILD, REMEDIATED, or NOVEL |
 
 #### `import-file` Subcommand
 
@@ -196,7 +215,7 @@ import-orchestrator java orchestrate [OPTIONS]
 | `--max-parallel` | `1` | Maximum parallel PipelineRuns |
 | `--poll-interval` | `30` | Seconds between status checks |
 | `--max-retries` | `3` | Max retry attempts for failed imports |
-| `--artifact-type` | `STAGE` (or `LIGHTWELL_ARTIFACT_TYPE` env var) | Artifact type: STAGE, REBUILD, or REMEDIATED |
+| `--artifact-type` | `STAGE` (or `LIGHTWELL_ARTIFACT_TYPE` env var) | Artifact type: STAGE, REBUILD, REMEDIATED, or NOVEL |
 
 #### `trigger` Subcommand
 
@@ -210,16 +229,116 @@ import-orchestrator java trigger <source_image> [tag] [OPTIONS]
 |-----------------|-------------|
 | `source_image` | OCI image reference to import (must be digest-pinned with @sha256:) |
 | `tag` | Optional destination tag override (default: derived from source image) |
-| `--artifact-type` | Artifact type: STAGE (default), REBUILD, or REMEDIATED |
+| `--artifact-type` | Artifact type: STAGE (default), REBUILD, REMEDIATED, or NOVEL |
 | `--dry-run` | Print the PipelineRun YAML without submitting it |
+
+#### `run` Subcommand
+
+Runs a **single** reference end-to-end and blocks until it finishes: ingest → trigger the
+PipelineRun → monitor it to completion → monitor the release → emit a JSON result. It is the
+one-shot counterpart to `import-file` + `orchestrate`, intended for CI jobs and ad-hoc runs that
+handle exactly one artifact and want a machine-readable answer.
+
+Unlike `trigger`, which submits a PipelineRun and returns immediately, `run` waits for the outcome.
+It has no `--dry-run`.
+
+```bash
+# Java: one digest-pinned image
+import-orchestrator java run <source_image> [tag] [OPTIONS]
+
+# Python: one package==version reference
+import-orchestrator python run <ref> [OPTIONS]
+```
+
+**Java arguments and options:**
+
+| Argument/Option | Default | Description |
+|-----------------|---------|-------------|
+| `source_image` | — | OCI image reference to import (must be digest-pinned with `@sha256:`) |
+| `tag` | derived from source image | Optional destination tag override |
+| `--artifact-type` | `STAGE` (or `LIGHTWELL_ARTIFACT_TYPE` env var) | Artifact type: STAGE, REBUILD, REMEDIATED, or NOVEL |
+| `--poll-interval` | `30` | Seconds between status checks |
+| `--max-retries` | `3` | Max retry attempts on transient failure |
+| `--output-json` | — | Also write the result JSON to this path |
+
+**Python arguments and options:**
+
+| Argument/Option | Default | Description |
+|-----------------|---------|-------------|
+| `ref` | — | Package reference as `package==version` (e.g. `ntplib==0.4.0`) |
+| `--target` | `REMEDIATED` (or `LIGHTWELL_PYTHON_TARGET` env var) | Build target |
+| `--builds-tag` / `--builds-ref` | `<package>/<version>` | `lightwell-builds` git revision to build from |
+| `--poll-interval` | `30` | Seconds between status checks |
+| `--max-retries` | `3` | Max retry attempts on transient failure |
+| `--output-json` | — | Also write the result JSON to this path |
+
+##### Database: ephemeral by default
+
+`run` does **not** touch the ecosystem's shared database unless you ask it to. With no global
+`--db`, it creates a throwaway SQLite database in a temporary directory and deletes it when the
+command exits. That isolation is what keeps the run single-ref: the monitoring loop only ever sees
+the one reference you passed, rather than picking up pending rows left behind by an earlier
+`import-file` or `fetch`. Pass the global `--db` (before the ecosystem name) to persist state
+instead — useful for resuming or for inspecting the row afterwards:
+
+```bash
+# Ephemeral — nothing left on disk
+import-orchestrator java run 'quay.io/light-castle/rebuild-pnc:tag@sha256:abc...'
+
+# Persistent — state kept in ./one-off.db
+import-orchestrator --db ./one-off.db java run 'quay.io/light-castle/rebuild-pnc:tag@sha256:abc...'
+```
+
+> **Point `--db` at a fresh or single-purpose database.** `run` seeds your reference into the
+> database and then runs the standard orchestration loop, which picks up **every** pending row it
+> finds — it is not filtered to your reference. If you point `--db` at a shared database that
+> already has pending work (from `fetch`, `import-file`, or an interrupted `orchestrate`), `run`
+> will work through all of it, one at a time, and won't return until the whole database reaches a
+> terminal state. The result JSON still describes only your reference, but the exit code reflects
+> the database as a whole (see Exit codes below). The default ephemeral database avoids this
+> entirely.
+
+> **Note:** `--reset` deletes the database it resolves *before* `run` swaps in its ephemeral one.
+> Running `import-orchestrator --reset java run ...` without an explicit `--db` therefore deletes
+> the shared `java_import_state.db` and then runs against a throwaway database anyway. Don't
+> combine `--reset` with `run` unless you also pass `--db`.
+
+##### Result JSON
+
+On completion `run` prints exactly one JSON object to **stdout** — all progress and diagnostic
+output goes to stderr, so `import-orchestrator java run ... | jq` is safe. Pass `--output-json
+PATH` to write the same payload to a file as well (stdout still gets it).
+
+```json
+{
+  "ref": "quay.io/light-castle/rebuild-pnc:tag@sha256:abc123...",
+  "status": "success",
+  "pipelinerun_name": "pnc-import-abc123",
+  "snapshot_name": "rebuild-pnc-xyz",
+  "release_name": "rebuild-pnc-xyz-release",
+  "error_message": null,
+  "retry_count": 0
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `ref` | The reference that was run |
+| `status` | Final state — `success` or `failed` |
+| `pipelinerun_name` | Name of the triggered PipelineRun (`null` if it never got that far) |
+| `snapshot_name` | Konflux Snapshot produced by the build |
+| `release_name` | Release created from the snapshot |
+| `error_message` | Failure detail, `null` on success |
+| `retry_count` | How many retries were consumed |
 
 ### Environment Variables
 
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `QUAY_TOKEN` | Yes (for `fetch`) | Authentication token for Quay.io API |
-| `KONFLUX_TOKEN` or `KUBECONFIG` | Yes (for `orchestrate` and `trigger`) | Cluster authentication |
-| `LIGHTWELL_ARTIFACT_TYPE` | No | `STAGE` (default), `REBUILD`, or `REMEDIATED` |
+| `KONFLUX_TOKEN` or `KUBECONFIG` | Yes (for `orchestrate`, `trigger`, and `run`) | Cluster authentication |
+| `LIGHTWELL_ARTIFACT_TYPE` | No | `STAGE` (default), `REBUILD`, `REMEDIATED`, or `NOVEL` |
+| `LIGHTWELL_PYTHON_TARGET` | No | Build target for the `python` ecosystem: `REMEDIATED` (default) |
 | `TEKTON_PIPELINE_DIR` | No | Path to directory containing Tekton pipeline definitions (defaults to `tekton/` in repository root) |
 
 
@@ -285,6 +404,27 @@ import-orchestrator java trigger <source_image> [tag] [OPTIONS]
 **Exit codes:**
 - `0` — PipelineRun triggered successfully
 - `1` — Validation or submission errors
+
+#### `run` subcommand
+
+1. Resolves the database: a temporary throwaway unless a global `--db` was given
+2. Ingests the single reference into that database with `status='pending'`
+3. Triggers its PipelineRun (with `--max-parallel` fixed at 1)
+4. Polls the PipelineRun every `--poll-interval` seconds until it completes, retrying transient
+   failures up to `--max-retries` times
+5. Monitors the resulting Snapshot and Release to completion
+6. Prints the result JSON to stdout (and to `--output-json PATH` if given)
+7. Removes the temporary database, if one was created
+
+**Exit codes:**
+- `0` — No import in the database ended in `failed`
+- `1` — At least one import ended in `failed` after exhausting retries
+- `2` — CLI usage error (no ecosystem or no subcommand given)
+
+With the default ephemeral database the database holds only your reference, so `0`/`1` mean exactly
+"this reference succeeded/failed". With an explicit `--db` that contains other pending rows, the
+exit code covers all of them — read `status` in the result JSON if you need the verdict for your
+reference specifically. The result JSON is printed for both `0` and `1`.
 
 ### Database Inspection
 
