@@ -17,7 +17,10 @@ limitations under the License.
 from __future__ import annotations
 
 import os
+import subprocess
 from pathlib import Path
+
+from import_orchestrator.engine.errors import TriggerError
 
 PYTHON_SDIST_DEFAULT_DB_PATH = "./python_sdist_import_state.db"
 NAMESPACE = "lightwell-python-tenant"
@@ -38,6 +41,40 @@ SERVICE_ACCOUNT = os.environ.get(
 # Base of the destination image repository. sdist artifacts are pushed to
 # "<image_repo_base>/<app>/<component>:<package>-<version>".
 IMAGE_REPO_BASE = "quay.io/redhat-user-workloads/lightwell-python-tenant"
+
+
+def pipeline_source_identity() -> tuple[str, str]:
+    """Return the immutable Git source identity of this inline pipeline definition.
+
+    The sdist CLI embeds the pipeline YAML from this repository in each
+    PipelineRun. Tekton Chains therefore needs this checkout's origin URL and
+    exact commit SHA, rather than a branch name or the upstream package source.
+    """
+    project_root = Path(__file__).resolve().parents[4]
+    try:
+        revision = subprocess.run(
+            ["git", "-C", str(project_root), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        remote_url = subprocess.run(
+            ["git", "-C", str(project_root), "remote", "get-url", "origin"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise TriggerError("unable to determine Git source identity for inline sdist pipeline") from exc
+
+    if remote_url.startswith("git@github.com:"):
+        remote_url = f"https://github.com/{remote_url.removeprefix('git@github.com:')}"
+    if remote_url.endswith(".git"):
+        remote_url = remote_url.removesuffix(".git")
+    if len(revision) != 40 or any(char not in "0123456789abcdef" for char in revision.lower()):
+        raise TriggerError(f"inline sdist pipeline Git revision is not a full SHA-1: {revision!r}")
+
+    return remote_url, revision
 
 
 def pipeline_definition_path() -> Path:
