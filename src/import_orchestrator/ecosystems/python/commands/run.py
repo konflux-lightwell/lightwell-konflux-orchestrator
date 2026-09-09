@@ -76,6 +76,12 @@ def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> No
         default=DEFAULT_MAX_RETRIES,
         help=f"Max retry attempts for a failed import (default: {DEFAULT_MAX_RETRIES})",
     )
+    parser.add_argument(
+        "--output-json",
+        default=None,
+        metavar="PATH",
+        help="Also write the final result payload as JSON to PATH (in addition to stdout)",
+    )
 
     parser.set_defaults(func=run, ecosystem=ecosystem)
 

@@ -78,6 +78,16 @@ class TestRunArgParsing:
         args = parser.parse_args(["python", "run", "ntplib==0.4.0"])
         assert not hasattr(args, "max_parallel")
 
+    def test_output_json_defaults_to_none(self):
+        parser = make_parser()
+        args = parser.parse_args(["python", "run", "ntplib==0.4.0"])
+        assert args.output_json is None
+
+    def test_output_json_parsed(self):
+        parser = make_parser()
+        args = parser.parse_args(["python", "run", "--output-json", "/tmp/result.json", "ntplib==0.4.0"])
+        assert args.output_json == "/tmp/result.json"
+
 
 class TestRunCommand:
     @patch("import_orchestrator.ecosystems.python.commands.run.run_single")

@@ -74,6 +74,16 @@ class TestRunArgParsing:
         args = parser.parse_args(["java", "run", _IMAGE])
         assert not hasattr(args, "max_parallel")
 
+    def test_output_json_defaults_to_none(self):
+        parser = make_parser()
+        args = parser.parse_args(["java", "run", _IMAGE])
+        assert args.output_json is None
+
+    def test_output_json_parsed(self):
+        parser = make_parser()
+        args = parser.parse_args(["java", "run", "--output-json", "/tmp/result.json", _IMAGE])
+        assert args.output_json == "/tmp/result.json"
+
 
 class TestRunCommand:
     @patch("import_orchestrator.ecosystems.java.commands.run.run_single")
