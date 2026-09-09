@@ -17,6 +17,7 @@ limitations under the License.
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 import sys
 import tempfile
@@ -32,6 +33,7 @@ from import_orchestrator.engine import (
     PipelineMonitor,
     ReleaseMonitor,
 )
+from import_orchestrator.models import ImportItem, ImportStatus
 
 
 def _resolve_db(args: argparse.Namespace) -> tuple[Path, str | None]:
@@ -53,6 +55,51 @@ def _resolve_db(args: argparse.Namespace) -> tuple[Path, str | None]:
     return Path(tmp_dir) / "state.db", tmp_dir
 
 
+def _result_payload(ref: str, item: ImportItem | None, rc: int) -> dict:
+    """Build the structured result payload for a completed single-ref run.
+
+    Captures the final ``ImportItem`` state so callers can record build outputs
+    on success (``pipelinerun_name``, ``snapshot_name``, ``release_name``) and
+    diagnose failures (``error_message``). ``item`` is normally present after the
+    run; if the lookup somehow returns nothing, fall back to a minimal payload
+    whose status is derived from the exit code.
+    """
+    if item is None:
+        return {
+            "ref": ref,
+            "status": ImportStatus.SUCCESS.value if rc == 0 else ImportStatus.FAILED.value,
+            "pipelinerun_name": None,
+            "snapshot_name": None,
+            "release_name": None,
+            "error_message": None,
+            "retry_count": 0,
+        }
+
+    return {
+        "ref": item.ref,
+        "status": item.status.value,
+        "pipelinerun_name": item.pipelinerun_name,
+        "snapshot_name": item.snapshot_name,
+        "release_name": item.release_name,
+        "error_message": item.error_message,
+        "retry_count": item.retry_count,
+    }
+
+
+def _emit_result(payload: dict, output_json: str | None) -> None:
+    """Emit the result payload as JSON to stdout, and optionally to a file.
+
+    Human-readable progress goes to stderr, so stdout carries only this single
+    JSON line, keeping it easy to capture or pipe. When ``output_json`` is set,
+    the same payload is also written to that path for CI robustness.
+    """
+    serialized = json.dumps(payload)
+    print(serialized)
+
+    if output_json is not None:
+        Path(output_json).write_text(serialized + "\n")
+
+
 def run_single(args: argparse.Namespace, ref: str) -> int:
     """Orchestrate a single ref end-to-end: seed, trigger, monitor, retry.
 
@@ -61,6 +108,10 @@ def run_single(args: argparse.Namespace, ref: str) -> int:
     reaches a terminal state, applying retries on failure. Generic across
     ecosystems: the ecosystem supplies its own namespace, PipelineRun prefix
     and manifest builder.
+
+    On completion it emits a structured JSON result payload (see
+    ``_result_payload``) to stdout, and to ``--output-json`` if given, before the
+    ephemeral database is torn down -- so callers keep the final state.
 
     Returns:
         Exit code: 0 if the import succeeded, 1 if it failed.
@@ -92,7 +143,13 @@ def run_single(args: argparse.Namespace, ref: str) -> int:
                 max_retries=args.max_retries,
             )
 
-            return orchestrator.run_until_complete()
+            rc = orchestrator.run_until_complete()
+
+            # Capture final state while the DB is still open, before cleanup.
+            payload = _result_payload(ref, db.get_by_ref(ref), rc)
+            _emit_result(payload, getattr(args, "output_json", None))
+
+            return rc
     finally:
         if cleanup_dir is not None:
             shutil.rmtree(cleanup_dir, ignore_errors=True)

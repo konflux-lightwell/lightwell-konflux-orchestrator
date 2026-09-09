@@ -197,6 +197,21 @@ class ImportDatabase:
 
         self.conn.commit()
 
+    def get_by_ref(self, ref: str) -> ImportItem | None:
+        """Look up an item by its ecosystem-specific unique ref."""
+        assert self.conn is not None
+        cursor = self.conn.cursor()
+
+        cursor.execute(
+            """
+            SELECT * FROM import_items WHERE ref = ?
+        """,
+            (ref,),
+        )
+
+        row = cursor.fetchone()
+        return self._row_to_item(row) if row else None
+
     def get_by_pipelinerun_name(self, name: str) -> ImportItem | None:
         """Look up an item by its PipelineRun name."""
         assert self.conn is not None

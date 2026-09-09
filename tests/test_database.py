@@ -112,6 +112,17 @@ class TestImportDatabase:
     def test_get_by_pipelinerun_name_not_found(self, db: ImportDatabase):
         assert db.get_by_pipelinerun_name("nonexistent") is None
 
+    def test_get_by_ref(self, db: ImportDatabase):
+        db.add_item("quay.io/repo:tag@sha256:abc")
+
+        found = db.get_by_ref("quay.io/repo:tag@sha256:abc")
+        assert found is not None
+        assert found.ref == "quay.io/repo:tag@sha256:abc"
+        assert found.status == ImportStatus.PENDING
+
+    def test_get_by_ref_not_found(self, db: ImportDatabase):
+        assert db.get_by_ref("nonexistent") is None
+
     def test_get_retry_candidates(self, db: ImportDatabase):
         ref1, _ = db.add_item("quay.io/repo:tag1@sha256:aaa")
         ref2, _ = db.add_item("quay.io/repo:tag2@sha256:bbb")
