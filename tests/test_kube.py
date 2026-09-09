@@ -159,6 +159,141 @@ class TestGetPipelineRunStatus:
         assert result is None
 
 
+class TestGetPipelineRunFailureDetail:
+    """Test the get_pipelinerun_failure_detail method."""
+
+    def _pr(self, name, *, reason="Failed", message="Tasks Completed: 1 (Failed: 1)", children=()):
+        return {
+            "status": {
+                "conditions": [{"type": "Succeeded", "status": "False", "reason": reason, "message": message}],
+                "childReferences": [{"kind": "TaskRun", "name": c} for c in children],
+            }
+        }
+
+    def _failed_tr(self, *, reason="Failed", message="build step failed", pod_name="pod-1", steps=None):
+        return {
+            "status": {
+                "conditions": [{"type": "Succeeded", "status": "False", "reason": reason, "message": message}],
+                "podName": pod_name,
+                "steps": steps if steps is not None else [],
+            }
+        }
+
+    def test_returns_none_when_pipelinerun_missing(self, kube: KubeClient):
+        kube._mock_api.get.side_effect = requests.HTTPError("404")
+
+        assert kube.get_pipelinerun_failure_detail("pnc-import-abc") is None
+
+    def test_returns_none_when_no_diagnostics(self, kube: KubeClient):
+        kube._mock_api.get.return_value = {"status": {}}
+
+        assert kube.get_pipelinerun_failure_detail("pnc-import-abc") is None
+
+    def test_captures_condition_and_failed_taskrun_with_logs(self, kube: KubeClient):
+        pr = self._pr(
+            "pnc-import-abc",
+            reason="Failed",
+            message="Tasks Completed: 1 (Failed: 1)",
+            children=["tr-build"],
+        )
+        tr = self._failed_tr(
+            reason="Failed",
+            message="TaskRun failed",
+            pod_name="pod-abc",
+            steps=[
+                {"name": "prepare", "container": "step-prepare", "terminated": {"reason": "Completed", "exitCode": 0}},
+                {"name": "build", "container": "step-build", "terminated": {"reason": "Error", "exitCode": 1}},
+            ],
+        )
+
+        def get_side_effect(path):
+            if path.endswith("/pipelineruns/pnc-import-abc"):
+                return pr
+            if path.endswith("/taskruns/tr-build"):
+                return tr
+            raise requests.HTTPError("404")
+
+        kube._mock_api.get.side_effect = get_side_effect
+        kube._mock_api.get_text.return_value = "compiling wheel...\nfatal error: Python.h: No such file\n"
+
+        detail = kube.get_pipelinerun_failure_detail("pnc-import-abc")
+
+        assert detail is not None
+        assert "PipelineRun pnc-import-abc: Failed - Tasks Completed: 1 (Failed: 1)" in detail
+        assert "TaskRun tr-build: Failed - TaskRun failed" in detail
+        assert "step 'build' terminated: reason=Error exitCode=1" in detail
+        # The completed step is not reported as a failure.
+        assert "step 'prepare'" not in detail
+        # The failing step's container logs are tailed in.
+        assert "fatal error: Python.h" in detail
+        kube._mock_api.get_text.assert_called_once_with(
+            "/api/v1/namespaces/test-ns/pods/pod-abc/log",
+            container="step-build",
+            tailLines=20,
+        )
+
+    def test_degrades_when_logs_unavailable(self, kube: KubeClient):
+        pr = self._pr("pnc-import-abc", children=["tr-build"])
+        tr = self._failed_tr(
+            pod_name="pod-abc",
+            steps=[{"name": "build", "container": "step-build", "terminated": {"reason": "Error", "exitCode": 1}}],
+        )
+
+        def get_side_effect(path):
+            if path.endswith("/pipelineruns/pnc-import-abc"):
+                return pr
+            if path.endswith("/taskruns/tr-build"):
+                return tr
+            raise requests.HTTPError("404")
+
+        kube._mock_api.get.side_effect = get_side_effect
+        kube._mock_api.get_text.side_effect = requests.HTTPError("pod gone")
+
+        detail = kube.get_pipelinerun_failure_detail("pnc-import-abc")
+
+        assert detail is not None
+        assert "step 'build' terminated: reason=Error exitCode=1" in detail
+        assert "logs (" not in detail
+
+    def test_skips_successful_taskruns(self, kube: KubeClient):
+        pr = self._pr("pnc-import-abc", children=["tr-ok"])
+        tr_ok = {"status": {"conditions": [{"type": "Succeeded", "status": "True", "reason": "Succeeded"}]}}
+
+        def get_side_effect(path):
+            if path.endswith("/pipelineruns/pnc-import-abc"):
+                return pr
+            if path.endswith("/taskruns/tr-ok"):
+                return tr_ok
+            raise requests.HTTPError("404")
+
+        kube._mock_api.get.side_effect = get_side_effect
+
+        detail = kube.get_pipelinerun_failure_detail("pnc-import-abc")
+
+        assert detail is not None
+        assert "TaskRun tr-ok" not in detail
+        assert "PipelineRun pnc-import-abc" in detail
+
+    def test_falls_back_to_kubearchive(self, kube_with_ka: KubeClient):
+        pr = self._pr("archived-pr", children=[])
+        kube_with_ka._mock_api.get.side_effect = requests.HTTPError("404")
+        kube_with_ka._mock_ka_api.get.return_value = pr
+
+        detail = kube_with_ka.get_pipelinerun_failure_detail("archived-pr")
+
+        assert detail is not None
+        assert "PipelineRun archived-pr: Failed" in detail
+
+    def test_truncates_to_max_chars(self, kube: KubeClient):
+        pr = self._pr("pnc-import-abc", message="x" * 10000, children=[])
+        kube._mock_api.get.return_value = pr
+
+        detail = kube.get_pipelinerun_failure_detail("pnc-import-abc")
+
+        assert detail is not None
+        assert len(detail) <= KubeClient._MAX_DETAIL_CHARS
+
+
 class TestCountRunningImports:
     def test_counts_only_pnc_import_prefix(self, kube: KubeClient):
         kube._mock_api.list.return_value = {

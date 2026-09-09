@@ -74,6 +74,12 @@ class KubeAPI:
         resp.raise_for_status()
         return resp.json()
 
+    def get_text(self, api_path: str, **params) -> str:
+        """GET an endpoint that returns a plain-text body (e.g. pod logs)."""
+        resp = self._session.get(self._url(api_path), params=params, timeout=self._timeout)
+        resp.raise_for_status()
+        return resp.text
+
     def list(self, api_path: str, **params) -> dict:
         resp = self._session.get(self._url(api_path), params=params, timeout=self._timeout)
         resp.raise_for_status()

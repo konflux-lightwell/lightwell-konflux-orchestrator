@@ -59,10 +59,13 @@ class PipelineMonitor:
                 self.db.update_status(item.id, ImportStatus.AWAITING_RELEASE)
                 print(f"  Pipeline done, awaiting release: {tag}", file=sys.stderr)
             elif pr_status.is_failed:
+                detail = self.kube.get_pipelinerun_failure_detail(item.pipelinerun_name)
                 self.db.update_status(
                     item.id,
                     ImportStatus.FAILED,
                     completed_at=datetime.now(),
-                    error_message="PipelineRun failed",
+                    error_message=detail or "PipelineRun failed",
                 )
                 print(f"  ✗ Failed: {tag}", file=sys.stderr)
+                if detail:
+                    print(f"    {detail.splitlines()[0]}", file=sys.stderr)

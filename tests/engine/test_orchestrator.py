@@ -97,6 +97,7 @@ class TestUpdatePipelineRunStatuses:
         orchestrator.db.update_status(ref.id, ImportStatus.RUNNING, pipelinerun_name="pnc-import-abc")
 
         mock_kube.get_pipelinerun_status.return_value = PipelineRunStatus(name="pnc-import-abc", status="False")
+        mock_kube.get_pipelinerun_failure_detail.return_value = None
 
         orchestrator.update_pipelinerun_statuses()
 

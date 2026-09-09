@@ -162,6 +162,33 @@ class TestKubeAPI:
         mock_resp.raise_for_status.assert_called_once()
         assert result == {"metadata": {"name": "pr-1"}}
 
+    def test_get_text_returns_body(self, api):
+        mock_resp = MagicMock()
+        mock_resp.text = "line 1\nline 2\n"
+        api._mock_session.get.return_value = mock_resp
+
+        result = api.get_text(
+            "/api/v1/namespaces/ns/pods/pod-1/log",
+            container="step-build",
+            tailLines=20,
+        )
+
+        api._mock_session.get.assert_called_once_with(
+            "https://api.example.com:6443/api/v1/namespaces/ns/pods/pod-1/log",
+            params={"container": "step-build", "tailLines": 20},
+            timeout=30,
+        )
+        mock_resp.raise_for_status.assert_called_once()
+        assert result == "line 1\nline 2\n"
+
+    def test_get_text_raises_on_http_error(self, api):
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status.side_effect = requests.HTTPError("404 Not Found")
+        api._mock_session.get.return_value = mock_resp
+
+        with pytest.raises(requests.HTTPError):
+            api.get_text("/api/v1/namespaces/ns/pods/missing/log")
+
     def test_list_passes_query_params(self, api):
         mock_resp = MagicMock()
         mock_resp.json.return_value = {"items": []}
