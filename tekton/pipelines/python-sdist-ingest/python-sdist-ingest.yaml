@@ -98,7 +98,7 @@ spec:
         resolver: bundles
         params:
           - name: bundle
-            value: quay.io/light-castle/taisce-cuan:latest
+            value: quay.io/konflux-ci/tekton-catalog/task-fetch-source:0.1@sha256:434878b30329a0dc8dae1d84ec371f524b879b00a7a49bb97e569bc2b9780101
           - name: name
             value: fetch-source
           - name: kind
