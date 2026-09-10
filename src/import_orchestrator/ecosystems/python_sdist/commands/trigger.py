@@ -38,8 +38,8 @@ def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> No
     )
     parser.add_argument(
         "--source-registries",
-        default="rhtl,pypi.org",
-        help="Comma-separated list of registries to query in order (default: 'rhtl,pypi.org')",
+        default="rhtl",
+        help="Comma-separated list of registries to query in order (default: 'rhtl')",
     )
 
     parser.set_defaults(func=run, ecosystem=ecosystem)

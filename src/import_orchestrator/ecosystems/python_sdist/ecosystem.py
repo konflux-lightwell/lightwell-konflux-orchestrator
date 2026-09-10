@@ -33,7 +33,7 @@ class PythonSdistEcosystem:
 
     def build_pipelinerun(self, ref: str, args: argparse.Namespace) -> dict:
         package, version = parse_ref(ref)
-        source_registries = getattr(args, "source_registries", "rhtl,pypi.org")
+        source_registries = getattr(args, "source_registries", "rhtl")
         pipeline_spec = load_pipeline(config.pipeline_definition_path())
         pipeline_git_url, pipeline_revision = config.pipeline_source_identity()
         return build_pipelinerun_manifest(

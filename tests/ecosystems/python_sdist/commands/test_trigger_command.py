@@ -43,7 +43,7 @@ class TestTriggerArgParsing:
     def test_source_registries_default(self):
         parser = make_parser()
         args = parser.parse_args(["python-sdist", "trigger", "foolib==0.4.0"])
-        assert args.source_registries == "rhtl,pypi.org"
+        assert args.source_registries == "rhtl"
 
     def test_source_registries_override(self):
         parser = make_parser()

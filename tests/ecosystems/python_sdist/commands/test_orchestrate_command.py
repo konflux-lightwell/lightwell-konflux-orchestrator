@@ -29,7 +29,7 @@ class TestOrchestrateArgParsing:
         args = parser.parse_args(["python-sdist", "orchestrate"])
         assert args.command == "orchestrate"
         assert args.max_parallel == DEFAULT_MAX_PARALLEL
-        assert args.source_registries == "rhtl,pypi.org"
+        assert args.source_registries == "rhtl"
 
     def test_custom_options(self):
         parser = make_parser()

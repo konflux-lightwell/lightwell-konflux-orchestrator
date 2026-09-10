@@ -36,7 +36,7 @@ spec:
     - name: SOURCE_REGISTRIES
       description: Comma-separated list of source registries to query in order (e.g. "rhtl,pypi.org", "rhtl", "pypi.org").
       type: string
-      default: "rhtl,pypi.org"
+      default: "rhtl"
     - name: ociStorage
       description: OCI reference used as the store for Trusted Artifacts.
       type: string
