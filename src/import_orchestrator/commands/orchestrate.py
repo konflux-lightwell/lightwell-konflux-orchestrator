@@ -52,7 +52,9 @@ def run_orchestrate(args: argparse.Namespace, empty_db_warning: str) -> int:
             max_parallel=args.max_parallel,
             max_retries=args.max_retries,
         )
-        pipeline_monitor = PipelineMonitor(db=db, kube=kube)
+        target = getattr(args, "target", None)
+        releases = target is None or getattr(eco, "target_releases", lambda t: True)(target)
+        pipeline_monitor = PipelineMonitor(db=db, kube=kube, skip_release=not releases)
         release_monitor = ReleaseMonitor(
             db=db, kube=kube, max_parallel=args.max_parallel, prefix=eco.pipelinerun_prefix
         )

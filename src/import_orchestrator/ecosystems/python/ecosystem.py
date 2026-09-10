@@ -44,13 +44,16 @@ class PythonEcosystem:
             namespace=self.namespace,
             application=cfg["app"],
             component=cfg["component"],
-            service_account=config.SERVICE_ACCOUNT,
+            service_account=cfg["service_account"],
             prefix=self.pipelinerun_prefix,
             repo_base=config.LIGHTWELL_BUILDS_REPO_BASE,
             image_repo_base=config.IMAGE_REPO_BASE,
             git_auth_secret=config.GIT_AUTH_SECRET,
             builds_tag=builds_tag,
         )
+
+    def target_releases(self, target: str) -> bool:
+        return config.TARGET_CONFIGS.get(target, {}).get("releases", True)
 
     def register_cli(self, subparsers: argparse._SubParsersAction) -> None:
         from import_orchestrator.commands import import_file
