@@ -45,6 +45,12 @@ def monitor(db: ImportDatabase, mock_kube: MagicMock):
     return PipelineMonitor(db, mock_kube)
 
 
+@pytest.fixture
+def scratch_monitor(db: ImportDatabase, mock_kube: MagicMock):
+    """PipelineMonitor with skip_release=True (scratch/non-releasing target)."""
+    return PipelineMonitor(db, mock_kube, skip_release=True)
+
+
 class TestUpdateStatuses:
     """Test the update_statuses method."""
 
@@ -148,6 +154,18 @@ class TestUpdateStatuses:
         # Should remain triggered
         triggered = monitor.db.get_by_status(ImportStatus.TRIGGERED)
         assert len(triggered) == 1
+
+    def test_skip_release_transitions_directly_to_success(self, scratch_monitor: PipelineMonitor, mock_kube: MagicMock):
+        """With skip_release=True a successful pipeline goes straight to SUCCESS, not AWAITING_RELEASE."""
+        ref, _ = scratch_monitor.db.add_item("quay.io/repo:tag@sha256:abc")
+        assert ref.id is not None
+        scratch_monitor.db.update_status(ref.id, ImportStatus.RUNNING, pipelinerun_name="scratch-abc")
+        mock_kube.get_pipelinerun_status.return_value = PipelineRunStatus(name="scratch-abc", status="True")
+
+        scratch_monitor.update_statuses()
+
+        assert len(scratch_monitor.db.get_by_status(ImportStatus.SUCCESS)) == 1
+        assert len(scratch_monitor.db.get_by_status(ImportStatus.AWAITING_RELEASE)) == 0
 
     def test_processes_multiple_imports(self, monitor: PipelineMonitor, mock_kube: MagicMock):
         """Verify that multiple imports are processed correctly."""

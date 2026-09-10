@@ -32,9 +32,10 @@ class PipelineMonitor:
     TRIGGERED -> RUNNING -> AWAITING_RELEASE/FAILED transitions.
     """
 
-    def __init__(self, db: ImportDatabase, kube: KubeClient):
+    def __init__(self, db: ImportDatabase, kube: KubeClient, skip_release: bool = False):
         self.db = db
         self.kube = kube
+        self.skip_release = skip_release
 
     def update_statuses(self) -> None:
         """Check status of all triggered/running imports and update the database."""
@@ -56,8 +57,12 @@ class PipelineMonitor:
                     self.db.update_status(item.id, ImportStatus.RUNNING)
                     print(f"  Running: {tag}", file=sys.stderr)
             elif pr_status.is_successful:
-                self.db.update_status(item.id, ImportStatus.AWAITING_RELEASE)
-                print(f"  Pipeline done, awaiting release: {tag}", file=sys.stderr)
+                if self.skip_release:
+                    self.db.update_status(item.id, ImportStatus.SUCCESS, completed_at=datetime.now())
+                    print(f"  ✓ Build done (scratch, no release): {tag}", file=sys.stderr)
+                else:
+                    self.db.update_status(item.id, ImportStatus.AWAITING_RELEASE)
+                    print(f"  Pipeline done, awaiting release: {tag}", file=sys.stderr)
             elif pr_status.is_failed:
                 detail = self.kube.get_pipelinerun_failure_detail(item.pipelinerun_name)
                 self.db.update_status(
