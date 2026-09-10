@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 import requests
 import yaml
@@ -18,6 +20,24 @@ class KubeAuth:
     ca_cert: str | None
 
 
+def _find_entry(items: Any, expected_name: str, item_type: str, path: Path) -> dict[str, Any]:
+    """Find a named entry in a kubeconfig list and return its inner dictionary."""
+    if not isinstance(items, list):
+        raise RuntimeError(f"No '{item_type}s' list found in kubeconfig '{path}'.")
+    entry = next(
+        (
+            item
+            for item in items
+            if isinstance(item, dict) and bool(item.get("name")) and item.get("name") == expected_name
+        ),
+        None,
+    )
+    payload = entry.get(item_type) if entry else None
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"{item_type.capitalize()} '{expected_name}' not found in kubeconfig '{path}'.")
+    return payload
+
+
 def resolve_auth(cluster_api: str) -> KubeAuth:
     """Resolve auth credentials from env vars or kubeconfig.
 
@@ -28,27 +48,65 @@ def resolve_auth(cluster_api: str) -> KubeAuth:
     if token := os.getenv("KONFLUX_TOKEN"):
         return KubeAuth(server=cluster_api, token=token, ca_cert=None)
 
-    kubeconfig_path = os.getenv("KUBECONFIG", os.path.expanduser("~/.kube/config"))
-    with open(kubeconfig_path) as f:
-        config = yaml.safe_load(f)
-
-    ctx_name = config["current-context"]
-    ctx = next(c["context"] for c in config["contexts"] if c["name"] == ctx_name)
-
-    cluster = next(c["cluster"] for c in config["clusters"] if c["name"] == ctx["cluster"])
-    user = next(u["user"] for u in config["users"] if u["name"] == ctx["user"])
-
-    token = user.get("token", "")
-    if not token:
+    raw_path = os.getenv("KUBECONFIG") or "~/.kube/config"
+    kubeconfig_path = Path(raw_path).expanduser()
+    if not kubeconfig_path.is_file():
         raise RuntimeError(
-            f"Kubeconfig user '{ctx['user']}' has no 'token' field. "
-            "Only OAuth token auth is supported (run 'oc login' first)."
+            f"Kubeconfig file not found at '{kubeconfig_path}'. Please run 'oc login' or set $KONFLUX_TOKEN."
         )
 
+    try:
+        with open(kubeconfig_path, encoding="utf-8") as f:
+            config = yaml.safe_load(f)
+    except OSError as e:
+        raise RuntimeError(f"Cannot read kubeconfig at '{kubeconfig_path}': {e}") from e
+    except yaml.YAMLError as e:
+        raise RuntimeError(f"Failed to parse kubeconfig YAML from '{kubeconfig_path}': {e}") from e
+
+    if not isinstance(config, dict):
+        raise RuntimeError(f"Kubeconfig at '{kubeconfig_path}' is empty or invalid.")
+
+    ctx_name = config.get("current-context")
+    if not ctx_name or not isinstance(ctx_name, str):
+        raise RuntimeError(
+            f"No 'current-context' set in kubeconfig '{kubeconfig_path}'. Please run 'oc login' or select a context."
+        )
+
+    ctx = _find_entry(config.get("contexts"), ctx_name, "context", kubeconfig_path)
+
+    cluster_name = ctx.get("cluster")
+    if not cluster_name or not isinstance(cluster_name, str):
+        raise RuntimeError(f"Context '{ctx_name}' in '{kubeconfig_path}' does not specify a 'cluster'.")
+
+    cluster = _find_entry(config.get("clusters"), cluster_name, "cluster", kubeconfig_path)
+
+    server = cluster.get("server")
+    if not server or not isinstance(server, str):
+        raise RuntimeError(f"Cluster '{cluster_name}' in '{kubeconfig_path}' has no 'server' URL.")
+
+    user_name = ctx.get("user")
+    if not user_name or not isinstance(user_name, str):
+        raise RuntimeError(f"Context '{ctx_name}' in '{kubeconfig_path}' does not specify a 'user'.")
+
+    user = _find_entry(config.get("users"), user_name, "user", kubeconfig_path)
+
+    token = user.get("token", "")
+    if not token or not isinstance(token, str):
+        raise RuntimeError(
+            f"Kubeconfig user '{user_name}' has no 'token' field in '{kubeconfig_path}'. "
+            "Only OAuth token auth is supported (run 'oc login' first) or set $KONFLUX_TOKEN."
+        )
+
+    ca_cert = cluster.get("certificate-authority")
+    if ca_cert and isinstance(ca_cert, str):
+        ca_path = Path(ca_cert)
+        if not ca_path.is_absolute():
+            ca_cert = str((kubeconfig_path.parent / ca_path).resolve())
+
     return KubeAuth(
-        server=cluster["server"],
+        server=server,
         token=token,
-        ca_cert=cluster.get("certificate-authority"),
+        ca_cert=ca_cert,
     )
 
 
