@@ -45,6 +45,9 @@ jobs:
         id: build
         uses: redhat-actions/buildah-build@719e3c40d8af9790c23eca13f7daa339f2867034 # v3
         with:
+          build-args: |
+            PIPELINE_GIT_URL=${{ github.server_url }}/${{ github.repository }}
+            PIPELINE_GIT_REVISION=${{ github.sha }}
           image: ${{ env.IMAGE_NAME }}
           tags: ${{ steps.vars.outputs.sha_short }} latest
           containerfiles: ./Dockerfile
