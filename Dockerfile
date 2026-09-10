@@ -25,6 +25,13 @@ RUN pip install --no-cache-dir /tmp/*.whl \
 
 COPY tekton/ tekton/
 
-ENV TEKTON_PIPELINE_DIR=/opt/import-orchestrator/tekton
+# Git source identity of the embedded pipeline definition. The wheel has no
+# .git to query at runtime, so CI bakes these in from the built commit.
+ARG PIPELINE_GIT_URL
+ARG PIPELINE_GIT_REVISION
+
+ENV TEKTON_PIPELINE_DIR=/opt/import-orchestrator/tekton \
+    PIPELINE_GIT_URL=${PIPELINE_GIT_URL} \
+    PIPELINE_GIT_REVISION=${PIPELINE_GIT_REVISION}
 
 ENTRYPOINT ["import-orchestrator"]

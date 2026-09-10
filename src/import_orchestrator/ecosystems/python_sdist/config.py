@@ -17,7 +17,13 @@ limitations under the License.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
+
+from import_orchestrator.clients.git import GitClient, GitError
+from import_orchestrator.engine.errors import TriggerError
+
+_GIT_SHA1_RE = re.compile(r"[0-9a-f]{40}")
 
 PYTHON_SDIST_DEFAULT_DB_PATH = "./python_sdist_import_state.db"
 NAMESPACE = "lightwell-python-tenant"
@@ -38,6 +44,43 @@ SERVICE_ACCOUNT = os.environ.get(
 # Base of the destination image repository. sdist artifacts are pushed to
 # "<image_repo_base>/<app>/<component>:<package>-<version>".
 IMAGE_REPO_BASE = "quay.io/redhat-user-workloads/lightwell-python-tenant"
+
+
+def pipeline_source_identity() -> tuple[str, str]:
+    """Return the immutable Git source identity of this inline pipeline definition.
+
+    The sdist CLI embeds the pipeline YAML from this repository in each
+    PipelineRun. Tekton Chains therefore needs this checkout's origin URL and
+    exact commit SHA, rather than a branch name or the upstream package source.
+
+    In the shipped image the wheel has no ``.git`` to query, so both values are
+    baked in at build time via ``PIPELINE_GIT_URL`` and
+    ``PIPELINE_GIT_REVISION``. When either is unset (e.g. a local
+    checkout) they fall back to querying git directly.
+    """
+    remote_url = os.environ.get("PIPELINE_GIT_URL")
+    revision = os.environ.get("PIPELINE_GIT_REVISION")
+    if not (remote_url and revision):
+        remote_url, revision = _git_source_identity()
+
+    if remote_url.startswith("git@github.com:"):
+        remote_url = f"https://github.com/{remote_url.removeprefix('git@github.com:')}"
+    if remote_url.endswith(".git"):
+        remote_url = remote_url.removesuffix(".git")
+    if not _GIT_SHA1_RE.fullmatch(revision):
+        raise TriggerError(f"inline sdist pipeline Git revision is not a full SHA-1: {revision!r}")
+
+    return remote_url, revision
+
+
+def _git_source_identity() -> tuple[str, str]:
+    """Query the local checkout for its origin URL and HEAD commit SHA."""
+    project_root = Path(__file__).resolve().parents[4]
+    git = GitClient(project_root)
+    try:
+        return git.remote_url("origin"), git.head_revision()
+    except GitError as err:
+        raise TriggerError(f"unable to determine Git source identity to create the PipelineRun: {err}") from err
 
 
 def pipeline_definition_path() -> Path:

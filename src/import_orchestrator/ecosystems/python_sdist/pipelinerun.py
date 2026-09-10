@@ -46,18 +46,36 @@ def build_pipelinerun_manifest(
     image_repo_base: str,
     service_account: str | None = None,
     source_registries: str = "rhtl,pypi.org",
+    pipeline_git_url: str | None = None,
+    pipeline_revision: str | None = None,
 ) -> dict[str, Any]:
-    """Build a python-sdist-ingest PipelineRun manifest for one package/version."""
+    """Build a python-sdist-ingest PipelineRun manifest for one package/version.
+
+    ``pipeline_git_url`` and ``pipeline_revision`` identify the repository and
+    immutable commit that supplied this inline pipeline definition to Chains.
+    """
+    if bool(pipeline_git_url) != bool(pipeline_revision):
+        raise TriggerError("inline pipeline Git URL and revision must be supplied together")
+
     image = f"{image_repo_base}/{application}/{component}:{package}-{version}"
+    params = [
+        {"name": "PACKAGE", "value": package},
+        {"name": "VERSION", "value": version},
+        {"name": "IMAGE", "value": image},
+        {"name": "SOURCE_REGISTRIES", "value": source_registries},
+        {"name": "ociStorage", "value": f"{image}.src"},
+    ]
+    if pipeline_git_url and pipeline_revision:
+        params.extend(
+            [
+                {"name": "git-url", "value": pipeline_git_url},
+                {"name": "revision", "value": pipeline_revision},
+            ]
+        )
+
     spec: dict[str, Any] = {
         "pipelineSpec": pipeline_spec,
-        "params": [
-            {"name": "PACKAGE", "value": package},
-            {"name": "VERSION", "value": version},
-            {"name": "IMAGE", "value": image},
-            {"name": "SOURCE_REGISTRIES", "value": source_registries},
-            {"name": "ociStorage", "value": f"{image}.src"},
-        ],
+        "params": params,
     }
     if service_account:
         spec["taskRunTemplate"] = {"serviceAccountName": service_account}

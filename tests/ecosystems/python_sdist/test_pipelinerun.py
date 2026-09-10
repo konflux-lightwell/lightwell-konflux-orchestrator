@@ -91,3 +91,16 @@ class TestBuildManifest:
         )
         assert params["IMAGE"] == expected_image
         assert params["ociStorage"] == f"{expected_image}.src"
+
+    def test_pipeline_source_identity_params(self):
+        manifest = _manifest(
+            pipeline_git_url="https://github.com/konflux-lightwell/lightwell-konflux-orchestrator",
+            pipeline_revision="a" * 40,
+        )
+        params = {p["name"]: p["value"] for p in manifest["spec"]["params"]}
+        assert params["git-url"] == "https://github.com/konflux-lightwell/lightwell-konflux-orchestrator"
+        assert params["revision"] == "a" * 40
+
+    def test_rejects_partial_pipeline_source_identity(self):
+        with pytest.raises(TriggerError):
+            _manifest(pipeline_git_url="https://github.com/konflux-lightwell/lightwell-konflux-orchestrator")
