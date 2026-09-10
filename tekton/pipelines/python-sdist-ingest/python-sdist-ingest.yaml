@@ -125,7 +125,7 @@ spec:
         resolver: bundles
         params:
           - name: bundle
-            value: quay.io/konflux-ci/tekton-catalog/task-fromager-build-sdist:0.1
+            value: quay.io/konflux-ci/tekton-catalog/task-fromager-build-sdist:0.1@sha256:45d6244b11b877f99eb75a238826b200b620b448143395d6e61556056e596a35
           - name: name
             value: fromager-build-sdist
           - name: kind
@@ -160,7 +160,7 @@ spec:
           - name: name
             value: clamav-scan
           - name: bundle
-            value: quay.io/konflux-ci/tekton-catalog/task-clamav-scan:0.3@sha256:567cb66bd2e1f4b58b9d4d756f3317fc62479e0b40aa0de66094b1f12d296cfc
+            value: quay.io/konflux-ci/tekton-catalog/task-clamav-scan:0.3.3@sha256:9df272d2180bd67e6a3e04d5cd30ffa7ba27af4e599a1922f7069f5c89888e5b
           - name: kind
             value: task
       params:
