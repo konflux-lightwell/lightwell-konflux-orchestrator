@@ -35,6 +35,7 @@ class PythonSdistEcosystem:
         package, version = parse_ref(ref)
         source_registries = getattr(args, "source_registries", "rhtl,pypi.org")
         pipeline_spec = load_pipeline(config.pipeline_definition_path())
+        pipeline_git_url, pipeline_revision = config.pipeline_source_identity()
         return build_pipelinerun_manifest(
             package=package,
             version=version,
@@ -46,6 +47,8 @@ class PythonSdistEcosystem:
             prefix=self.pipelinerun_prefix,
             image_repo_base=config.IMAGE_REPO_BASE,
             source_registries=source_registries,
+            pipeline_git_url=pipeline_git_url,
+            pipeline_revision=pipeline_revision,
         )
 
     def register_cli(self, subparsers: argparse._SubParsersAction) -> None:
