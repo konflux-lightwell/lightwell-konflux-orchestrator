@@ -131,7 +131,9 @@ def run_single(args: argparse.Namespace, ref: str) -> int:
                 max_parallel=1,
                 max_retries=args.max_retries,
             )
-            pipeline_monitor = PipelineMonitor(db=db, kube=kube)
+            target = getattr(args, "target", None)
+            skip_release = target is not None and getattr(eco, "target_skip_release", lambda t: False)(target)
+            pipeline_monitor = PipelineMonitor(db=db, kube=kube, skip_release=skip_release)
             release_monitor = ReleaseMonitor(db=db, kube=kube, max_parallel=1, prefix=eco.pipelinerun_prefix)
 
             orchestrator = ImportOrchestrator(

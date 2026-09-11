@@ -23,14 +23,21 @@ PYTHON_DEFAULT_DB_PATH = "./python_import_state.db"
 NAMESPACE = "lightwell-python-tenant"
 PIPELINERUN_PREFIX = "python-remediated-build-"
 
-# Service account used for all python build PipelineRuns.
-# TODO: confirm this against the cluster once the python tenant is provisioned.
-SERVICE_ACCOUNT = "build-pipeline-remediated-build"
-
 # Build targets, keyed by target name. Each supplies the Konflux application and
-# component labels applied to the PipelineRun. Selected via `--target`.
-TARGET_CONFIGS: dict[str, dict[str, str]] = {
-    "REMEDIATED": {"app": "remediated-build", "component": "remediated-build"},
+# component labels applied to the PipelineRun, and whether the target produces a
+# Release CR (`releases`). Selected via `--target`.
+TARGET_CONFIGS: dict[str, dict] = {
+    "REMEDIATED": {
+        "app": "remediated-build",
+        "component": "remediated-build",
+        "service_account": "build-pipeline-remediated-build",
+    },
+    "SCRATCH": {
+        "app": "scratch-build",
+        "component": "scratch-build",
+        "service_account": "build-pipeline-scratch-build",
+        "skip_release": True,
+    },
 }
 DEFAULT_TARGET = "REMEDIATED"
 

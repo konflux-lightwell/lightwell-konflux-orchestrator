@@ -21,7 +21,7 @@ from unittest.mock import MagicMock, patch
 
 from import_orchestrator.commands.run import run_single
 from import_orchestrator.database import ImportDatabase
-from import_orchestrator.engine import ImportOrchestrator
+from import_orchestrator.engine import ImportOrchestrator, PipelineMonitor
 from import_orchestrator.models import ImportStatus
 
 _REF = "ntplib==0.4.0"
@@ -190,3 +190,62 @@ class TestResultPayload:
         payload = json.loads(capsys.readouterr().out)
         assert payload["pipelinerun_name"] == "pr-9"
         assert not eph_dir.exists()
+
+    def test_scratch_payload_has_no_release_name(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setattr("tempfile.mkdtemp", lambda *a, **k: str(tmp_path / "eph"))
+        eco = MagicMock()
+        eco.namespace = "lightwell-tenant"
+        eco.pipelinerun_prefix = "prefix"
+        eco.target_skip_release.return_value = True
+        fake = _make_success(pipelinerun_name="scratch-abc", snapshot_name="snap-xyz")
+        with (
+            patch("import_orchestrator.commands.run.KubeClient"),
+            patch.object(ImportOrchestrator, "run_until_complete", fake),
+        ):
+            rc = run_single(_args(ecosystem=eco, target="SCRATCH"), _REF)
+
+        assert rc == 0
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["release_name"] is None
+
+
+class TestSkipRelease:
+    def _captured_pipeline_monitor(self, tmp_path, monkeypatch, args):
+        """Run run_single and return the PipelineMonitor that was constructed."""
+        monkeypatch.setattr("tempfile.mkdtemp", lambda *a, **k: str(tmp_path / "eph"))
+        captured = {}
+
+        real_init = PipelineMonitor.__init__
+
+        def capturing_init(self, db, kube, skip_release=False):
+            captured["skip_release"] = skip_release
+            real_init(self, db, kube, skip_release=skip_release)
+
+        with (
+            patch("import_orchestrator.commands.run.KubeClient"),
+            patch.object(ImportOrchestrator, "run_until_complete", lambda self: 0),
+            patch.object(PipelineMonitor, "__init__", capturing_init),
+        ):
+            run_single(args, _REF)
+
+        return captured
+
+    def test_non_releasing_target_sets_skip_release(self, tmp_path, monkeypatch):
+        eco = MagicMock()
+        eco.namespace = "lightwell-tenant"
+        eco.pipelinerun_prefix = "prefix"
+        eco.target_skip_release.return_value = True
+        captured = self._captured_pipeline_monitor(tmp_path, monkeypatch, _args(ecosystem=eco, target="SCRATCH"))
+        assert captured["skip_release"] is True
+
+    def test_releasing_target_does_not_skip_release(self, tmp_path, monkeypatch):
+        eco = MagicMock()
+        eco.namespace = "lightwell-tenant"
+        eco.pipelinerun_prefix = "prefix"
+        eco.target_skip_release.return_value = False
+        captured = self._captured_pipeline_monitor(tmp_path, monkeypatch, _args(ecosystem=eco, target="REMEDIATED"))
+        assert captured["skip_release"] is False
+
+    def test_no_target_does_not_skip_release(self, tmp_path, monkeypatch):
+        captured = self._captured_pipeline_monitor(tmp_path, monkeypatch, _args())
+        assert captured["skip_release"] is False

@@ -81,3 +81,41 @@ def test_build_pipelinerun_rejects_malformed_ref(tmp_path, monkeypatch):
     monkeypatch.setenv("TEKTON_PIPELINE_DIR", str(tmp_path))
     with pytest.raises(TriggerError):
         PythonEcosystem().build_pipelinerun("foolib-0.4.0", argparse.Namespace())
+
+
+def _pipeline_file(tmp_path, monkeypatch):
+    f = tmp_path / "tekton" / "pipelines" / "python-remediated-build" / "python-remediated-build.yaml"
+    f.parent.mkdir(parents=True)
+    f.write_text("spec:\n  tasks: []\n")
+    monkeypatch.setenv("TEKTON_PIPELINE_DIR", str(tmp_path / "tekton"))
+
+
+def test_build_pipelinerun_scratch_target_labels(monkeypatch, tmp_path):
+    _pipeline_file(tmp_path, monkeypatch)
+    manifest = PythonEcosystem().build_pipelinerun("foolib==0.4.0", argparse.Namespace(target="SCRATCH"))
+    labels = manifest["metadata"]["labels"]
+    assert labels["appstudio.openshift.io/application"] == "scratch-build"
+    assert labels["appstudio.openshift.io/component"] == "scratch-build"
+
+
+def test_build_pipelinerun_scratch_service_account(monkeypatch, tmp_path):
+    _pipeline_file(tmp_path, monkeypatch)
+    manifest = PythonEcosystem().build_pipelinerun("foolib==0.4.0", argparse.Namespace(target="SCRATCH"))
+    assert manifest["spec"]["taskRunTemplate"]["serviceAccountName"] == "build-pipeline-scratch-build"
+
+
+def test_build_pipelinerun_remediated_service_account(monkeypatch, tmp_path):
+    _pipeline_file(tmp_path, monkeypatch)
+    manifest = PythonEcosystem().build_pipelinerun("foolib==0.4.0", argparse.Namespace(target="REMEDIATED"))
+    assert manifest["spec"]["taskRunTemplate"]["serviceAccountName"] == "build-pipeline-remediated-build"
+
+
+class TestTargetSkipRelease:
+    def test_remediated_does_not_skip_release(self):
+        assert PythonEcosystem().target_skip_release("REMEDIATED") is False
+
+    def test_scratch_skips_release(self):
+        assert PythonEcosystem().target_skip_release("SCRATCH") is True
+
+    def test_unknown_target_defaults_to_not_skipping(self):
+        assert PythonEcosystem().target_skip_release("UNKNOWN") is False
