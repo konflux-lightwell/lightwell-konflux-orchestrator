@@ -110,12 +110,12 @@ def test_build_pipelinerun_remediated_service_account(monkeypatch, tmp_path):
     assert manifest["spec"]["taskRunTemplate"]["serviceAccountName"] == "build-pipeline-remediated-build"
 
 
-class TestTargetReleases:
-    def test_remediated_releases(self):
-        assert PythonEcosystem().target_releases("REMEDIATED") is True
+class TestTargetSkipRelease:
+    def test_remediated_does_not_skip_release(self):
+        assert PythonEcosystem().target_skip_release("REMEDIATED") is False
 
-    def test_scratch_does_not_release(self):
-        assert PythonEcosystem().target_releases("SCRATCH") is False
+    def test_scratch_skips_release(self):
+        assert PythonEcosystem().target_skip_release("SCRATCH") is True
 
-    def test_unknown_target_defaults_to_releasing(self):
-        assert PythonEcosystem().target_releases("UNKNOWN") is True
+    def test_unknown_target_defaults_to_not_skipping(self):
+        assert PythonEcosystem().target_skip_release("UNKNOWN") is False
