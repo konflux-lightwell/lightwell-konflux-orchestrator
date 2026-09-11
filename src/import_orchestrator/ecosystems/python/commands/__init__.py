@@ -14,6 +14,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
-from import_orchestrator.ecosystems.python.commands import orchestrate, trigger
+from import_orchestrator.ecosystems.python.commands import orchestrate, promote, trigger
 
-__all__ = ["orchestrate", "trigger"]
+__all__ = ["orchestrate", "promote", "trigger"]
