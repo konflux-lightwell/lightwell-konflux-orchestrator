@@ -246,7 +246,17 @@ class KubeClient:
             return None
 
     def find_release_plan_for_snapshot(self, snapshot_name: str) -> str | None:
-        """Find the ReleasePlan whose spec.application matches the snapshot's application label."""
+        """Find the single auto-releasing ReleasePlan for the snapshot's application.
+
+        Plans labelled ``auto-release: 'false'`` are operator-driven (e.g. a production
+        promotion gated on ticket state) and are never selected automatically. Only an
+        explicit 'false' excludes a plan; a missing label is not a signal either way.
+
+        Returns None if no plan matches, and also if more than one does — an application
+        with two auto-releasing plans is unresolvable from a Snapshot alone, and guessing
+        would mean guessing where content gets published. Callers that know which plan
+        they want should pass it explicitly rather than relying on this lookup.
+        """
         try:
             snap = self._api.get(
                 f"/apis/appstudio.redhat.com/v1alpha1/namespaces/{self.namespace}/snapshots/{snapshot_name}",
@@ -258,9 +268,22 @@ class KubeClient:
             plans = self._api.list(
                 f"/apis/appstudio.redhat.com/v1alpha1/namespaces/{self.namespace}/releaseplans",
             )
-            for item in plans.get("items", []):
-                if item.get("spec", {}).get("application") == application:
-                    return item["metadata"]["name"]
+            candidates = [
+                item["metadata"]["name"]
+                for item in plans.get("items", [])
+                if item.get("spec", {}).get("application") == application
+                and item.get("metadata", {}).get("labels", {}).get("release.appstudio.openshift.io/auto-release")
+                != "false"
+            ]
+
+            if len(candidates) == 1:
+                return candidates[0]
+            if len(candidates) > 1:
+                print(
+                    f"ERROR: {len(candidates)} auto-releasing ReleasePlans match application "
+                    f"'{application}': {', '.join(sorted(candidates))}. Refusing to guess.",
+                    file=sys.stderr,
+                )
             return None
         except (requests.RequestException, KeyError):
             return None
