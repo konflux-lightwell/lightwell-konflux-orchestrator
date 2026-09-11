@@ -246,7 +246,17 @@ class KubeClient:
             return None
 
     def find_release_plan_for_snapshot(self, snapshot_name: str) -> str | None:
-        """Find the ReleasePlan whose spec.application matches the snapshot's application label."""
+        """Find the single auto-releasing ReleasePlan for the snapshot's application.
+
+        Plans labelled ``auto-release: 'false'`` are operator-driven (e.g. a production
+        promotion gated on ticket state) and are never selected automatically. Only an
+        explicit 'false' excludes a plan; a missing label is not a signal either way.
+
+        Returns None if no plan matches, and also if more than one does — an application
+        with two auto-releasing plans is unresolvable from a Snapshot alone, and guessing
+        would mean guessing where content gets published. Callers that know which plan
+        they want should pass it explicitly rather than relying on this lookup.
+        """
         try:
             snap = self._api.get(
                 f"/apis/appstudio.redhat.com/v1alpha1/namespaces/{self.namespace}/snapshots/{snapshot_name}",
@@ -258,9 +268,22 @@ class KubeClient:
             plans = self._api.list(
                 f"/apis/appstudio.redhat.com/v1alpha1/namespaces/{self.namespace}/releaseplans",
             )
-            for item in plans.get("items", []):
-                if item.get("spec", {}).get("application") == application:
-                    return item["metadata"]["name"]
+            candidates = [
+                item["metadata"]["name"]
+                for item in plans.get("items", [])
+                if item.get("spec", {}).get("application") == application
+                and item.get("metadata", {}).get("labels", {}).get("release.appstudio.openshift.io/auto-release")
+                != "false"
+            ]
+
+            if len(candidates) == 1:
+                return candidates[0]
+            if len(candidates) > 1:
+                print(
+                    f"ERROR: {len(candidates)} auto-releasing ReleasePlans match application "
+                    f"'{application}': {', '.join(sorted(candidates))}. Refusing to guess.",
+                    file=sys.stderr,
+                )
             return None
         except (requests.RequestException, KeyError):
             return None
@@ -322,6 +345,34 @@ class KubeClient:
             )
             for item in result.get("items", []):
                 if item.get("spec", {}).get("snapshot") != snapshot_name:
+                    continue
+                released = next(
+                    (c for c in item.get("status", {}).get("conditions", []) if c.get("type") == "Released"),
+                    None,
+                )
+                # Skip terminally failed releases so a new one gets created
+                if released and released.get("status") == "False" and released.get("reason") != "Progressing":
+                    continue
+                return item["metadata"]["name"]
+            return None
+        except (requests.RequestException, KeyError):
+            return None
+
+    def find_release_for_snapshot_and_plan(self, snapshot_name: str, release_plan: str) -> str | None:
+        """Find an active Release for a snapshot against one specific ReleasePlan.
+
+        Unlike `find_release_for_snapshot`, this does not match a Release created against
+        a *different* plan for the same snapshot. Promotion deliberately creates a second
+        Release for content that already has a successful stage Release; treating that
+        stage Release as "already done" would silently skip the promotion.
+        """
+        try:
+            result = self._api.list(
+                f"/apis/appstudio.redhat.com/v1alpha1/namespaces/{self.namespace}/releases",
+            )
+            for item in result.get("items", []):
+                spec = item.get("spec", {})
+                if spec.get("snapshot") != snapshot_name or spec.get("releasePlan") != release_plan:
                     continue
                 released = next(
                     (c for c in item.get("status", {}).get("conditions", []) if c.get("type") == "Released"),

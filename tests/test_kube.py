@@ -384,6 +384,85 @@ class TestFindReleaseForSnapshot:
         assert kube.find_release_for_snapshot("snap-1") is None
 
 
+class TestFindReleaseForSnapshotAndPlan:
+    def test_ignores_release_against_a_different_plan(self, kube: KubeClient):
+        """A stage release for this snapshot must not be mistaken for a prod release."""
+        kube._mock_api.list.return_value = {
+            "items": [
+                {
+                    "metadata": {"name": "rel-stage"},
+                    "spec": {"snapshot": "snap-1", "releasePlan": "remediated-build"},
+                    "status": {"conditions": [{"type": "Released", "status": "True", "reason": "Succeeded"}]},
+                }
+            ]
+        }
+
+        assert kube.find_release_for_snapshot_and_plan("snap-1", "remediated-build-prod") is None
+
+    def test_finds_release_against_the_named_plan(self, kube: KubeClient):
+        kube._mock_api.list.return_value = {
+            "items": [
+                {
+                    "metadata": {"name": "rel-stage"},
+                    "spec": {"snapshot": "snap-1", "releasePlan": "remediated-build"},
+                    "status": {},
+                },
+                {
+                    "metadata": {"name": "rel-prod"},
+                    "spec": {"snapshot": "snap-1", "releasePlan": "remediated-build-prod"},
+                    "status": {"conditions": [{"type": "Released", "status": "True", "reason": "Succeeded"}]},
+                },
+            ]
+        }
+
+        assert kube.find_release_for_snapshot_and_plan("snap-1", "remediated-build-prod") == "rel-prod"
+
+    def test_ignores_other_snapshots(self, kube: KubeClient):
+        kube._mock_api.list.return_value = {
+            "items": [
+                {
+                    "metadata": {"name": "rel-other"},
+                    "spec": {"snapshot": "snap-2", "releasePlan": "remediated-build-prod"},
+                    "status": {},
+                }
+            ]
+        }
+
+        assert kube.find_release_for_snapshot_and_plan("snap-1", "remediated-build-prod") is None
+
+    def test_skips_terminally_failed_release(self, kube: KubeClient):
+        """A failed prod release must not be adopted — the operator needs a fresh attempt."""
+        kube._mock_api.list.return_value = {
+            "items": [
+                {
+                    "metadata": {"name": "rel-bad"},
+                    "spec": {"snapshot": "snap-1", "releasePlan": "remediated-build-prod"},
+                    "status": {"conditions": [{"type": "Released", "status": "False", "reason": "Failed"}]},
+                }
+            ]
+        }
+
+        assert kube.find_release_for_snapshot_and_plan("snap-1", "remediated-build-prod") is None
+
+    def test_does_not_skip_progressing_false(self, kube: KubeClient):
+        kube._mock_api.list.return_value = {
+            "items": [
+                {
+                    "metadata": {"name": "rel-live"},
+                    "spec": {"snapshot": "snap-1", "releasePlan": "remediated-build-prod"},
+                    "status": {"conditions": [{"type": "Released", "status": "False", "reason": "Progressing"}]},
+                }
+            ]
+        }
+
+        assert kube.find_release_for_snapshot_and_plan("snap-1", "remediated-build-prod") == "rel-live"
+
+    def test_returns_none_on_http_error(self, kube: KubeClient):
+        kube._mock_api.list.side_effect = requests.HTTPError("500")
+
+        assert kube.find_release_for_snapshot_and_plan("snap-1", "remediated-build-prod") is None
+
+
 class TestGetReleaseStatus:
     def test_returns_true_on_success(self, kube: KubeClient):
         kube._mock_api.get.return_value = {
@@ -449,6 +528,58 @@ class TestFindReleasePlanForSnapshot:
         kube._mock_api.get.side_effect = requests.HTTPError("404")
 
         assert kube.find_release_plan_for_snapshot("snap-1") is None
+
+    def test_excludes_manual_only_plan(self, kube: KubeClient):
+        """A plan labelled auto-release=false is operator-driven and never auto-selected."""
+        kube._mock_api.get.return_value = {"metadata": {"labels": {"appstudio.openshift.io/application": "my-app"}}}
+        kube._mock_api.list.return_value = {
+            "items": [
+                {
+                    "metadata": {
+                        "name": "plan-prod",
+                        "labels": {"release.appstudio.openshift.io/auto-release": "false"},
+                    },
+                    "spec": {"application": "my-app"},
+                },
+                {
+                    "metadata": {
+                        "name": "plan-stage",
+                        "labels": {"release.appstudio.openshift.io/auto-release": "true"},
+                    },
+                    "spec": {"application": "my-app"},
+                },
+            ]
+        }
+
+        assert kube.find_release_plan_for_snapshot("snap-1") == "plan-stage"
+
+    def test_keeps_plan_without_auto_release_label(self, kube: KubeClient):
+        """Only an explicit 'false' excludes a plan — a missing label is not a signal."""
+        kube._mock_api.get.return_value = {"metadata": {"labels": {"appstudio.openshift.io/application": "my-app"}}}
+        kube._mock_api.list.return_value = {
+            "items": [
+                {"metadata": {"name": "plan-unlabelled"}, "spec": {"application": "my-app"}},
+            ]
+        }
+
+        assert kube.find_release_plan_for_snapshot("snap-1") == "plan-unlabelled"
+
+    def test_returns_none_when_ambiguous(self, kube: KubeClient, capsys: pytest.CaptureFixture[str]):
+        """Two auto-releasing plans for one application is unresolvable — refuse rather than guess."""
+        kube._mock_api.get.return_value = {"metadata": {"labels": {"appstudio.openshift.io/application": "my-app"}}}
+        kube._mock_api.list.return_value = {
+            "items": [
+                {"metadata": {"name": "plan-a"}, "spec": {"application": "my-app"}},
+                {"metadata": {"name": "plan-b"}, "spec": {"application": "my-app"}},
+            ]
+        }
+
+        assert kube.find_release_plan_for_snapshot("snap-1") is None
+
+        stderr = capsys.readouterr().err
+        assert "plan-a" in stderr
+        assert "plan-b" in stderr
+        assert "my-app" in stderr
 
 
 class TestCreatePipelinerun:
