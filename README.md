@@ -15,7 +15,7 @@ Two ecosystems are available today. Each uses its own default database (`--db` o
 | Ecosystem | Default database | Description | Commands |
 |-----------|------------------|-------------|----------|
 | `java` | `./java_import_state.db` | PNC OCI image imports | `fetch`, `import-file`, `import-manifest`, `orchestrate`, `run`, `trigger` |
-| `python` | `./python_import_state.db` | CVE-remediated Python wheel builds | `import-file`, `orchestrate`, `run`, `trigger` |
+| `python` | `./python_import_state.db` | CVE-remediated Python wheel builds | `import-file`, `orchestrate`, `promote`, `run`, `trigger` |
 
 The `python` ecosystem identifies each build by a `package==version` reference (e.g. `ntplib==0.4.0`) instead of an OCI image, and runs the `python-remediated-build` pipeline. It has no `fetch` or `import-manifest` commands; populate its database with `import-file` (one `package==version` per line).
 
@@ -112,6 +112,7 @@ import-orchestrator python import-file --help
 import-orchestrator python orchestrate --help
 import-orchestrator python trigger --help
 import-orchestrator python run --help
+import-orchestrator python promote --help
 
 # Import package references from a file, then orchestrate
 import-orchestrator python import-file packages.txt
@@ -127,6 +128,11 @@ import-orchestrator python run 'ntplib==0.4.0'
 # Same, but persist state to a database and also write the result to a file
 import-orchestrator --db ./one-off.db python run 'ntplib==0.4.0' \
   --output-json ./result.json
+
+# Promote an already-built snapshot to production. No rebuild, no database --
+# this re-releases existing content against a second ReleasePlan.
+import-orchestrator python promote remediated-build-xyz12 \
+  --release-plan remediated-build-prod
 ```
 
 The `import-file` input lists one `package==version` per line; blank lines and lines starting with `#` are ignored:
@@ -331,6 +337,63 @@ PATH` to write the same payload to a file as well (stdout still gets it).
 | `error_message` | Failure detail, `null` on success |
 | `retry_count` | How many retries were consumed |
 
+#### `promote` Subcommand
+
+**Python only.** Releases an **already-built** Snapshot a second time, against a different
+ReleasePlan. Nothing is rebuilt and no PipelineRun is triggered: promotion re-releases the exact
+content that was already built and verified, which is what makes it a promotion rather than a
+second build. It touches no database.
+
+The intended use is moving remediated Python content from staging to production once its
+Cumulative Ticket is cleared for release (ADR-0005), but the command itself carries no policy —
+the caller decides when a promotion is warranted and which plan to target.
+
+```bash
+import-orchestrator python promote <snapshot> --release-plan <plan> [OPTIONS]
+
+# Promote a verified snapshot to production
+import-orchestrator python promote remediated-build-xyz12 \
+  --release-plan remediated-build-prod
+```
+
+| Argument/Option | Default | Description |
+|-----------------|---------|-------------|
+| `snapshot` | — | Name of the existing Konflux Snapshot to promote |
+| `--release-plan` | — | **Required.** ReleasePlan to release against (e.g. `remediated-build-prod`) |
+| `--poll-interval` | `30` | Seconds between status checks |
+| `--timeout` | `14400` (4h) | Seconds to wait for a terminal state, matching the production RPA's pipeline timeout |
+| `--output-json` | — | Also write the result JSON to this path |
+
+> **`--release-plan` is required and never inferred.** Elsewhere the orchestrator resolves a
+> Snapshot's plan from its application label, but `remediated-build` now has both a stage and a
+> production plan. Inferring one would mean inferring whether content ships to staging or to
+> production, so the caller states it. (The inference path itself refuses to guess in that
+> situation — see `find_release_plan_for_snapshot`.)
+
+**Result JSON** — one object on stdout, progress on stderr:
+
+```json
+{
+  "snapshot": "remediated-build-xyz12",
+  "release_plan": "remediated-build-prod",
+  "release_name": "remediated-build-xyz12-prod-abc",
+  "status": "True",
+  "adopted": false
+}
+```
+
+`adopted` is `true` when an in-flight Release against that plan already existed and was attached
+to rather than duplicated.
+
+**Exit codes:**
+- `0` — Release succeeded
+- `1` — Release failed terminally, or could not be created
+- `2` — Timed out; the Release is still running
+
+Exit `2` is deliberately distinct from `1`: a slow release has not failed. Re-running the same
+command adopts the in-flight Release instead of creating a second one, so a timeout is safe to
+retry. A terminally failed Release is *not* adopted, so a retry after `1` genuinely retries.
+
 ### Environment Variables
 
 | Variable | Required | Description |
@@ -425,6 +488,25 @@ With the default ephemeral database the database holds only your reference, so `
 "this reference succeeded/failed". With an explicit `--db` that contains other pending rows, the
 exit code covers all of them — read `status` in the result JSON if you need the verdict for your
 reference specifically. The result JSON is printed for both `0` and `1`.
+
+#### `promote` subcommand
+
+1. Looks for an existing Release for the snapshot **against the named plan only** — a Release
+   against a different plan (typically the stage one) is ignored, since promotion exists precisely
+   to add a second one
+2. Adopts that Release if one is in flight; otherwise creates a new Release referencing the
+   snapshot and the named ReleasePlan. Nothing is built and no PipelineRun is triggered
+3. Polls the Release every `--poll-interval` seconds until it reaches a terminal state or
+   `--timeout` expires. A status the API can't currently supply is treated as "keep waiting",
+   not as a verdict
+4. Prints the result JSON to stdout (and to `--output-json PATH` if given)
+
+**Exit codes:**
+- `0` — Release succeeded
+- `1` — Release failed terminally, or could not be created
+- `2` — Timed out; the Release is still running
+
+No database is opened at any point, so the global `--db` and `--reset` flags have no effect here.
 
 ### Database Inspection
 
