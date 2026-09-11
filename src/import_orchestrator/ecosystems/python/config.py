@@ -36,7 +36,7 @@ TARGET_CONFIGS: dict[str, dict] = {
         "app": "scratch-build",
         "component": "scratch-build",
         "service_account": "build-pipeline-scratch-build",
-        "releases": False,
+        "skip_release": True,
     },
 }
 DEFAULT_TARGET = "REMEDIATED"

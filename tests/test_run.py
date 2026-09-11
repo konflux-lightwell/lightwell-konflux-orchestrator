@@ -196,7 +196,7 @@ class TestResultPayload:
         eco = MagicMock()
         eco.namespace = "lightwell-tenant"
         eco.pipelinerun_prefix = "prefix"
-        eco.target_releases.return_value = False
+        eco.target_skip_release.return_value = True
         fake = _make_success(pipelinerun_name="scratch-abc", snapshot_name="snap-xyz")
         with (
             patch("import_orchestrator.commands.run.KubeClient"),
@@ -234,7 +234,7 @@ class TestSkipRelease:
         eco = MagicMock()
         eco.namespace = "lightwell-tenant"
         eco.pipelinerun_prefix = "prefix"
-        eco.target_releases.return_value = False
+        eco.target_skip_release.return_value = True
         captured = self._captured_pipeline_monitor(tmp_path, monkeypatch, _args(ecosystem=eco, target="SCRATCH"))
         assert captured["skip_release"] is True
 
@@ -242,7 +242,7 @@ class TestSkipRelease:
         eco = MagicMock()
         eco.namespace = "lightwell-tenant"
         eco.pipelinerun_prefix = "prefix"
-        eco.target_releases.return_value = True
+        eco.target_skip_release.return_value = False
         captured = self._captured_pipeline_monitor(tmp_path, monkeypatch, _args(ecosystem=eco, target="REMEDIATED"))
         assert captured["skip_release"] is False
 
