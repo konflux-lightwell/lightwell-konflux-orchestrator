@@ -358,6 +358,34 @@ class KubeClient:
         except (requests.RequestException, KeyError):
             return None
 
+    def find_release_for_snapshot_and_plan(self, snapshot_name: str, release_plan: str) -> str | None:
+        """Find an active Release for a snapshot against one specific ReleasePlan.
+
+        Unlike `find_release_for_snapshot`, this does not match a Release created against
+        a *different* plan for the same snapshot. Promotion deliberately creates a second
+        Release for content that already has a successful stage Release; treating that
+        stage Release as "already done" would silently skip the promotion.
+        """
+        try:
+            result = self._api.list(
+                f"/apis/appstudio.redhat.com/v1alpha1/namespaces/{self.namespace}/releases",
+            )
+            for item in result.get("items", []):
+                spec = item.get("spec", {})
+                if spec.get("snapshot") != snapshot_name or spec.get("releasePlan") != release_plan:
+                    continue
+                released = next(
+                    (c for c in item.get("status", {}).get("conditions", []) if c.get("type") == "Released"),
+                    None,
+                )
+                # Skip terminally failed releases so a new one gets created
+                if released and released.get("status") == "False" and released.get("reason") != "Progressing":
+                    continue
+                return item["metadata"]["name"]
+            return None
+        except (requests.RequestException, KeyError):
+            return None
+
     def get_release_status(self, release_name: str) -> Literal["True", "False", "Unknown"] | None:
         """Get the effective status of the 'Released' condition.
 

@@ -384,6 +384,85 @@ class TestFindReleaseForSnapshot:
         assert kube.find_release_for_snapshot("snap-1") is None
 
 
+class TestFindReleaseForSnapshotAndPlan:
+    def test_ignores_release_against_a_different_plan(self, kube: KubeClient):
+        """A stage release for this snapshot must not be mistaken for a prod release."""
+        kube._mock_api.list.return_value = {
+            "items": [
+                {
+                    "metadata": {"name": "rel-stage"},
+                    "spec": {"snapshot": "snap-1", "releasePlan": "remediated-build"},
+                    "status": {"conditions": [{"type": "Released", "status": "True", "reason": "Succeeded"}]},
+                }
+            ]
+        }
+
+        assert kube.find_release_for_snapshot_and_plan("snap-1", "remediated-build-prod") is None
+
+    def test_finds_release_against_the_named_plan(self, kube: KubeClient):
+        kube._mock_api.list.return_value = {
+            "items": [
+                {
+                    "metadata": {"name": "rel-stage"},
+                    "spec": {"snapshot": "snap-1", "releasePlan": "remediated-build"},
+                    "status": {},
+                },
+                {
+                    "metadata": {"name": "rel-prod"},
+                    "spec": {"snapshot": "snap-1", "releasePlan": "remediated-build-prod"},
+                    "status": {"conditions": [{"type": "Released", "status": "True", "reason": "Succeeded"}]},
+                },
+            ]
+        }
+
+        assert kube.find_release_for_snapshot_and_plan("snap-1", "remediated-build-prod") == "rel-prod"
+
+    def test_ignores_other_snapshots(self, kube: KubeClient):
+        kube._mock_api.list.return_value = {
+            "items": [
+                {
+                    "metadata": {"name": "rel-other"},
+                    "spec": {"snapshot": "snap-2", "releasePlan": "remediated-build-prod"},
+                    "status": {},
+                }
+            ]
+        }
+
+        assert kube.find_release_for_snapshot_and_plan("snap-1", "remediated-build-prod") is None
+
+    def test_skips_terminally_failed_release(self, kube: KubeClient):
+        """A failed prod release must not be adopted — the operator needs a fresh attempt."""
+        kube._mock_api.list.return_value = {
+            "items": [
+                {
+                    "metadata": {"name": "rel-bad"},
+                    "spec": {"snapshot": "snap-1", "releasePlan": "remediated-build-prod"},
+                    "status": {"conditions": [{"type": "Released", "status": "False", "reason": "Failed"}]},
+                }
+            ]
+        }
+
+        assert kube.find_release_for_snapshot_and_plan("snap-1", "remediated-build-prod") is None
+
+    def test_does_not_skip_progressing_false(self, kube: KubeClient):
+        kube._mock_api.list.return_value = {
+            "items": [
+                {
+                    "metadata": {"name": "rel-live"},
+                    "spec": {"snapshot": "snap-1", "releasePlan": "remediated-build-prod"},
+                    "status": {"conditions": [{"type": "Released", "status": "False", "reason": "Progressing"}]},
+                }
+            ]
+        }
+
+        assert kube.find_release_for_snapshot_and_plan("snap-1", "remediated-build-prod") == "rel-live"
+
+    def test_returns_none_on_http_error(self, kube: KubeClient):
+        kube._mock_api.list.side_effect = requests.HTTPError("500")
+
+        assert kube.find_release_for_snapshot_and_plan("snap-1", "remediated-build-prod") is None
+
+
 class TestGetReleaseStatus:
     def test_returns_true_on_success(self, kube: KubeClient):
         kube._mock_api.get.return_value = {
