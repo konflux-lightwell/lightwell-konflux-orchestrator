@@ -52,8 +52,8 @@ class PythonEcosystem:
             builds_tag=builds_tag,
         )
 
-    def target_releases(self, target: str) -> bool:
-        return config.TARGET_CONFIGS.get(target, {}).get("releases", True)
+    def target_skip_release(self, target: str) -> bool:
+        return config.TARGET_CONFIGS.get(target, {}).get("skip_release", False)
 
     def register_cli(self, subparsers: argparse._SubParsersAction) -> None:
         from import_orchestrator.commands import import_file
