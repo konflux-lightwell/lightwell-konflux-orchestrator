@@ -450,6 +450,58 @@ class TestFindReleasePlanForSnapshot:
 
         assert kube.find_release_plan_for_snapshot("snap-1") is None
 
+    def test_excludes_manual_only_plan(self, kube: KubeClient):
+        """A plan labelled auto-release=false is operator-driven and never auto-selected."""
+        kube._mock_api.get.return_value = {"metadata": {"labels": {"appstudio.openshift.io/application": "my-app"}}}
+        kube._mock_api.list.return_value = {
+            "items": [
+                {
+                    "metadata": {
+                        "name": "plan-prod",
+                        "labels": {"release.appstudio.openshift.io/auto-release": "false"},
+                    },
+                    "spec": {"application": "my-app"},
+                },
+                {
+                    "metadata": {
+                        "name": "plan-stage",
+                        "labels": {"release.appstudio.openshift.io/auto-release": "true"},
+                    },
+                    "spec": {"application": "my-app"},
+                },
+            ]
+        }
+
+        assert kube.find_release_plan_for_snapshot("snap-1") == "plan-stage"
+
+    def test_keeps_plan_without_auto_release_label(self, kube: KubeClient):
+        """Only an explicit 'false' excludes a plan — a missing label is not a signal."""
+        kube._mock_api.get.return_value = {"metadata": {"labels": {"appstudio.openshift.io/application": "my-app"}}}
+        kube._mock_api.list.return_value = {
+            "items": [
+                {"metadata": {"name": "plan-unlabelled"}, "spec": {"application": "my-app"}},
+            ]
+        }
+
+        assert kube.find_release_plan_for_snapshot("snap-1") == "plan-unlabelled"
+
+    def test_returns_none_when_ambiguous(self, kube: KubeClient, capsys: pytest.CaptureFixture[str]):
+        """Two auto-releasing plans for one application is unresolvable — refuse rather than guess."""
+        kube._mock_api.get.return_value = {"metadata": {"labels": {"appstudio.openshift.io/application": "my-app"}}}
+        kube._mock_api.list.return_value = {
+            "items": [
+                {"metadata": {"name": "plan-a"}, "spec": {"application": "my-app"}},
+                {"metadata": {"name": "plan-b"}, "spec": {"application": "my-app"}},
+            ]
+        }
+
+        assert kube.find_release_plan_for_snapshot("snap-1") is None
+
+        stderr = capsys.readouterr().err
+        assert "plan-a" in stderr
+        assert "plan-b" in stderr
+        assert "my-app" in stderr
+
 
 class TestCreatePipelinerun:
     """Test the create_pipelinerun method."""
