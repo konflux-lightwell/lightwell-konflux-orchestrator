@@ -383,6 +383,25 @@ class TestFindReleaseForSnapshot:
 
         assert kube.find_release_for_snapshot("snap-1") is None
 
+    def test_returns_newest_across_any_plan(self, kube: KubeClient):
+        """Matches a Release against any plan and, when several match, picks the newest."""
+        kube._mock_api.list.return_value = {
+            "items": [
+                {
+                    "metadata": {"name": "rel-new", "creationTimestamp": "2026-02-01T00:00:00Z"},
+                    "spec": {"snapshot": "snap-1", "releasePlan": "remediated-build-prod"},
+                    "status": {"conditions": [{"type": "Released", "status": "True", "reason": "Succeeded"}]},
+                },
+                {
+                    "metadata": {"name": "rel-old", "creationTimestamp": "2026-01-01T00:00:00Z"},
+                    "spec": {"snapshot": "snap-1", "releasePlan": "remediated-build"},
+                    "status": {"conditions": [{"type": "Released", "status": "True", "reason": "Succeeded"}]},
+                },
+            ]
+        }
+
+        assert kube.find_release_for_snapshot("snap-1") == "rel-new"
+
 
 class TestFindReleaseForSnapshotAndPlan:
     def test_ignores_release_against_a_different_plan(self, kube: KubeClient):
@@ -461,6 +480,25 @@ class TestFindReleaseForSnapshotAndPlan:
         kube._mock_api.list.side_effect = requests.HTTPError("500")
 
         assert kube.find_release_for_snapshot_and_plan("snap-1", "remediated-build-prod") is None
+
+    def test_returns_newest_when_multiple_match(self, kube: KubeClient):
+        """Adoption must be deterministic: pick the newest by creationTimestamp, not API order."""
+        kube._mock_api.list.return_value = {
+            "items": [
+                {
+                    "metadata": {"name": "rel-old", "creationTimestamp": "2026-01-01T00:00:00Z"},
+                    "spec": {"snapshot": "snap-1", "releasePlan": "remediated-build-prod"},
+                    "status": {"conditions": [{"type": "Released", "status": "True", "reason": "Succeeded"}]},
+                },
+                {
+                    "metadata": {"name": "rel-new", "creationTimestamp": "2026-02-01T00:00:00Z"},
+                    "spec": {"snapshot": "snap-1", "releasePlan": "remediated-build-prod"},
+                    "status": {"conditions": [{"type": "Released", "status": "True", "reason": "Succeeded"}]},
+                },
+            ]
+        }
+
+        assert kube.find_release_for_snapshot_and_plan("snap-1", "remediated-build-prod") == "rel-new"
 
 
 class TestGetReleaseStatus:
@@ -563,6 +601,17 @@ class TestFindReleasePlanForSnapshot:
         }
 
         assert kube.find_release_plan_for_snapshot("snap-1") == "plan-unlabelled"
+
+    def test_handles_null_labels_mapping(self, kube: KubeClient):
+        """A manifest with `labels: null` must not raise AttributeError — treat as no labels."""
+        kube._mock_api.get.return_value = {"metadata": {"labels": {"appstudio.openshift.io/application": "my-app"}}}
+        kube._mock_api.list.return_value = {
+            "items": [
+                {"metadata": {"name": "plan-null-labels", "labels": None}, "spec": {"application": "my-app"}},
+            ]
+        }
+
+        assert kube.find_release_plan_for_snapshot("snap-1") == "plan-null-labels"
 
     def test_returns_none_when_ambiguous(self, kube: KubeClient, capsys: pytest.CaptureFixture[str]):
         """Two auto-releasing plans for one application is unresolvable — refuse rather than guess."""
