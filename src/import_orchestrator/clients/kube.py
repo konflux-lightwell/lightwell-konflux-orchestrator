@@ -261,7 +261,7 @@ class KubeClient:
             snap = self._api.get(
                 f"/apis/appstudio.redhat.com/v1alpha1/namespaces/{self.namespace}/snapshots/{snapshot_name}",
             )
-            application = snap.get("metadata", {}).get("labels", {}).get("appstudio.openshift.io/application", "")
+            application = (snap.get("metadata", {}).get("labels") or {}).get("appstudio.openshift.io/application", "")
             if not application:
                 return None
 
@@ -272,7 +272,7 @@ class KubeClient:
                 item["metadata"]["name"]
                 for item in plans.get("items", [])
                 if item.get("spec", {}).get("application") == application
-                and item.get("metadata", {}).get("labels", {}).get("release.appstudio.openshift.io/auto-release")
+                and (item.get("metadata", {}).get("labels") or {}).get("release.appstudio.openshift.io/auto-release")
                 != "false"
             ]
 
@@ -338,41 +338,35 @@ class KubeClient:
             return None
 
     def find_release_for_snapshot(self, snapshot_name: str) -> str | None:
-        """Find an active (non-terminally-failed) Release for the given snapshot."""
-        try:
-            result = self._api.list(
-                f"/apis/appstudio.redhat.com/v1alpha1/namespaces/{self.namespace}/releases",
-            )
-            for item in result.get("items", []):
-                if item.get("spec", {}).get("snapshot") != snapshot_name:
-                    continue
-                released = next(
-                    (c for c in item.get("status", {}).get("conditions", []) if c.get("type") == "Released"),
-                    None,
-                )
-                # Skip terminally failed releases so a new one gets created
-                if released and released.get("status") == "False" and released.get("reason") != "Progressing":
-                    continue
-                return item["metadata"]["name"]
-            return None
-        except (requests.RequestException, KeyError):
-            return None
+        """Find an active (non-terminally-failed) Release for the given snapshot.
 
-    def find_release_for_snapshot_and_plan(self, snapshot_name: str, release_plan: str) -> str | None:
-        """Find an active Release for a snapshot against one specific ReleasePlan.
+        Matches a Release created against any ReleasePlan. When several match, the
+        newest by creationTimestamp is returned (see find_release_for_snapshot_and_plan).
+        """
+        return self.find_release_for_snapshot_and_plan(snapshot_name, None)
 
-        Unlike `find_release_for_snapshot`, this does not match a Release created against
-        a *different* plan for the same snapshot. Promotion deliberately creates a second
-        Release for content that already has a successful stage Release; treating that
-        stage Release as "already done" would silently skip the promotion.
+    def find_release_for_snapshot_and_plan(self, snapshot_name: str, release_plan: str | None = None) -> str | None:
+        """Find an active Release for a snapshot, optionally scoped to one ReleasePlan.
+
+        When `release_plan` is given, a Release created against a *different* plan for the
+        same snapshot is not matched. Promotion deliberately creates a second Release for
+        content that already has a successful stage Release; treating that stage Release as
+        "already done" would silently skip the promotion. When `release_plan` is None, a
+        Release against any plan matches.
+
+        If several Releases match, the newest by `metadata.creationTimestamp` is returned so
+        adoption is deterministic rather than dependent on API response order.
         """
         try:
             result = self._api.list(
                 f"/apis/appstudio.redhat.com/v1alpha1/namespaces/{self.namespace}/releases",
             )
+            candidates = []
             for item in result.get("items", []):
                 spec = item.get("spec", {})
-                if spec.get("snapshot") != snapshot_name or spec.get("releasePlan") != release_plan:
+                if spec.get("snapshot") != snapshot_name:
+                    continue
+                if release_plan is not None and spec.get("releasePlan") != release_plan:
                     continue
                 released = next(
                     (c for c in item.get("status", {}).get("conditions", []) if c.get("type") == "Released"),
@@ -381,8 +375,11 @@ class KubeClient:
                 # Skip terminally failed releases so a new one gets created
                 if released and released.get("status") == "False" and released.get("reason") != "Progressing":
                     continue
-                return item["metadata"]["name"]
-            return None
+                candidates.append(item)
+            if not candidates:
+                return None
+            newest = max(candidates, key=lambda item: item.get("metadata", {}).get("creationTimestamp", ""))
+            return newest["metadata"]["name"]
         except (requests.RequestException, KeyError):
             return None
 
