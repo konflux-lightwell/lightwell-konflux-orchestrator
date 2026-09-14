@@ -29,17 +29,23 @@ PYTHON_SDIST_DEFAULT_DB_PATH = "./python_sdist_import_state.db"
 NAMESPACE = "lightwell-python-tenant"
 PIPELINERUN_PREFIX = "python-sdist-ingest-"
 
-# Konflux application and component for sdist mirroring.
-APPLICATION = os.environ.get("LIGHTWELL_PYTHON_SDIST_APP", "python-sdist-mirror")
-COMPONENT = os.environ.get("LIGHTWELL_PYTHON_SDIST_COMPONENT", "python-sdist-mirror")
-
-# Service account used for sdist ingestion PipelineRuns.
-# Defaults to build-pipeline-python-sdist-mirror (created upon component onboarding),
-# configurable via LIGHTWELL_PYTHON_SDIST_SERVICE_ACCOUNT for pre-provisioning testing.
-SERVICE_ACCOUNT = os.environ.get(
-    "LIGHTWELL_PYTHON_SDIST_SERVICE_ACCOUNT",
-    "build-pipeline-python-sdist-mirror",
-)
+# Build targets, keyed by target name. Each supplies the Konflux application and
+# component labels applied to the PipelineRun, and whether the target produces a
+# Release CR (`skip_release`). Selected via `--target`.
+TARGET_CONFIGS: dict[str, dict] = {
+    "MIRROR": {
+        "app": "python-sdist-mirror",
+        "component": "python-sdist-mirror",
+        "service_account": "build-pipeline-python-sdist-mirror",
+    },
+    "SCRATCH": {
+        "app": "python-sdist-mirror-scratch",
+        "component": "python-sdist-mirror-scratch",
+        "service_account": "build-pipeline-python-sdist-mirror-scratch",
+        "skip_release": True,
+    },
+}
+DEFAULT_TARGET = "MIRROR"
 
 # Base of the destination image repository. sdist artifacts are pushed to
 # "<image_repo_base>/<app>/<component>:<package>-<version>".

@@ -46,6 +46,16 @@ class TestOrchestrateArgParsing:
         assert args.max_parallel == 5
         assert args.source_registries == "pypi.org"
 
+    def test_target_defaults_to_mirror(self):
+        parser = make_parser()
+        args = parser.parse_args(["python-sdist", "orchestrate"])
+        assert args.target == "MIRROR"
+
+    def test_target_scratch_accepted(self):
+        parser = make_parser()
+        args = parser.parse_args(["python-sdist", "orchestrate", "--target", "SCRATCH"])
+        assert args.target == "SCRATCH"
+
 
 class TestOrchestrateEmptyDbWarning:
     def test_empty_database_prints_python_sdist_warning(self, monkeypatch, tmp_path: Path, capsys):

@@ -33,6 +33,8 @@ class PythonSdistEcosystem:
 
     def build_pipelinerun(self, ref: str, args: argparse.Namespace) -> dict:
         package, version = parse_ref(ref)
+        target = getattr(args, "target", config.DEFAULT_TARGET)
+        cfg = config.TARGET_CONFIGS[target]
         source_registries = getattr(args, "source_registries", "rhtl,pypi.org")
         pipeline_spec = load_pipeline(config.pipeline_definition_path())
         pipeline_git_url, pipeline_revision = config.pipeline_source_identity()
@@ -41,15 +43,18 @@ class PythonSdistEcosystem:
             version=version,
             pipeline_spec=pipeline_spec,
             namespace=self.namespace,
-            application=config.APPLICATION,
-            component=config.COMPONENT,
-            service_account=config.SERVICE_ACCOUNT,
+            application=cfg["app"],
+            component=cfg["component"],
+            service_account=cfg["service_account"],
             prefix=self.pipelinerun_prefix,
             image_repo_base=config.IMAGE_REPO_BASE,
             source_registries=source_registries,
             pipeline_git_url=pipeline_git_url,
             pipeline_revision=pipeline_revision,
         )
+
+    def target_skip_release(self, target: str) -> bool:
+        return config.TARGET_CONFIGS.get(target, {}).get("skip_release", False)
 
     def register_cli(self, subparsers: argparse._SubParsersAction) -> None:
         from import_orchestrator.commands import import_file
