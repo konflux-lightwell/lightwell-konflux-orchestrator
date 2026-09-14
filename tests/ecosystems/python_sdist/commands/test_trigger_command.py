@@ -50,6 +50,21 @@ class TestTriggerArgParsing:
         args = parser.parse_args(["python-sdist", "trigger", "--source-registries", "pypi.org", "foolib==0.4.0"])
         assert args.source_registries == "pypi.org"
 
+    def test_target_defaults_to_mirror(self):
+        parser = make_parser()
+        args = parser.parse_args(["python-sdist", "trigger", "foolib==0.4.0"])
+        assert args.target == "MIRROR"
+
+    def test_target_scratch_accepted(self):
+        parser = make_parser()
+        args = parser.parse_args(["python-sdist", "trigger", "--target", "SCRATCH", "foolib==0.4.0"])
+        assert args.target == "SCRATCH"
+
+    def test_target_invalid_rejected(self):
+        parser = make_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(["python-sdist", "trigger", "--target", "INVALID", "foolib==0.4.0"])
+
 
 def _args(**overrides):
     base = dict(ref="foolib==0.4.0", ecosystem=MagicMock())

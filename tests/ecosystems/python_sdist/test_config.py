@@ -22,6 +22,29 @@ from import_orchestrator.ecosystems.python_sdist import config
 from import_orchestrator.engine.errors import TriggerError
 
 
+class TestTargetConfigs:
+    def test_mirror_target_present(self):
+        assert "MIRROR" in config.TARGET_CONFIGS
+
+    def test_scratch_target_present(self):
+        assert "SCRATCH" in config.TARGET_CONFIGS
+
+    def test_default_target_is_mirror(self):
+        assert config.DEFAULT_TARGET == "MIRROR"
+
+    def test_each_target_has_required_keys(self):
+        for name, cfg in config.TARGET_CONFIGS.items():
+            assert "app" in cfg, f"{name} missing 'app'"
+            assert "component" in cfg, f"{name} missing 'component'"
+            assert "service_account" in cfg, f"{name} missing 'service_account'"
+
+    def test_scratch_skips_release(self):
+        assert config.TARGET_CONFIGS["SCRATCH"].get("skip_release") is True
+
+    def test_mirror_does_not_skip_release(self):
+        assert not config.TARGET_CONFIGS["MIRROR"].get("skip_release")
+
+
 class TestPipelineSourceIdentity:
     def test_reads_from_environment(self, monkeypatch):
         monkeypatch.setenv(
