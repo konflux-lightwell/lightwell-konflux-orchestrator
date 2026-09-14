@@ -59,3 +59,29 @@ def test_build_pipelinerun_rejects_malformed_ref(tmp_path, monkeypatch):
     monkeypatch.setenv("TEKTON_PIPELINE_DIR", str(tmp_path))
     with pytest.raises(TriggerError):
         PythonSdistEcosystem().build_pipelinerun("foolib-0.4.0", argparse.Namespace())
+
+
+def test_build_pipelinerun_scratch_target_uses_scratch_app(monkeypatch, tmp_path):
+    pipeline_file = tmp_path / "tekton" / "pipelines" / "python-sdist-ingest" / "python-sdist-ingest.yaml"
+    pipeline_file.parent.mkdir(parents=True)
+    pipeline_file.write_text("spec:\n  tasks: []\n")
+    monkeypatch.setenv("TEKTON_PIPELINE_DIR", str(tmp_path / "tekton"))
+
+    args = argparse.Namespace(target="SCRATCH")
+    manifest = PythonSdistEcosystem().build_pipelinerun("foolib==0.4.0", args)
+
+    labels = manifest["metadata"]["labels"]
+    assert labels["appstudio.openshift.io/application"] == "python-sdist-mirror-scratch"
+    assert labels["appstudio.openshift.io/component"] == "python-sdist-mirror-scratch"
+
+
+def test_build_pipelinerun_default_target_uses_mirror_app(monkeypatch, tmp_path):
+    pipeline_file = tmp_path / "tekton" / "pipelines" / "python-sdist-ingest" / "python-sdist-ingest.yaml"
+    pipeline_file.parent.mkdir(parents=True)
+    pipeline_file.write_text("spec:\n  tasks: []\n")
+    monkeypatch.setenv("TEKTON_PIPELINE_DIR", str(tmp_path / "tekton"))
+
+    manifest = PythonSdistEcosystem().build_pipelinerun("foolib==0.4.0", argparse.Namespace())
+
+    labels = manifest["metadata"]["labels"]
+    assert labels["appstudio.openshift.io/application"] == "python-sdist-mirror"

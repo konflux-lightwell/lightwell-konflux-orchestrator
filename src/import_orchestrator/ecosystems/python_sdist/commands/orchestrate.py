@@ -17,6 +17,7 @@ limitations under the License.
 from __future__ import annotations
 
 import argparse
+import os
 
 from import_orchestrator.commands.orchestrate import run_orchestrate
 from import_orchestrator.constants import (
@@ -25,6 +26,7 @@ from import_orchestrator.constants import (
     DEFAULT_POLL_INTERVAL,
 )
 from import_orchestrator.ecosystems.base import Ecosystem
+from import_orchestrator.ecosystems.python_sdist import config
 
 _EMPTY_DB_WARNING = "No package references in database. Run 'import-orchestrator python-sdist import-file' first."
 
@@ -62,6 +64,12 @@ def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> No
         "--source-registries",
         default="rhtl,pypi.org",
         help="Comma-separated list of registries to query in order (default: 'rhtl,pypi.org')",
+    )
+    parser.add_argument(
+        "--target",
+        choices=list(config.TARGET_CONFIGS),
+        default=os.environ.get("LIGHTWELL_PYTHON_SDIST_TARGET", config.DEFAULT_TARGET),
+        help=f"Ingestion target (default: {config.DEFAULT_TARGET}, or LIGHTWELL_PYTHON_SDIST_TARGET env var)",
     )
 
     parser.set_defaults(func=run, ecosystem=ecosystem)
