@@ -166,6 +166,11 @@ import-orchestrator java fetch [--artifact-type {STAGE,REBUILD,REMEDIATED,NOVEL}
 |--------|---------|-------------|
 | `--artifact-type` | `STAGE` (or `LIGHTWELL_ARTIFACT_TYPE` env var) | Artifact type: STAGE, REBUILD, REMEDIATED, or NOVEL |
 
+> **NOVEL fetch (LWLP-1435):** Novel builds are moving from `secure-pnc` to
+> `novel-pnc`. Fetch tries `novel-pnc` first and falls back to `secure-pnc` only
+> if `novel-pnc` is empty. Remove this fallback once novel builds ship exclusively
+> to `novel-pnc`.
+
 #### `import-file` Subcommand
 
 Imports OCI references from a text file into the database.
