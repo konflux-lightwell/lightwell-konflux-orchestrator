@@ -58,11 +58,20 @@ def run(args: argparse.Namespace) -> int:
 
     artifact_config = config.ARTIFACT_CONFIGS[args.artifact_type]
 
-    client = QuayClient(token=token, ref=artifact_config["source_repo"])
+    # LWLP-1435: try the preferred source, then a legacy repo if it is empty.
+    legacy_source_repo = artifact_config.get("legacy_source_repo")
 
     with ImportDatabase(args.db) as db:
         ingest = Ingest(db)
+        client = QuayClient(token=token, ref=artifact_config["source_repo"])
         result = ingest.from_quay(client)
+        if result.total == 0 and legacy_source_repo:
+            print(
+                f"No references in {artifact_config['source_repo']}; falling back to legacy repo {legacy_source_repo}",
+                file=sys.stderr,
+            )
+            client = QuayClient(token=token, ref=legacy_source_repo)
+            result = ingest.from_quay(client)
 
         _print_summary(result)
 

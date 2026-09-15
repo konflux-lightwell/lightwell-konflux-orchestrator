@@ -245,6 +245,50 @@ class TestMainFetch:
         )
 
     @patch("import_orchestrator.ecosystems.java.commands.fetch.QuayClient", autospec=True)
+    def test_novel_fetch_falls_back_to_secure_pnc_when_novel_pnc_is_empty(
+        self, mock_client_cls, monkeypatch, tmp_path: Path, capsys
+    ):
+        """NOVEL fetch tries novel-pnc first, then secure-pnc if it is empty."""
+        monkeypatch.setenv("QUAY_TOKEN", "test-token")
+        mock_client = mock_client_cls.return_value
+        mock_client.fetch_oci_references.return_value = []
+
+        monkeypatch.setattr(
+            "sys.argv",
+            ["prog", "--db", str(tmp_path / "test.db"), "java", "fetch", "--artifact-type", "NOVEL"],
+        )
+
+        exit_code = main()
+        assert exit_code == 0
+
+        refs = [call.kwargs["ref"] for call in mock_client_cls.call_args_list]
+        assert refs == [
+            "quay.io/light-castle/novel-pnc",
+            "quay.io/light-castle/secure-pnc",
+        ]
+        # The fallback is logged for operational visibility during the migration.
+        assert "falling back to legacy repo quay.io/light-castle/secure-pnc" in capsys.readouterr().err
+
+    @patch("import_orchestrator.ecosystems.java.commands.fetch.QuayClient", autospec=True)
+    def test_novel_fetch_skips_legacy_when_novel_pnc_has_refs(self, mock_client_cls, monkeypatch, tmp_path: Path):
+        """NOVEL fetch does not query secure-pnc when novel-pnc returns refs."""
+        monkeypatch.setenv("QUAY_TOKEN", "test-token")
+        mock_client = mock_client_cls.return_value
+        mock_client.fetch_oci_references.return_value = ["quay.io/light-castle/novel-pnc:lw-1@sha256:aaa"]
+
+        monkeypatch.setattr(
+            "sys.argv",
+            ["prog", "--db", str(tmp_path / "test.db"), "java", "fetch", "--artifact-type", "NOVEL"],
+        )
+
+        exit_code = main()
+        assert exit_code == 0
+        mock_client_cls.assert_called_once_with(
+            token="test-token",
+            ref="quay.io/light-castle/novel-pnc",
+        )
+
+    @patch("import_orchestrator.ecosystems.java.commands.fetch.QuayClient", autospec=True)
     def test_db_default_resolves_to_java(self, mock_client_cls, monkeypatch, tmp_path: Path):
         """When --db is omitted, main() resolves it to the ecosystem default path."""
         monkeypatch.chdir(tmp_path)
