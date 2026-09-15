@@ -40,7 +40,13 @@ ARTIFACT_CONFIGS: dict[str, dict[str, str]] = {
     "NOVEL": {
         "app": "pnc-import-novel",
         "service_account": "build-pipeline-pnc-import-novel",
-        "source_repo": "quay.io/light-castle/secure-pnc",
+        "source_repo": "quay.io/light-castle/novel-pnc",
+        # Backwards-compatibility for the secure-pnc -> novel-pnc migration (LWLP-1435).
+        # Novel builds are moving to their own repo, but for a transition period they
+        # may still land in secure-pnc. `fetch` tries `source_repo` first and only
+        # falls back here if it returns no references. Remove this key once novel
+        # builds ship exclusively to novel-pnc.
+        "legacy_source_repo": "quay.io/light-castle/secure-pnc",
         "dest_repo": "quay.io/redhat-user-workloads/lightwell-poc-tenant/pnc-import-novel/pnc-import-novel",
     },
     "STAGE": {
