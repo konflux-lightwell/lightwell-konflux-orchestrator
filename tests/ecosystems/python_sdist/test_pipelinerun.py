@@ -53,7 +53,7 @@ def _manifest(**overrides):
         prefix="python-sdist-ingest-",
         image_repo_base="quay.io/redhat-user-workloads/lightwell-python-tenant",
         service_account="build-pipeline-python-sdist-mirror",
-        source_registries="rhtl,pypi.org",
+        source_registries="rhtl",
     )
     kwargs.update(overrides)
     return build_pipelinerun_manifest(**kwargs)

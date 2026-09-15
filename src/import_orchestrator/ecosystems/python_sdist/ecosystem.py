@@ -35,7 +35,7 @@ class PythonSdistEcosystem:
         package, version = parse_ref(ref)
         target = getattr(args, "target", config.DEFAULT_TARGET)
         cfg = config.TARGET_CONFIGS[target]
-        source_registries = getattr(args, "source_registries", "rhtl,pypi.org")
+        source_registries = getattr(args, "source_registries", "rhtl")
         pipeline_spec = load_pipeline(config.pipeline_definition_path())
         pipeline_git_url, pipeline_revision = config.pipeline_source_identity()
         return build_pipelinerun_manifest(
