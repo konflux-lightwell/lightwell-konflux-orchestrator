@@ -44,6 +44,16 @@ class TestOrchestrateArgParsing:
         args = parser.parse_args(["python", "orchestrate"])
         assert args.target == "REMEDIATED"
 
+    def test_release_plan_defaults_to_none(self):
+        parser = make_parser()
+        args = parser.parse_args(["python", "orchestrate"])
+        assert args.release_plan is None
+
+    def test_release_plan_override(self):
+        parser = make_parser()
+        args = parser.parse_args(["python", "orchestrate", "--release-plan", "remediated-build-prod"])
+        assert args.release_plan == "remediated-build-prod"
+
 
 class TestOrchestrateEmptyDbWarning:
     def test_empty_database_prints_python_warning(self, monkeypatch, tmp_path: Path, capsys):

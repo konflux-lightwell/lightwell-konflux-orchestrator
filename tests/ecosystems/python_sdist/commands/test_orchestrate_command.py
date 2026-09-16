@@ -56,6 +56,16 @@ class TestOrchestrateArgParsing:
         args = parser.parse_args(["python-sdist", "orchestrate", "--target", "SCRATCH"])
         assert args.target == "SCRATCH"
 
+    def test_release_plan_defaults_to_none(self):
+        parser = make_parser()
+        args = parser.parse_args(["python-sdist", "orchestrate"])
+        assert args.release_plan is None
+
+    def test_release_plan_override(self):
+        parser = make_parser()
+        args = parser.parse_args(["python-sdist", "orchestrate", "--release-plan", "python-sdist-mirror-prod"])
+        assert args.release_plan == "python-sdist-mirror-prod"
+
 
 class TestOrchestrateEmptyDbWarning:
     def test_empty_database_prints_python_sdist_warning(self, monkeypatch, tmp_path: Path, capsys):

@@ -70,6 +70,15 @@ def add_common_orchestrate_args(parser: argparse.ArgumentParser) -> None:
         help="Path to a konflux-release-data checkout for --print-resources "
         "(default: reference/konflux-release-data, cloned on demand).",
     )
+    parser.add_argument(
+        "--release-plan",
+        default=None,
+        metavar="NAME",
+        help=(
+            "Create every Release against this specific ReleasePlan instead of "
+            "resolving one based on the Konflux application."
+        ),
+    )
 
 
 def _is_database_empty(db: ImportDatabase) -> bool:
@@ -106,7 +115,11 @@ def run_orchestrate(args: argparse.Namespace, empty_db_warning: str) -> int:
         skip_release = target is not None and getattr(eco, "target_skip_release", lambda t: False)(target)
         pipeline_monitor = PipelineMonitor(db=db, kube=kube, skip_release=skip_release)
         release_monitor = ReleaseMonitor(
-            db=db, kube=kube, max_parallel=args.max_parallel, prefix=eco.pipelinerun_prefix
+            db=db,
+            kube=kube,
+            max_parallel=args.max_parallel,
+            prefix=eco.pipelinerun_prefix,
+            release_plan=getattr(args, "release_plan", None),
         )
 
         orchestrator = ImportOrchestrator(
