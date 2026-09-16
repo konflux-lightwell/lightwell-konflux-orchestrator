@@ -19,6 +19,11 @@ from __future__ import annotations
 import argparse
 from typing import Protocol, runtime_checkable
 
+DEFAULT_PIPELINERUN_ANNOTATIONS: dict[str, str] = {
+    # Ensures each snapshot gets its own release even when a newer one arrives concurrently.
+    "test.appstudio.openshift.io/ignore-supersession": "true",
+}
+
 
 @runtime_checkable
 class Ecosystem(Protocol):
