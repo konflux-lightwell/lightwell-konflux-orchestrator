@@ -206,6 +206,102 @@ class TestFindOrCreateRelease:
         assert updated_ref.release_name is None
 
 
+class TestReleasePlanOverride:
+    """Test the explicit --release-plan override path.
+
+    When several auto-releasing ReleasePlans share an application (the -stage
+    plans: validated/remediated/novel all use `pnc-import-stage`), the snapshot
+    alone cannot disambiguate them, so the caller pins the target plan.
+    """
+
+    @pytest.fixture
+    def pinned_monitor(self, db: ImportDatabase, mock_kube: MagicMock):
+        """A monitor pinned to the novel-stage ReleasePlan."""
+        return ReleaseMonitor(
+            db,
+            mock_kube,
+            max_parallel=5,
+            prefix="pnc-import-",
+            release_plan="pnc-import-java-pulp-novel-stage",
+        )
+
+    def test_creates_release_against_pinned_plan(self, pinned_monitor: ReleaseMonitor, mock_kube: MagicMock):
+        """The override plan is used directly; the ambiguous lookup is skipped."""
+        ref, _ = pinned_monitor.db.add_item("quay.io/repo:tag@sha256:abc")
+        assert ref.id is not None
+
+        pinned_monitor.db.update_status(
+            ref.id,
+            ImportStatus.AWAITING_RELEASE,
+            pipelinerun_name="pnc-import-stage-abc",
+            snapshot_name="snapshot-stage-123",
+        )
+
+        mock_kube.find_release_for_snapshot_and_plan.return_value = None
+        mock_kube.create_release.return_value = "release-novel-1"
+        mock_kube.get_release_status.return_value = "Unknown"
+
+        pinned_monitor.update_statuses()
+
+        # Snapshot-based plan resolution must be bypassed entirely.
+        mock_kube.find_release_plan_for_snapshot.assert_not_called()
+        mock_kube.create_release.assert_called_once_with(
+            "snapshot-stage-123", "pnc-import-java-pulp-novel-stage", "pnc-import-"
+        )
+        updated_ref = pinned_monitor.db.get_by_status(ImportStatus.AWAITING_RELEASE)[0]
+        assert updated_ref.release_name == "release-novel-1"
+
+    def test_existing_lookup_is_scoped_to_pinned_plan(self, pinned_monitor: ReleaseMonitor, mock_kube: MagicMock):
+        """The 'already released?' check is scoped to the pinned plan.
+
+        A Release created against a different stage plan (e.g. validated-stage) for
+        the same snapshot must not be mistaken for the novel-stage release.
+        """
+        ref, _ = pinned_monitor.db.add_item("quay.io/repo:tag@sha256:abc")
+        assert ref.id is not None
+
+        pinned_monitor.db.update_status(
+            ref.id,
+            ImportStatus.AWAITING_RELEASE,
+            pipelinerun_name="pnc-import-stage-abc",
+            snapshot_name="snapshot-stage-123",
+        )
+
+        # No novel-stage release exists yet (even though other plans may have one).
+        mock_kube.find_release_for_snapshot_and_plan.return_value = None
+        mock_kube.create_release.return_value = "release-novel-1"
+        mock_kube.get_release_status.return_value = "Unknown"
+
+        pinned_monitor.update_statuses()
+
+        mock_kube.find_release_for_snapshot_and_plan.assert_called_once_with(
+            "snapshot-stage-123", "pnc-import-java-pulp-novel-stage"
+        )
+        # The unscoped lookup must not be used when a plan is pinned.
+        mock_kube.find_release_for_snapshot.assert_not_called()
+
+    def test_adopts_existing_pinned_release(self, pinned_monitor: ReleaseMonitor, mock_kube: MagicMock):
+        """An existing Release against the pinned plan is adopted, not recreated."""
+        ref, _ = pinned_monitor.db.add_item("quay.io/repo:tag@sha256:abc")
+        assert ref.id is not None
+
+        pinned_monitor.db.update_status(
+            ref.id,
+            ImportStatus.AWAITING_RELEASE,
+            pipelinerun_name="pnc-import-stage-abc",
+            snapshot_name="snapshot-stage-123",
+        )
+
+        mock_kube.find_release_for_snapshot_and_plan.return_value = "release-novel-existing"
+        mock_kube.get_release_status.return_value = "Unknown"
+
+        pinned_monitor.update_statuses()
+
+        mock_kube.create_release.assert_not_called()
+        updated_ref = pinned_monitor.db.get_by_status(ImportStatus.AWAITING_RELEASE)[0]
+        assert updated_ref.release_name == "release-novel-existing"
+
+
 class TestCheckReleaseCompletion:
     """Test release completion checking phase."""
 

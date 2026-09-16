@@ -32,11 +32,24 @@ class ReleaseMonitor:
     to manage the AWAITING_RELEASE -> SUCCESS/FAILED transitions.
     """
 
-    def __init__(self, db: ImportDatabase, kube: KubeClient, max_parallel: int, prefix: str):
+    def __init__(
+        self,
+        db: ImportDatabase,
+        kube: KubeClient,
+        max_parallel: int,
+        prefix: str,
+        release_plan: str | None = None,
+    ):
         self.db = db
         self.kube = kube
         self.max_parallel = max_parallel
         self.prefix = prefix
+        # When set, every Release is created against this ReleasePlan instead of
+        # resolving one from the snapshot's application. Necessary when several
+        # auto-releasing ReleasePlans share one application (e.g. the -stage
+        # plans validated/remediated/novel all use `pnc-import-stage`), where the
+        # snapshot alone cannot say which stream is intended.
+        self.release_plan = release_plan
 
     def update_statuses(self) -> None:
         """For AWAITING_RELEASE imports, find the Release and check its status."""
@@ -111,8 +124,14 @@ class ReleaseMonitor:
         assert item.id is not None
         assert item.snapshot_name is not None
 
-        # Check if a release already exists for this snapshot
-        release_name = self.kube.find_release_for_snapshot(item.snapshot_name)
+        # Check if a release already exists for this snapshot. When a specific
+        # ReleasePlan is targeted, scope the lookup to it so a Release created
+        # against a *different* plan for the same snapshot (e.g. an auto-release
+        # to validated-stage) is not mistaken for "already done".
+        if self.release_plan is not None:
+            release_name = self.kube.find_release_for_snapshot_and_plan(item.snapshot_name, self.release_plan)
+        else:
+            release_name = self.kube.find_release_for_snapshot(item.snapshot_name)
         if release_name:
             self.db.update_status(item.id, ImportStatus.AWAITING_RELEASE, release_name=release_name)
             print(f"  Tracking release/{release_name} ({tag})", file=sys.stderr)
@@ -127,8 +146,9 @@ class ReleaseMonitor:
             )
             return None
 
-        # Find the ReleasePlan for this snapshot
-        release_plan = self.kube.find_release_plan_for_snapshot(item.snapshot_name)
+        # Use the explicitly targeted ReleasePlan if given; otherwise resolve one
+        # from the snapshot's application (which fails closed when ambiguous).
+        release_plan = self.release_plan or self.kube.find_release_plan_for_snapshot(item.snapshot_name)
         if not release_plan:
             print(f"  No ReleasePlan found for {item.snapshot_name} ({tag}), will retry", file=sys.stderr)
             return None
