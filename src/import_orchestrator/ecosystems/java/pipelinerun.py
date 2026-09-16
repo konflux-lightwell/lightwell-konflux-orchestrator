@@ -20,6 +20,7 @@ import re
 from typing import Any
 
 from import_orchestrator.constants import NAMESPACE
+from import_orchestrator.ecosystems.base import DEFAULT_PIPELINERUN_ANNOTATIONS
 from import_orchestrator.engine.errors import TriggerError
 from import_orchestrator.engine.pipeline_loader import load_pipeline
 
@@ -65,7 +66,7 @@ def build_pipelinerun_manifest(
         "metadata": {
             "generateName": prefix,
             "namespace": namespace,
-            "annotations": {"test.appstudio.openshift.io/ignore-supersession": "true"},
+            "annotations": DEFAULT_PIPELINERUN_ANNOTATIONS,
             "labels": {
                 "appstudio.openshift.io/application": app,
                 "appstudio.openshift.io/component": app,

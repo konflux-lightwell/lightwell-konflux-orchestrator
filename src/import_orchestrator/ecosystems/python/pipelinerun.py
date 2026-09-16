@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from import_orchestrator.ecosystems.base import DEFAULT_PIPELINERUN_ANNOTATIONS
 from import_orchestrator.engine.errors import TriggerError
 
 __all__ = ["TriggerError", "build_pipelinerun_manifest", "parse_ref"]
@@ -91,6 +92,7 @@ def build_pipelinerun_manifest(
         "metadata": {
             "generateName": prefix,
             "namespace": namespace,
+            "annotations": DEFAULT_PIPELINERUN_ANNOTATIONS,
             "labels": {
                 "appstudio.openshift.io/application": application,
                 "appstudio.openshift.io/component": component,
