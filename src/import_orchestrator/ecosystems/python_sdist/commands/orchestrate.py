@@ -72,6 +72,16 @@ def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> No
         help=f"Ingestion target (default: {config.DEFAULT_TARGET}, or LIGHTWELL_PYTHON_SDIST_TARGET env var)",
     )
 
+    parser.add_argument(
+        "--release-plan",
+        default=None,
+        metavar="NAME",
+        help=(
+            "Create every Release against this specific ReleasePlan instead of "
+            "resolving one based on the Konflux application."
+        ),
+    )
+
     parser.set_defaults(func=run, ecosystem=ecosystem)
 
 
