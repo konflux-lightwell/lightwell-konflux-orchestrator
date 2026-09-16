@@ -71,6 +71,15 @@ def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> No
         ),
     )
     parser.add_argument(
+        "--release-plan",
+        default=None,
+        metavar="NAME",
+        help=(
+            "Create the Release against this specific ReleasePlan instead of "
+            "resolving one from the snapshot's application."
+        ),
+    )
+    parser.add_argument(
         "--poll-interval",
         type=int,
         default=DEFAULT_POLL_INTERVAL,
