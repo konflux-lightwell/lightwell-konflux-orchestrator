@@ -130,11 +130,19 @@ def run_single(args: argparse.Namespace, ref: str) -> int:
                 build_pipelinerun=lambda r: eco.build_pipelinerun(r, args),
                 max_parallel=1,
                 max_retries=args.max_retries,
+                force_import=getattr(args, "force_import", False),
+                expected_application=getattr(eco, "snapshot_application", lambda a: None)(args),
             )
             target = getattr(args, "target", None)
             skip_release = target is not None and getattr(eco, "target_skip_release", lambda t: False)(target)
             pipeline_monitor = PipelineMonitor(db=db, kube=kube, skip_release=skip_release)
-            release_monitor = ReleaseMonitor(db=db, kube=kube, max_parallel=1, prefix=eco.pipelinerun_prefix)
+            release_monitor = ReleaseMonitor(
+                db=db,
+                kube=kube,
+                max_parallel=1,
+                prefix=eco.pipelinerun_prefix,
+                release_plan=getattr(args, "release_plan", None),
+            )
 
             orchestrator = ImportOrchestrator(
                 db=db,

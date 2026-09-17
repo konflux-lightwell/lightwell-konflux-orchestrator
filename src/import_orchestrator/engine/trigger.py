@@ -16,6 +16,7 @@ limitations under the License.
 
 from __future__ import annotations
 
+import re
 import sys
 from collections.abc import Callable
 from datetime import datetime
@@ -23,7 +24,12 @@ from datetime import datetime
 from import_orchestrator.clients.kube import KubeClient
 from import_orchestrator.database import ImportDatabase
 from import_orchestrator.engine.errors import TriggerError
-from import_orchestrator.models import ImportItem, ImportStatus
+from import_orchestrator.models import (
+    ImportItem,
+    ImportStatus,
+    SnapshotLookup,
+    SnapshotLookupState,
+)
 from import_orchestrator.utils import extract_tag
 
 
@@ -41,12 +47,20 @@ class ImportTrigger:
         build_pipelinerun: Callable[[str], dict],
         max_parallel: int,
         max_retries: int,
+        force_import: bool = False,
+        expected_application: str | None = None,
+        import_snapshot_resolver: bool = False,
     ):
+        if max_parallel <= 0:
+            raise ValueError("max_parallel must be positive")
         self.db = db
         self.kube = kube
         self.build_pipelinerun = build_pipelinerun
         self.max_parallel = max_parallel
         self.max_retries = max_retries
+        self.force_import = force_import
+        self.expected_application = expected_application
+        self.import_snapshot_resolver = import_snapshot_resolver
 
     def trigger_import(self, item: ImportItem) -> str | None:
         """Build and submit a PipelineRun for the given import item.
@@ -69,15 +83,91 @@ class ImportTrigger:
         Returns:
             The number of imports successfully triggered.
         """
-        in_flight = self.db.count_in_flight()
-        available_slots = max(0, self.max_parallel - in_flight)
-
-        if available_slots == 0:
-            return 0
-
         pending = self.db.get_by_status(ImportStatus.PENDING)
         retry_candidates = self.db.get_retry_candidates(self.max_retries)
-        candidates = (pending + retry_candidates)[:available_slots]
+        candidates = pending + retry_candidates
+        if not self.force_import:
+            # Java imports must resolve through the source-matching import PLR;
+            # component-only lookup is unsafe because Java components are shared.
+            resolver = getattr(self.kube, "find_snapshot_for_import", None)
+            if self.import_snapshot_resolver and callable(resolver):
+                for item in candidates[:]:
+                    if item.id is None:
+                        continue
+                    try:
+                        lookup = resolver(item.ref, self.expected_application)
+                    except TypeError:
+                        lookup = resolver(item.ref)
+                    if isinstance(lookup, str) and lookup:
+                        lookup = SnapshotLookup(SnapshotLookupState.FOUND, lookup)
+                    if isinstance(lookup, SnapshotLookup) and lookup.state is SnapshotLookupState.FOUND and lookup.name:
+                        self.db.update_status(item.id, ImportStatus.AWAITING_RELEASE, snapshot_name=lookup.name)
+                        candidates.remove(item)
+                    elif isinstance(lookup, SnapshotLookup) and lookup.state is SnapshotLookupState.CONFIRMED_EMPTY:
+                        # A Java pending row is only safe to release after its
+                        # source-matching import PLR is found.  No match remains
+                        # pending; callers may explicitly use --force-import.
+                        self.db.update_status(
+                            item.id,
+                            ImportStatus.PENDING,
+                            error_message="No completed matching import PipelineRun; remaining pending",
+                        )
+                        candidates.remove(item)
+                    else:
+                        self.db.update_status(
+                            item.id,
+                            ImportStatus.PENDING,
+                            error_message=(
+                                "Import PipelineRun/Snapshot lookup unavailable; refusing to trigger an import"
+                            ),
+                        )
+                        candidates.remove(item)
+            # Snapshot reuse is admission, not an import: perform it before capacity
+            # gating so a full import pool cannot cause a duplicate PipelineRun.
+            finder = (
+                None if self.import_snapshot_resolver else getattr(self.kube, "find_snapshot_by_component_digest", None)
+            )
+            for item in candidates[:]:
+                digest = item.ref.rsplit("@", 1)[-1] if "@" in item.ref else ""
+                # Only query reuse for a structurally valid canonical digest. A
+                # malformed ref is not evidence that no matching Snapshot exists.
+                if not callable(finder) or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+                    continue
+                try:
+                    lookup = finder(digest, self.expected_application)
+                except TypeError:
+                    lookup = finder(digest)
+                if isinstance(lookup, str) and lookup:
+                    # Explicit legacy contract: a returned name is FOUND.
+                    lookup = SnapshotLookup(SnapshotLookupState.FOUND, lookup)
+                elif lookup is None or not isinstance(lookup, SnapshotLookup):
+                    # Legacy misses and malformed adapter responses are not proof
+                    # of absence.  Fail closed rather than creating a duplicate.
+                    lookup = SnapshotLookup(SnapshotLookupState.UNKNOWN)
+                elif lookup.state is SnapshotLookupState.FOUND and not lookup.name:
+                    lookup = SnapshotLookup(SnapshotLookupState.UNKNOWN)
+                if item.id is None:
+                    continue
+                if lookup.state is SnapshotLookupState.FOUND and lookup.name:
+                    self.db.update_status(item.id, ImportStatus.AWAITING_RELEASE, snapshot_name=lookup.name)
+                    candidates.remove(item)
+                elif lookup.state in (SnapshotLookupState.AMBIGUOUS, SnapshotLookupState.UNKNOWN):
+                    reason = "ambiguous" if lookup.state is SnapshotLookupState.AMBIGUOUS else "unavailable"
+                    self.db.update_status(
+                        item.id,
+                        ImportStatus.PENDING,
+                        error_message=(
+                            f"Snapshot lookup {reason}; refusing to trigger an import. "
+                            "Retry after verifying the Snapshot API response."
+                        ),
+                    )
+                    candidates.remove(item)
+
+        in_flight = self.db.count_in_flight()
+        available_slots = max(0, self.max_parallel - in_flight)
+        if available_slots == 0:
+            return 0
+        candidates = candidates[:available_slots]
 
         triggered = 0
         for item in candidates:

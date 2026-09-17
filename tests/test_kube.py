@@ -721,3 +721,50 @@ class TestCreateRelease:
 
         api_path = kube._mock_api.create.call_args[0][0]
         assert "/namespaces/test-ns/" in api_path
+
+
+class TestFindSnapshotForImportArchive:
+    def test_archive_list_plr_and_annotated_snapshot_are_resolved(self, kube_with_ka):
+        digest = "sha256:" + "a" * 64
+        source = "quay.io/light-castle/rebuild-pnc@" + digest
+        plr = {
+            "metadata": {
+                "name": "pnc-import-t5dwx",
+                "labels": {
+                    "appstudio.openshift.io/application": "pnc-import",
+                    "pipelines.appstudio.io/type": "build",
+                },
+                "annotations": {"appstudio.openshift.io/snapshot": "pnc-import-snap"},
+            },
+            "spec": {"params": [{"name": "SOURCE_IMAGE", "value": source}]},
+            "status": {"conditions": [{"type": "Succeeded", "status": "True"}]},
+        }
+        snap = {"metadata": {"name": "pnc-import-snap"}, "spec": {"components": [{"containerImage": "img@" + digest}]}}
+        kube_with_ka._mock_api.list.return_value = {"items": []}
+        kube_with_ka._mock_ka_api.list.return_value = {"apiVersion": "v1", "items": [plr]}
+        kube_with_ka._mock_api.get.side_effect = requests.HTTPError("404")
+        kube_with_ka._mock_ka_api.get.return_value = {"apiVersion": "v1", "items": [snap]}
+
+        result = kube_with_ka.find_snapshot_for_import(source, "pnc-import")
+        assert result.state.name == "FOUND"
+        assert result.name == "pnc-import-snap"
+        assert kube_with_ka._mock_ka_api.list.call_args.args[0].endswith("/pipelineruns")
+
+    def test_shared_component_snapshot_is_not_used(self, kube_with_ka):
+        digest = "sha256:" + "b" * 64
+        source = "quay.io/light-castle/rebuild-pnc@" + digest
+        kube_with_ka._mock_api.list.return_value = {"items": []}
+        kube_with_ka._mock_ka_api.list.return_value = {
+            "items": [
+                {
+                    "metadata": {"name": "import-pr", "labels": {"pipelines.appstudio.io/type": "build"}},
+                    "spec": {"params": [{"name": "SOURCE_IMAGE", "value": source}]},
+                    "status": {"conditions": [{"type": "Succeeded", "status": "True"}]},
+                }
+            ]
+        }
+        kube_with_ka._mock_ka_api.list.side_effect = [
+            kube_with_ka._mock_ka_api.list.return_value,
+            {"items": [{"metadata": {"name": "shared"}, "spec": {"components": [{"containerImage": "x@" + digest}]}}]},
+        ]
+        assert kube_with_ka.find_snapshot_for_import(source, "pnc-import").state.name != "FOUND"

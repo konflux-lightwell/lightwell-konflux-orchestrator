@@ -24,6 +24,7 @@ from import_orchestrator.clients import KubeClient
 from import_orchestrator.commands.run import _emit_result
 from import_orchestrator.constants import CLUSTER_API, DEFAULT_POLL_INTERVAL, KUBEARCHIVE_API
 from import_orchestrator.ecosystems.base import Ecosystem
+from import_orchestrator.engine.release import ReleasePrimitive
 
 EXIT_OK = 0
 EXIT_FAILED = 1
@@ -108,9 +109,11 @@ def promote(args: argparse.Namespace) -> int:
 
     # Scoped to the target plan: the snapshot almost certainly has a successful
     # Release against the *stage* plan already, and that must not be mistaken for
-    # this promotion having been done.
-    release_name = kube.find_release_for_snapshot_and_plan(args.snapshot, args.release_plan)
-    adopted = release_name is not None
+    # this promotion having been done. The shared primitive owns lookup/create
+    # safety; promotion remains an explicit Python-only entry point.
+    release_name, adopted = ReleasePrimitive(None, kube, eco.pipelinerun_prefix, 1).promote_snapshot(
+        args.snapshot, args.release_plan
+    )
 
     if adopted:
         print(
@@ -119,7 +122,8 @@ def promote(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
     else:
-        release_name = kube.create_release(args.snapshot, args.release_plan, eco.pipelinerun_prefix)
+        # The primitive already performed the create; this branch only handles
+        # its result and must never issue a second remote create.
         if not release_name:
             print(
                 f"ERROR: failed to create a Release for {args.snapshot} against {args.release_plan}.",
