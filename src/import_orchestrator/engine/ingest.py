@@ -16,11 +16,8 @@ limitations under the License.
 
 from __future__ import annotations
 
-import subprocess
-import sys
 from collections.abc import Iterable
 from dataclasses import dataclass
-from pathlib import Path
 
 from import_orchestrator.database import ImportDatabase
 
@@ -48,41 +45,6 @@ class Ingest:
 
     def __init__(self, db: ImportDatabase):
         self.db = db
-
-    def from_script(self, script_path: Path) -> IngestResult:
-        """Run an external script and ingest its stdout lines as OCI references.
-
-        The script is expected to print one OCI reference per line to stdout.
-        Blank lines are ignored.
-
-        Args:
-            script_path: Path to the executable script.
-
-        Returns:
-            IngestResult with counts of total and newly_added references.
-
-        Raises:
-            subprocess.CalledProcessError: If the script exits non-zero.
-        """
-        try:
-            result = subprocess.run(
-                [str(script_path)],
-                capture_output=True,
-                check=True,
-                text=True,
-            )
-
-            lines = result.stdout.strip().split("\n")
-
-            if not lines:
-                print("WARNING: No OCI references returned from fetch script", file=sys.stderr)
-                return IngestResult(total=0, newly_added=0)
-
-            return self.from_lines(lines)
-
-        except subprocess.CalledProcessError as e:
-            print(f"ERROR: Fetch script failed: {e.stderr}", file=sys.stderr)
-            raise
 
     def from_lines(self, lines: Iterable[str]) -> IngestResult:
         """Ingest OCI references from an iterable of strings.
