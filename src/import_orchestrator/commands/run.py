@@ -132,6 +132,7 @@ def run_single(args: argparse.Namespace, ref: str) -> int:
                 max_retries=args.max_retries,
                 force_import=getattr(args, "force_import", False),
                 expected_application=getattr(eco, "snapshot_application", lambda a: None)(args),
+                import_snapshot_resolver=getattr(eco, "import_snapshot_resolver", False),
             )
             target = getattr(args, "target", None)
             skip_release = target is not None and getattr(eco, "target_skip_release", lambda t: False)(target)

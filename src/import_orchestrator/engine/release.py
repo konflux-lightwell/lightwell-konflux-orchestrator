@@ -25,7 +25,18 @@ from import_orchestrator.models import ImportItem, ImportStatus, ReleaseLookup, 
 
 
 class ReleasePrimitive:
-    """The single release reconciliation primitive used by every command."""
+    """The single release reconciliation primitive used by every command.
+
+    Core Invariants:
+    1. Fail-closed on ambiguity: UNKNOWN or unconfirmed lookup outcomes never authorize Release creation.
+    2. Dynamic plan discovery: ReleasePlan resolution defaults to dynamic application/snapshot derivation
+       unless explicitly overridden by the operator.
+    3. Retryable releases: A failed Release attempt retires only its pointer (after checking replacement admission
+       capacity); it does not terminally fail the completed Snapshot import.
+    4. Anti-duplication gate: `release_creation_pending` and atomic SQLite slot claims prevent racing workers
+       from creating duplicate Releases after ambiguous remote creations.
+    5. Single shared budget: Global concurrency is shared across active imports and releases without self-deadlock.
+    """
 
     def __init__(self, db: ImportDatabase, kube: KubeClient, prefix: str, max_parallel: int):
         if max_parallel <= 0:
@@ -101,48 +112,39 @@ class ReleasePrimitive:
         # Check the adapter interface itself; never infer behavior from module
         # names or test doubles.  Adapters that genuinely do not expose this
         # method use the conservative name-only compatibility path below.
-        typed_lookup_available = callable(getattr(type(self.kube), "lookup_release_for_snapshot", None))
-        if type(self.kube).__module__ == "unittest.mock":
-            typed_lookup_available = False
+        lookup = None
+        typed_lookup_fn = getattr(self.kube, "lookup_release_for_snapshot", None)
         if item.release_name and not dry_run:
             # A persisted pointer is already plan-scoped from its creation; poll it
             # directly rather than allowing an untyped compatibility adapter to turn
             # a valid pointer into UNKNOWN.
             lookup = ReleaseLookup(ReleaseLookupState.CONFIRMED_EMPTY)
-            typed_lookup_available = True
-        elif typed_lookup_available:
-            # A typed adapter is authoritative. Do not reinterpret an untyped
-            # result through a legacy name-only method.
-            lookup = self.kube.lookup_release_for_snapshot(snapshot, selected_plan)
-            if not isinstance(lookup, ReleaseLookup):
-                # Test doubles/spec adapters may expose the method without a
-                # typed implementation; fall back to the compatibility method.
-                if type(lookup).__module__ == "unittest.mock":
-                    typed_lookup_available = False
-                else:
-                    return False
-        if not typed_lookup_available:
+        elif callable(typed_lookup_fn):
+            result = typed_lookup_fn(snapshot, selected_plan)
+            if isinstance(result, ReleaseLookup):
+                lookup = result
+            elif not callable(getattr(type(self.kube), "lookup_release_for_snapshot", None)):
+                # Dynamic adapter without class-level typed method implementation;
+                # fall back to compatibility lookup.
+                lookup = None
+            else:
+                return False
+
+        if lookup is None:
             # Legacy adapters cannot distinguish an empty result from an API
-            # failure, so a missing name is always UNKNOWN.
+            # failure, so a missing name is always UNKNOWN unless a name is found.
             name = (
                 self.kube.find_release_for_snapshot_and_plan(snapshot, selected_plan)
                 if selected_plan
                 else self.kube.find_release_for_snapshot(snapshot)
             )
-            # unittest mocks generated from KubeClient expose typed methods but do
-            # not implement them. Preserve compatibility with those test doubles;
-            # real legacy adapters remain conservative below.
             if selected_plan and not isinstance(name, (str, type(None))):
                 legacy_name = self.kube.find_release_for_snapshot(snapshot)
                 name = legacy_name if isinstance(legacy_name, str) else None
             lookup = (
                 ReleaseLookup(ReleaseLookupState.FOUND, name)
                 if isinstance(name, str) and name
-                else ReleaseLookup(
-                    ReleaseLookupState.CONFIRMED_EMPTY
-                    if type(name).__module__ == "unittest.mock" or type(self.kube).__module__ == "unittest.mock"
-                    else ReleaseLookupState.UNKNOWN
-                )
+                else ReleaseLookup(ReleaseLookupState.UNKNOWN)
             )
         existing = lookup.name
         if lookup.state is ReleaseLookupState.UNKNOWN:
@@ -278,11 +280,12 @@ class ReleasePrimitive:
             # A lost response must not cause a second Release.  Never retry from an
             # API-unknown lookup; the client returns None for both unknown/not-found,
             # so leave the marker set and recover on the next poll.
-            if typed_lookup_available:
-                recovery = self.kube.lookup_release_for_snapshot(snapshot, selected)
-                if not isinstance(recovery, ReleaseLookup):
-                    recovery = ReleaseLookup(ReleaseLookupState.UNKNOWN)
-            else:
+            recovery = None
+            if callable(typed_lookup_fn):
+                result = typed_lookup_fn(snapshot, selected)
+                if isinstance(result, ReleaseLookup):
+                    recovery = result
+            if recovery is None:
                 recovered_name = self.kube.find_release_for_snapshot_and_plan(snapshot, selected)
                 # A legacy name-only lookup cannot prove the collection is
                 # empty: None may represent an API failure. Preserve ambiguity.
@@ -347,16 +350,19 @@ class ReleasePrimitive:
 
     def promote_snapshot(self, snapshot: str, plan: str) -> tuple[str | None, bool]:
         """Adopt or create one explicitly planned Release (Python promotion path)."""
+        if not snapshot or not plan:
+            return None, False
         lookup_fn = getattr(self.kube, "lookup_release_for_snapshot", None)
         if callable(lookup_fn) and callable(getattr(type(self.kube), "lookup_release_for_snapshot", None)):
             lookup = lookup_fn(snapshot, plan)
-            if isinstance(lookup, ReleaseLookup) and lookup.state is ReleaseLookupState.FOUND:
-                return lookup.name, True
-            if isinstance(lookup, ReleaseLookup) and lookup.state is ReleaseLookupState.UNKNOWN:
-                return None, False
+            if isinstance(lookup, ReleaseLookup):
+                if lookup.state is ReleaseLookupState.FOUND and lookup.name:
+                    return lookup.name, True
+                if lookup.state is ReleaseLookupState.UNKNOWN:
+                    return None, False
         else:
             existing = self.kube.find_release_for_snapshot_and_plan(snapshot, plan)
-            if existing:
+            if isinstance(existing, str) and existing:
                 return existing, True
         created = self.kube.create_release(snapshot, plan, self.prefix)
         return created, False

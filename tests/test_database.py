@@ -188,17 +188,19 @@ class TestImportDatabase:
     def test_claim_release_slot_success_and_awaiting_release(self, db: ImportDatabase):
         ref, _ = db.add_item("quay.io/repo:tag@sha256:abc")
         assert ref.id is not None
-        # From PENDING to AWAITING_RELEASE
+        # From PENDING to AWAITING_RELEASE (claiming the slot and setting release_creation_pending=1)
         assert db.claim_release_slot(ref.id, 2) is True
         item = db.get_by_ref("quay.io/repo:tag@sha256:abc")
         assert item is not None
         assert item.status == ImportStatus.AWAITING_RELEASE
+        assert item.release_creation_pending is True
 
-        # Already AWAITING_RELEASE: should mark release_creation_pending=1
+        # Calling again while release_creation_pending=1 is rejected to prevent duplicate creations
+        assert db.claim_release_slot(ref.id, 2) is False
+
+        # If release_creation_pending is cleared (e.g. after release creation completes or resets)
+        db.update_status(ref.id, ImportStatus.AWAITING_RELEASE, release_creation_pending=False)
         assert db.claim_release_slot(ref.id, 2) is True
-        item2 = db.get_by_ref("quay.io/repo:tag@sha256:abc")
-        assert item2 is not None
-        assert item2.release_creation_pending is True
 
     def test_claim_release_slot_capacity_full(self, db: ImportDatabase):
         ref1, _ = db.add_item("quay.io/repo:tag1@sha256:abc1")
