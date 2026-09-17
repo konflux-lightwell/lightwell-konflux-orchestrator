@@ -16,6 +16,5 @@ limitations under the License.
 
 from import_orchestrator.clients.git import GitClient, GitError
 from import_orchestrator.clients.kube import KubeClient
-from import_orchestrator.clients.quay import QuayClient
 
-__all__ = ["GitClient", "GitError", "KubeClient", "QuayClient"]
+__all__ = ["GitClient", "GitError", "KubeClient"]
