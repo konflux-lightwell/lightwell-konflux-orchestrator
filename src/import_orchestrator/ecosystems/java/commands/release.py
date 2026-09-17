@@ -29,7 +29,8 @@ def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> No
     parser.add_argument(
         "--release-plan",
         default=os.environ.get("KONFLUX_RELEASE_PLAN"),
-        help="ReleasePlan (defaults to KONFLUX_RELEASE_PLAN or the validated Java plan)",
+        metavar="NAME",
+        help="Target a specific ReleasePlan instead of resolving from the snapshot's application",
     )
     parser.add_argument(
         "--artifact-type",
@@ -55,18 +56,13 @@ def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> No
 def run(args: argparse.Namespace) -> int:
     with ImportDatabase(args.db) as db:
         kube = KubeClient(args.ecosystem.namespace, CLUSTER_API, KUBEARCHIVE_API)
-        from import_orchestrator.ecosystems.java.config import RELEASE_PLAN
-
-        # Keep the validated plan as the creation default, while ReleaseOnly
-        # itself can monitor persisted Releases without a plan.
-        plan = args.release_plan or RELEASE_PLAN
         application = args.ecosystem.snapshot_application(args)
         return ReleaseOnly(
             db,
             kube,
             args.ecosystem.pipelinerun_prefix,
             args.max_parallel,
-            plan,
+            args.release_plan,
             expected_application=application,
             import_snapshot_resolver=getattr(args.ecosystem, "import_snapshot_resolver", False),
         ).run(args.dry_run, poll_interval=args.poll_interval)

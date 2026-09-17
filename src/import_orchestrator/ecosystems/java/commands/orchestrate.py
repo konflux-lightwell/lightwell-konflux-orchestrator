@@ -68,8 +68,9 @@ def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> No
 
     parser.add_argument(
         "--release-plan",
-        default=os.environ.get("KONFLUX_RELEASE_PLAN", config.RELEASE_PLAN),
-        help="ReleasePlan used for Java Releases (default: validated Java plan)",
+        default=os.environ.get("KONFLUX_RELEASE_PLAN"),
+        metavar="NAME",
+        help="Target a specific ReleasePlan instead of resolving from the snapshot's application",
     )
 
     parser.add_argument(

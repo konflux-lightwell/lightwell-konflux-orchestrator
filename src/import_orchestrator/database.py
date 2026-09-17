@@ -293,37 +293,55 @@ class ImportDatabase:
 
         The item is transitioned to ``releasing`` before the remote create call;
         this prevents another process from admitting work at the boundary.
+        Exclusive ownership is enforced: an item already marked as creating a release
+        cannot be claimed a second time.
         """
         if max_parallel <= 0:
             raise ValueError("max_parallel must be positive")
         assert self.conn is not None
         try:
             self.conn.execute("BEGIN IMMEDIATE")
+            current = self.conn.execute(
+                "SELECT status, release_creation_pending FROM import_items WHERE id = ?", (item_id,)
+            ).fetchone()
+            if not current:
+                self.conn.rollback()
+                return False
+
+            status, pending = current[0], current[1]
+            if pending:
+                # Already claimed or mid-creation; reject concurrent claim
+                self.conn.rollback()
+                return False
+
             count = self.conn.execute(
                 "SELECT COUNT(*) FROM import_items WHERE status IN (?, ?, ?)",
                 (ImportStatus.TRIGGERED.value, ImportStatus.RUNNING.value, ImportStatus.AWAITING_RELEASE.value),
             ).fetchone()[0]
-            current = self.conn.execute("SELECT status FROM import_items WHERE id = ?", (item_id,)).fetchone()
-            # ``releasing`` means monitoring an existing/possibly pending Release;
-            # it must never consume a second admission slot or deadlock max_parallel=1.
-            if current and current[0] == ImportStatus.AWAITING_RELEASE.value:
-                self.conn.execute(
-                    "UPDATE import_items SET release_creation_pending=1,last_checked_at=? WHERE id=?",
-                    (datetime.now().isoformat(), item_id),
-                )
-                self.conn.commit()
-                return True
-            if count >= max_parallel:
+
+            # If already AWAITING_RELEASE, it is already occupying an admission slot in the count.
+            # Only if transitioning from another status (e.g. PENDING) does it need to check count >= max_parallel.
+            if status != ImportStatus.AWAITING_RELEASE.value and count >= max_parallel:
                 self.conn.rollback()
                 return False
-            self.conn.execute(
-                "UPDATE import_items SET status=?, last_checked_at=? WHERE id=?",
+
+            cursor = self.conn.execute(
+                "UPDATE import_items "
+                "SET status=?, release_creation_pending=1, last_checked_at=? "
+                "WHERE id=? AND release_creation_pending=0",
                 (ImportStatus.AWAITING_RELEASE.value, datetime.now().isoformat(), item_id),
             )
+            if cursor.rowcount != 1:
+                self.conn.rollback()
+                return False
+
             self.conn.commit()
             return True
         except sqlite3.OperationalError:
-            self.conn.rollback()
+            try:
+                self.conn.rollback()
+            except sqlite3.Error:
+                pass
             return False
 
     def start_release_attempt(self, item_id: int, snapshot: str, pipelinerun: str | None = None) -> int:
