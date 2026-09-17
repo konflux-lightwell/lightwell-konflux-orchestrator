@@ -61,6 +61,18 @@ def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> No
     )
 
     parser.add_argument(
+        "--force-import",
+        action="store_true",
+        help="DANGEROUS: ignore an exact matching Snapshot and rerun the import PipelineRun",
+    )
+
+    parser.add_argument(
+        "--release-plan",
+        default=os.environ.get("KONFLUX_RELEASE_PLAN", config.RELEASE_PLAN),
+        help="ReleasePlan used for Java Releases (default: validated Java plan)",
+    )
+
+    parser.add_argument(
         "--artifact-type",
         choices=list(config.ARTIFACT_CONFIGS),
         default=os.environ.get("LIGHTWELL_ARTIFACT_TYPE", "STAGE"),

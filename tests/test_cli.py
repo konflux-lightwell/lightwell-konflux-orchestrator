@@ -113,6 +113,60 @@ class TestParserOrchestrate:
             parser.parse_args(["java", "orchestrate", "--artifact-type", "INVALID"])
 
 
+class TestParserRelease:
+    def test_help_and_defaults(self):
+        parser = make_parser()
+        args = parser.parse_args(["java", "release"])
+        assert args.command == "release"
+        assert args.max_parallel == DEFAULT_MAX_PARALLEL
+        assert args.release_plan is None
+        assert args.artifact_type == "STAGE"
+        assert args.dry_run is False
+        assert args.poll_interval is None
+
+    def test_artifact_type_flag_and_env(self, monkeypatch):
+        monkeypatch.setenv("LIGHTWELL_ARTIFACT_TYPE", "REBUILD")
+        parser = make_parser()
+        args = parser.parse_args(["java", "release"])
+        assert args.artifact_type == "REBUILD"
+        assert parser.parse_args(["java", "release", "--artifact-type", "STAGE"]).artifact_type == "STAGE"
+
+    def test_explicit_plan_and_runtime_options(self):
+        parser = make_parser()
+        args = parser.parse_args(
+            [
+                "java",
+                "release",
+                "--release-plan",
+                "custom-plan",
+                "--dry-run",
+                "--poll-interval",
+                "12.5",
+                "--max-parallel",
+                "3",
+            ]
+        )
+        assert args.release_plan == "custom-plan"
+        assert args.dry_run is True
+        assert args.poll_interval == 12.5
+        assert args.max_parallel == 3
+
+    def test_result_propagates_to_cli(self, monkeypatch, tmp_path: Path):
+        class FakeDatabase:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return None
+
+        release = __import__("import_orchestrator.ecosystems.java.commands.release", fromlist=["run"])
+        monkeypatch.setattr(release, "ImportDatabase", lambda path: FakeDatabase())
+        monkeypatch.setattr(release, "KubeClient", lambda *args: object())
+        monkeypatch.setattr(release.ReleaseOnly, "run", lambda *args, **kwargs: 1)
+        monkeypatch.setattr("sys.argv", ["prog", "--db", str(tmp_path / "state.db"), "java", "release"])
+        assert main() == 1
+
+
 class TestParserImportFile:
     def test_parses_file_argument(self):
         parser = make_parser()

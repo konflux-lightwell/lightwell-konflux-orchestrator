@@ -22,7 +22,23 @@ import pytest
 from import_orchestrator.clients import KubeClient
 from import_orchestrator.database import ImportDatabase
 from import_orchestrator.engine import ReleaseMonitor
-from import_orchestrator.models import ImportStatus
+from import_orchestrator.models import ImportStatus, ReleaseLookup, ReleaseLookupState
+
+
+class LegacyKubeAdapter:
+    """Pre-typed adapter shape used to verify compatibility dispatch."""
+
+    def find_snapshot_by_pipelinerun(self, pipelinerun_name): ...
+
+    def find_release_for_snapshot(self, snapshot_name): ...
+
+    def find_release_for_snapshot_and_plan(self, snapshot_name, release_plan=None): ...
+
+    def find_release_plan_for_snapshot(self, snapshot_name): ...
+
+    def create_release(self, snapshot_name, release_plan, prefix): ...
+
+    def get_release_status(self, release_name): ...
 
 
 @pytest.fixture
@@ -35,8 +51,20 @@ def db(tmp_path: Path):
 
 @pytest.fixture
 def mock_kube():
-    """Create a mock KubeClient."""
-    return MagicMock(spec=KubeClient)
+    """Create a legacy-shaped mock adapter."""
+    kube = MagicMock(spec=KubeClient)
+
+    def typed_lookup(snapshot, plan=None):
+        finder = kube.find_release_for_snapshot_and_plan if plan else kube.find_release_for_snapshot
+        name = finder.return_value
+        return (
+            ReleaseLookup(ReleaseLookupState.FOUND, name)
+            if isinstance(name, str) and name
+            else ReleaseLookup(ReleaseLookupState.CONFIRMED_EMPTY)
+        )
+
+    kube.lookup_release_for_snapshot.side_effect = typed_lookup
+    return kube
 
 
 @pytest.fixture
@@ -248,11 +276,12 @@ class TestCheckReleaseCompletion:
 
         monitor.update_statuses()
 
-        # Should be marked as FAILED
-        failed = monitor.db.get_by_status(ImportStatus.FAILED)
-        assert len(failed) == 1
-        assert failed[0].error_message == "Release release-456 failed"
-        assert failed[0].completed_at is not None
+        # A failed Release is a failed attempt, not a terminal import failure.
+        # Retire only the active pointer so the completed Snapshot is retryable.
+        releasing = monitor.db.get_by_status(ImportStatus.AWAITING_RELEASE)
+        assert len(releasing) == 1
+        assert releasing[0].release_name is None
+        assert "retrying with a new Release" in (releasing[0].error_message or "")
 
     def test_waits_when_release_still_running(self, monitor: ReleaseMonitor, mock_kube: MagicMock):
         """Verify that monitor waits when release is still running."""

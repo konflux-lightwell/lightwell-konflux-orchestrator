@@ -22,6 +22,35 @@ from enum import Enum
 from typing import Literal
 
 
+class ReleaseLookupState(str, Enum):
+    """Confidence of a Release collection lookup."""
+
+    FOUND = "found"
+    CONFIRMED_EMPTY = "confirmed_empty"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class ReleaseLookup:
+    state: ReleaseLookupState
+    name: str | None = None
+
+
+class SnapshotLookupState(str, Enum):
+    """Confidence of a Snapshot collection lookup."""
+
+    FOUND = "found"
+    CONFIRMED_EMPTY = "confirmed_empty"
+    AMBIGUOUS = "ambiguous"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class SnapshotLookup:
+    state: SnapshotLookupState
+    name: str | None = None
+
+
 class ImportStatus(str, Enum):
     """Status of an import item."""
 
@@ -48,6 +77,9 @@ class ImportItem:
     last_checked_at: datetime | None = None
     error_message: str | None = None
     retry_count: int = 0
+    # Set while the single orchestrator is between local admission and remote Release creation.
+    release_creation_pending: bool = False
+    release_plan: str | None = None
 
 
 @dataclass

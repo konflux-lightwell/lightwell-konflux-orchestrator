@@ -89,11 +89,45 @@ import-orchestrator java orchestrate
 
 # Import REMEDIATED builds instead of STAGE (default)
 import-orchestrator java import-file refs.txt --artifact-type REMEDIATED
+
+# Reconcile Releases for already-created Snapshots (never reruns an import)
+import-orchestrator java release --max-parallel 5
+# Validate release/re-release actions without mutating SQLite or the cluster
+import-orchestrator java release --dry-run
+
+The `java release` command validates that a Snapshot exists and contains the
+source digest recorded for the import. It adopts successful or progressing
+Releases, and creates a new Release only after a terminally failed Release.
+Missing/incomplete imports are skipped. `--max-parallel` is one global budget
+shared by import PipelineRuns and Releases; SQLite release attempts are retained
+as append-only audit history. Commands assume a single orchestrator process;
+run-level SQLite locking is still required if multiple schedulers share a DB.
 import-orchestrator java orchestrate --max-parallel 5
 
 # Reset database and start fresh
 import-orchestrator --reset java import-file refs.txt
 import-orchestrator java orchestrate
+```
+
+### Snapshot lookup semantics
+
+Snapshot reuse is fail-closed and uses typed outcomes: `FOUND` identifies one
+exact canonical component digest, `CONFIRMED_EMPTY` is a valid collection
+response with no match, `AMBIGUOUS` identifies multiple matching Snapshot
+names, and `UNKNOWN` means the response was unavailable or malformed. The live
+Snapshot API is authoritative whenever it returns a structurally valid
+collection response; KubeArchive is consulted only when live is unavailable.
+Live and archive results are never merged. `AMBIGUOUS` and `UNKNOWN` leave an
+item pending with an actionable error and never create a PipelineRun. Legacy
+adapters are accepted only for an explicit non-empty Snapshot name; `None` and
+other malformed values are `UNKNOWN`.
+
+### Java release-only reconciliation
+
+Normal Java orchestration first searches live/KubeArchive Snapshots by the exact canonical `sha256:` digest in each OCI ref. A match skips import and enters the shared `engine/release.py` Snapshot→Release primitive; no match runs the normal import PipelineRun and then releases its resulting Snapshot. Use the conspicuous `--force-import` option on `java orchestrate` only to intentionally bypass reuse. Java plan inference is fail-closed when multiple valid plans exist; pass `--release-plan` where supported (the validated configured default is used only as the established Java safe default). Java release reconciliation uses the shared `engine/release.py` primitive and never creates or reruns an import PipelineRun. It requires the configured/explicit ReleasePlan, scopes Snapshot and Release lookups/creation to the ecosystem namespace, and relies on Conforma for application policy. A progressing or successful Release is adopted; a new Release is created only after the prior Release for the same Snapshot+plan is terminally failed. The orchestrator is intentionally a single process: SQLite transitions prevent duplicate local selection, but cannot make a remote API call transactional. Ambiguous create failures are re-queried before any retry, and pending creation markers are cleared/reconciled on a later poll.
+
+```bash
+import-orchestrator java release --release-plan <plan>
 ```
 
 ### Python Ecosystem
@@ -533,12 +567,26 @@ import-orchestrator/
 └── tests/                 # Pytest test suite
 ```
 
+## Release reconciliation recovery
+
+Release creation uses a database-first `release_creation_pending` marker. An
+ambiguous or unavailable Kubernetes lookup is treated as UNKNOWN: the marker
+is retained and no replacement Release is created. After an ambiguous create,
+even a typed `CONFIRMED_EMPTY` lookup remains ambiguous because Kubernetes
+visibility may lag; only observing and adopting a Release, or explicit operator
+recovery, clears the marker. This conservative policy avoids duplicates during
+Kubernetes eventual consistency; an externally created Release may therefore be
+observed one poll later. The orchestrator assumes a single process (no
+distributed lock).
+
 ## Development
 
 ### Running Tests
 
 ```bash
-pytest
+.venv/bin/pytest
+# or, after activating the project environment:
+# source .venv/bin/activate && pytest
 ```
 
 Or via tox:
