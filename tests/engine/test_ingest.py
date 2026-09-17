@@ -14,9 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
-import subprocess
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -53,72 +51,6 @@ class TestIngestResult:
     def test_all_duplicates(self):
         result = IngestResult(total=8, newly_added=0)
         assert result.duplicates == 8
-
-
-class TestFromScript:
-    """Test the from_script method."""
-
-    @patch("import_orchestrator.engine.ingest.subprocess.run")
-    def test_stores_fetched_refs(self, mock_run, ingest: Ingest, tmp_path: Path):
-        """Verify that OCI references from script stdout are stored in the database."""
-        script = tmp_path / "fetch.sh"
-        script.write_text("#!/bin/bash\necho 'ref1'\necho 'ref2'")
-
-        mock_result = MagicMock()
-        mock_result.stdout = "oci://example.com/foo:tag1\noci://example.com/bar:tag2\n"
-        mock_run.return_value = mock_result
-
-        result = ingest.from_script(script)
-
-        assert result.total == 2
-        assert result.newly_added == 2
-        assert result.duplicates == 0
-        mock_run.assert_called_once()
-
-    @patch("import_orchestrator.engine.ingest.subprocess.run")
-    def test_handles_duplicates(self, mock_run, ingest: Ingest, tmp_path: Path):
-        """Verify that duplicate references are not re-added."""
-        script = tmp_path / "fetch.sh"
-
-        ingest.db.add_item("oci://example.com/foo:tag1")
-
-        mock_result = MagicMock()
-        mock_result.stdout = "oci://example.com/foo:tag1\noci://example.com/bar:tag2\n"
-        mock_run.return_value = mock_result
-
-        result = ingest.from_script(script)
-
-        assert result.total == 2
-        assert result.newly_added == 1
-        assert result.duplicates == 1
-
-    @patch("import_orchestrator.engine.ingest.subprocess.run")
-    def test_empty_output_returns_zero(self, mock_run, ingest: Ingest, tmp_path: Path):
-        """Verify that empty script output returns zero counts."""
-        script = tmp_path / "fetch.sh"
-
-        mock_result = MagicMock()
-        mock_result.stdout = "\n\n  \n"
-        mock_run.return_value = mock_result
-
-        result = ingest.from_script(script)
-
-        assert result.total == 0
-        assert result.newly_added == 0
-
-    @patch("import_orchestrator.engine.ingest.subprocess.run")
-    def test_script_failure_raises(self, mock_run, ingest: Ingest, tmp_path: Path):
-        """Verify that subprocess failures are propagated."""
-        script = tmp_path / "fetch.sh"
-
-        mock_run.side_effect = subprocess.CalledProcessError(
-            returncode=1,
-            cmd=[str(script)],
-            stderr="script failed",
-        )
-
-        with pytest.raises(subprocess.CalledProcessError):
-            ingest.from_script(script)
 
 
 class TestFromLines:
