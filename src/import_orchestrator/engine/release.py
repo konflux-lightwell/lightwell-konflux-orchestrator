@@ -308,6 +308,7 @@ class ReleasePrimitive:
         self.db.update_status(
             item.id, ImportStatus.AWAITING_RELEASE, release_name=release, release_creation_pending=False
         )
+        item.release_name = release
         return True
 
     def _record(self, item: ImportItem, release: str, dry_run: bool, *, adopted: bool = False) -> bool:
