@@ -189,3 +189,23 @@ def test_tracked_failure_respects_capacity_before_retry(db: ImportDatabase):
     kube.get_release_status.return_value = "False"
     assert ReleaseOnly(db, kube, "import-", 1, "plan-1").run() == 1
     assert db.get_by_status(ImportStatus.FAILED)[0].release_name == "release-1"
+
+
+def test_release_only_defer_branches(db: ImportDatabase):
+    digest = "sha256:" + "a" * 64
+    ref, _ = db.add_item("quay.io/repo:tag@" + digest)
+    db.update_status(ref.id, ImportStatus.AWAITING_RELEASE, pipelinerun_name="pr-1")
+
+    kube = MagicMock(spec=KubeClient)
+    # snapshot not found
+    kube.find_snapshot_by_pipelinerun.return_value = None
+    assert ReleaseOnly(db, kube, "pfx", 1, "plan-1").run() == 1
+
+    # snapshot found but digest mismatch
+    kube.find_snapshot_by_pipelinerun.return_value = "snap-1"
+    kube.get_snapshot_component_digests.return_value = {"other-digest"}
+    assert ReleaseOnly(db, kube, "pfx", 1, "plan-1").run() == 1
+
+    # snapshot found but no plan and no release_name
+    kube.get_snapshot_component_digests.return_value = {digest}
+    assert ReleaseOnly(db, kube, "pfx", 1, release_plan=None).run() == 1
