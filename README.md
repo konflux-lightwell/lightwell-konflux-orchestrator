@@ -14,10 +14,10 @@ Two ecosystems are available today. Each uses its own default database (`--db` o
 
 | Ecosystem | Default database | Description | Commands |
 |-----------|------------------|-------------|----------|
-| `java` | `./java_import_state.db` | PNC OCI image imports | `fetch`, `import-file`, `import-manifest`, `orchestrate`, `run`, `trigger` |
+| `java` | `./java_import_state.db` | PNC OCI image imports | `import-file`, `import-manifest`, `orchestrate`, `run`, `trigger` |
 | `python` | `./python_import_state.db` | CVE-remediated Python wheel builds | `import-file`, `orchestrate`, `promote`, `run`, `trigger` |
 
-The `python` ecosystem identifies each build by a `package==version` reference (e.g. `ntplib==0.4.0`) instead of an OCI image, and runs the `python-remediated-build` pipeline. It has no `fetch` or `import-manifest` commands; populate its database with `import-file` (one `package==version` per line).
+The `python` ecosystem identifies each build by a `package==version` reference (e.g. `ntplib==0.4.0`) instead of an OCI image, and runs the `python-remediated-build` pipeline. It has no `import-manifest` command; populate its database with `import-file` (one `package==version` per line).
 
 **Key Features:**
 - **State persistence**: SQLite database tracks each OCI reference status (pending, triggered, running, success, failed)
@@ -55,18 +55,13 @@ pip install -e ".[dev]"
 # Show help
 import-orchestrator --help
 import-orchestrator java --help
-import-orchestrator java fetch --help
 import-orchestrator java import-file --help
 import-orchestrator java orchestrate --help
 import-orchestrator java import-manifest --help
 import-orchestrator java trigger --help
 import-orchestrator java run --help
 
-# Typical workflow: fetch then orchestrate
-QUAY_TOKEN=<token> import-orchestrator java fetch
-import-orchestrator java orchestrate --max-parallel 10
-
-# Alternative: import from file then orchestrate
+# Typical workflow: import from file then orchestrate
 import-orchestrator java import-file refs.txt
 import-orchestrator java orchestrate --max-parallel 10
 
@@ -86,18 +81,18 @@ import-orchestrator --db ./one-off.db java run \
   'quay.io/light-castle/rebuild-pnc:tag@sha256:abc123...' \
   --artifact-type REBUILD --output-json ./result.json
 
-# Fetch only (populate database for inspection)
-QUAY_TOKEN=<token> import-orchestrator java fetch
+# Import only (populate database for inspection)
+import-orchestrator import-file refs.txt
 
 # Resume interrupted orchestration from existing database
 import-orchestrator java orchestrate
 
-# Fetch REMEDIATED builds instead of STAGE (default)
-QUAY_TOKEN=<token> import-orchestrator java fetch --artifact-type REMEDIATED
+# Import REMEDIATED builds instead of STAGE (default)
+import-orchestrator java import-file refs.txt --artifact-type REMEDIATED
 import-orchestrator java orchestrate --max-parallel 5
 
 # Reset database and start fresh
-QUAY_TOKEN=<token> import-orchestrator --reset java fetch
+import-orchestrator --reset java import-file refs.txt
 import-orchestrator java orchestrate
 ```
 
@@ -153,23 +148,6 @@ Global options are placed before the ecosystem: `import-orchestrator [--db PATH]
 |--------|---------|-------------|
 | `--db` | per-ecosystem (e.g. `./java_import_state.db`) | SQLite database path |
 | `--reset` | `false` | Reset database (delete existing data before running) |
-
-#### `fetch` Subcommand
-
-Fetches OCI references from Quay and stores them in the database.
-
-```bash
-import-orchestrator java fetch [--artifact-type {STAGE,REBUILD,REMEDIATED,NOVEL}]
-```
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `--artifact-type` | `STAGE` (or `LIGHTWELL_ARTIFACT_TYPE` env var) | Artifact type: STAGE, REBUILD, REMEDIATED, or NOVEL |
-
-> **NOVEL fetch (LWLP-1435):** Novel builds are moving from `secure-pnc` to
-> `novel-pnc`. Fetch tries `novel-pnc` first and falls back to `secure-pnc` only
-> if `novel-pnc` is empty. Remove this fallback once novel builds ship exclusively
-> to `novel-pnc`.
 
 #### `import-file` Subcommand
 
@@ -289,7 +267,7 @@ import-orchestrator python run <ref> [OPTIONS]
 `--db`, it creates a throwaway SQLite database in a temporary directory and deletes it when the
 command exits. That isolation is what keeps the run single-ref: the monitoring loop only ever sees
 the one reference you passed, rather than picking up pending rows left behind by an earlier
-`import-file` or `fetch`. Pass the global `--db` (before the ecosystem name) to persist state
+`import-file` or `import-manifest`. Pass the global `--db` (before the ecosystem name) to persist state
 instead — useful for resuming or for inspecting the row afterwards:
 
 ```bash
@@ -303,7 +281,7 @@ import-orchestrator --db ./one-off.db java run 'quay.io/light-castle/rebuild-pnc
 > **Point `--db` at a fresh or single-purpose database.** `run` seeds your reference into the
 > database and then runs the standard orchestration loop, which picks up **every** pending row it
 > finds — it is not filtered to your reference. If you point `--db` at a shared database that
-> already has pending work (from `fetch`, `import-file`, or an interrupted `orchestrate`), `run`
+> already has pending work (from `import-file`, `import-manifest` or an interrupted `orchestrate`), `run`
 > will work through all of it, one at a time, and won't return until the whole database reaches a
 > terminal state. The result JSON still describes only your reference, but the exit code reflects
 > the database as a whole (see Exit codes below). The default ephemeral database avoids this
@@ -403,7 +381,6 @@ retry. A terminally failed Release is *not* adopted, so a retry after `1` genuin
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `QUAY_TOKEN` | Yes (for `fetch`) | Authentication token for Quay.io API |
 | `KONFLUX_TOKEN` or `KUBECONFIG` | Yes (for `orchestrate`, `trigger`, and `run`) | Cluster authentication |
 | `LIGHTWELL_ARTIFACT_TYPE` | No | `STAGE` (default), `REBUILD`, `REMEDIATED`, or `NOVEL` |
 | `LIGHTWELL_PYTHON_TARGET` | No | Build target for the `python` ecosystem: `REMEDIATED` (default) |
@@ -411,17 +388,6 @@ retry. A terminally failed Release is *not* adopted, so a retry after `1` genuin
 
 
 ### Operation Flow
-
-#### `fetch` subcommand
-
-1. Uses the integrated `QuayClient` to query OCI references from Quay.io based on the selected artifact type
-2. Stores references in SQLite with `status='pending'`
-3. Reports newly added vs. already tracked references
-4. Prints database statistics
-
-**Exit codes:**
-- `0` — Fetch successful (even if no new references found)
-- `1` — API errors or authentication failures
 
 #### `import-file` subcommand
 

@@ -20,7 +20,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from import_orchestrator.clients import QuayClient
 from import_orchestrator.database import ImportDatabase
 from import_orchestrator.ecosystems.java.parser import parse_manifest
 from import_orchestrator.engine import Ingest, IngestResult
@@ -351,47 +350,3 @@ class TestFromManifest:
 
         with pytest.raises(ValueError, match="Malformed digest reference"):
             parse_manifest(manifest)
-
-
-class TestFromQuay:
-    """Test the from_quay method."""
-
-    def test_ingests_refs_from_quay(self, ingest: Ingest):
-        """Verify that OCI references from QuayClient are stored in the database."""
-        mock_client = MagicMock(spec=QuayClient)
-        mock_client.fetch_oci_references.return_value = [
-            "quay.io/ns/repo:lw-build-1@sha256:aaa",
-            "quay.io/ns/repo:lw-build-2@sha256:bbb",
-        ]
-
-        result = ingest.from_quay(mock_client)
-
-        assert result.total == 2
-        assert result.newly_added == 2
-        mock_client.fetch_oci_references.assert_called_once_with()
-
-    def test_handles_empty_response(self, ingest: Ingest):
-        """Verify that an empty Quay response returns zero counts."""
-        mock_client = MagicMock(spec=QuayClient)
-        mock_client.fetch_oci_references.return_value = []
-
-        result = ingest.from_quay(mock_client)
-
-        assert result.total == 0
-        assert result.newly_added == 0
-
-    def test_handles_duplicates(self, ingest: Ingest):
-        """Verify that refs already in the database are counted as duplicates."""
-        ingest.db.add_item("quay.io/ns/repo:lw-build-1@sha256:aaa")
-
-        mock_client = MagicMock(spec=QuayClient)
-        mock_client.fetch_oci_references.return_value = [
-            "quay.io/ns/repo:lw-build-1@sha256:aaa",
-            "quay.io/ns/repo:lw-build-2@sha256:bbb",
-        ]
-
-        result = ingest.from_quay(mock_client)
-
-        assert result.total == 2
-        assert result.newly_added == 1
-        assert result.duplicates == 1

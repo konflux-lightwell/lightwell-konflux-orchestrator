@@ -33,15 +33,11 @@ def make_parser() -> argparse.ArgumentParser:
         epilog=textwrap.dedent(
             """
         Environment Variables:
-          QUAY_TOKEN                Required for fetch
           KONFLUX_TOKEN or KUBECONFIG  Required for cluster auth
           LIGHTWELL_ARTIFACT_TYPE   STAGE, REBUILD, REMEDIATED or NOVEL (default: STAGE)
           TEKTON_PIPELINE_DIR   Path to the pipeline definitions (defaults to {repo_root}/tekton)
 
         Examples:
-          # Fetch OCI references into the database
-          import-orchestrator java fetch
-
           # Import OCI references from a text file
           import-orchestrator java import-file refs.txt
 
@@ -55,7 +51,7 @@ def make_parser() -> argparse.ArgumentParser:
           import-orchestrator java trigger 'quay.io/example/image:tag@sha256:abc123...'
 
           # Full workflow
-          import-orchestrator java fetch && import-orchestrator java orchestrate
+          import-orchestrator java import-file refs.txt && import-orchestrator java orchestrate
         """
         ),
     )
