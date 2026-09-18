@@ -64,5 +64,7 @@ def run(args: argparse.Namespace) -> int:
             args.max_parallel,
             args.release_plan,
             expected_application=application,
-            import_snapshot_resolver=getattr(args.ecosystem, "import_snapshot_resolver", False),
+            # Release-only must resolve Java Snapshots through the exact source
+            # image/import PipelineRun, never the shared component digest.
+            import_snapshot_resolver=True,
         ).run(args.dry_run, poll_interval=args.poll_interval)

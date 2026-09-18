@@ -35,10 +35,6 @@ class JavaEcosystem:
     default_db_path = config.JAVA_DEFAULT_DB_PATH
     pipelinerun_prefix = config.PIPELINERUN_PREFIX
     namespace = NAMESPACE
-    # Java's shared component means reuse must be resolved through source-matching
-    # import PipelineRuns, not the generic component-digest Snapshot search.
-    import_snapshot_resolver = True
-
     def snapshot_application(self, args: argparse.Namespace) -> str:
         return config.ARTIFACT_CONFIGS[getattr(args, "artifact_type", "STAGE")]["app"]
 
