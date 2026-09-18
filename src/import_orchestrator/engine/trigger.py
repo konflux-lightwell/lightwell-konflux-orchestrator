@@ -104,15 +104,11 @@ class ImportTrigger:
                         self.db.update_status(item.id, ImportStatus.AWAITING_RELEASE, snapshot_name=lookup.name)
                         candidates.remove(item)
                     elif isinstance(lookup, SnapshotLookup) and lookup.state is SnapshotLookupState.CONFIRMED_EMPTY:
-                        # A Java pending row is only safe to release after its
-                        # source-matching import PLR is found.  No match remains
-                        # pending; callers may explicitly use --force-import.
-                        self.db.update_status(
-                            item.id,
-                            ImportStatus.PENDING,
-                            error_message="No completed matching import PipelineRun; remaining pending",
-                        )
-                        candidates.remove(item)
+                        # Java components are shared, so a component-digest miss
+                        # cannot be used here. A confirmed *source* miss means
+                        # this exact source has not been imported and must enter
+                        # the normal fresh PipelineRun path below.
+                        pass
                     else:
                         self.db.update_status(
                             item.id,
@@ -195,6 +191,7 @@ class ImportTrigger:
                 release_name="",
                 triggered_at=datetime.now(),
                 retry_count=new_retry_count,
+                clear_error_message=True,
             )
 
             retry_indicator = f" (retry {new_retry_count})" if new_retry_count > 0 else ""

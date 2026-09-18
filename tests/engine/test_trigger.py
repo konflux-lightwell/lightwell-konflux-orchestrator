@@ -177,7 +177,7 @@ class TestTriggerNextBatch:
             SnapshotLookup(SnapshotLookupState.UNKNOWN),
         ],
     )
-    def test_java_source_lookup_defers_without_component_fallback(
+    def test_java_source_lookup_uses_fresh_import_only_for_confirmed_source_miss(
         self, db: ImportDatabase, mock_kube: MagicMock, lookup: SnapshotLookup
     ):
         db.add_item("quay.io/repo:tag@sha256:" + "a" * 64)
@@ -195,10 +195,15 @@ class TestTriggerNextBatch:
             import_snapshot_resolver=True,
         )
 
-        assert trigger.trigger_next_batch() == 0
-        assert len(db.get_by_status(ImportStatus.PENDING)) == 1
+        mock_kube.create_pipelinerun.return_value = "fresh-pr"
+        expected = 1 if lookup.state is SnapshotLookupState.CONFIRMED_EMPTY else 0
+        assert trigger.trigger_next_batch() == expected
+        assert len(db.get_by_status(ImportStatus.TRIGGERED if expected else ImportStatus.PENDING)) == 1
         mock_kube.find_snapshot_by_component_digest.assert_not_called()
-        mock_kube.create_pipelinerun.assert_not_called()
+        if expected:
+            mock_kube.create_pipelinerun.assert_called_once()
+        else:
+            mock_kube.create_pipelinerun.assert_not_called()
 
     def test_java_source_match_reuses_snapshot_without_import(self, db: ImportDatabase, mock_kube: MagicMock):
         item, _ = db.add_item("quay.io/repo:tag@sha256:" + "a" * 64)

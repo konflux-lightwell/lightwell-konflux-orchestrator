@@ -170,7 +170,9 @@ def test_release_primitive_validation_and_tracked():
     # status == "True" -> success
     mock_kube.get_release_status.return_value = "True"
     assert prim.reconcile_tracked(item_tracked) is True
-    mock_db.update_status.assert_called_with(1, ImportStatus.SUCCESS, release_name="rel-1", completed_at=ANY)
+    mock_db.update_status.assert_called_with(
+        1, ImportStatus.SUCCESS, release_name="rel-1", completed_at=ANY, clear_error_message=True
+    )
 
     # status not in ("False", "True") (e.g. "Unknown" or None) -> returns False
     mock_kube.get_release_status.return_value = "Unknown"
@@ -335,7 +337,7 @@ def test_release_primitive_record_branches(tmp_path):
     # status False
     with patch.object(kube, "get_release_status", return_value="False"):
         assert prim._record(item, "rel-1", dry_run=False, adopted=True) is True
-        assert db.get_by_status(ImportStatus.FAILED)[0].release_name == "rel-1"
+        assert db.get_by_status(ImportStatus.AWAITING_RELEASE)[0].release_name is None
 
     # status None
     with patch.object(kube, "get_release_status", return_value=None):
@@ -384,10 +386,11 @@ def test_legacy_kube_adapter_compatibility(tmp_path):
     rel, adopted = prim.promote_snapshot("snap-leg", "plan-leg")
     assert rel == "existing-leg" and adopted is True
 
-    # Legacy promote_snapshot when not existing
+    # Durable promotion state keeps the prior pointer even if a later lookup
+    # is empty, avoiding a duplicate Release after an ambiguous restart.
     kube.find_release_for_snapshot_and_plan = lambda snap, plan: None
     rel, adopted = prim.promote_snapshot("snap-leg", "plan-leg")
-    assert rel == "rel-leg" and adopted is False
+    assert rel == "existing-leg" and adopted is True
 
 
 def test_discovered_failed_release_retirement(tmp_path):
@@ -429,3 +432,33 @@ def test_stale_cached_release_handling(tmp_path):
     ):
         assert prim.reconcile(item, plan="plan-1") is True
         assert item.release_name == "rel-new"
+
+
+def test_discovered_terminal_failure_retries_same_completed_import(tmp_path):
+    """The newest failed attempt is retired, not converted into a retryable import failure."""
+    db, _ = make_db(tmp_path / "newest-failed.db")
+    kube = ProductionShapedKube(
+        [ReleaseLookup(ReleaseLookupState.FOUND, "new-failed")], created="replacement", status="False"
+    )
+    try:
+        ReleaseMonitor(db, kube, max_parallel=1, prefix="import-").update_statuses()
+        item = db.get_by_status(ImportStatus.AWAITING_RELEASE)[0]
+        assert item.release_name == "replacement"
+        assert db.get_by_status(ImportStatus.FAILED) == []
+        assert kube.pipeline_calls == 0
+    finally:
+        db.__exit__(None, None, None)
+
+
+def test_promotion_ambiguous_create_survives_restart_without_duplicate(tmp_path):
+    from import_orchestrator.engine.release import ReleasePrimitive
+
+    path = tmp_path / "promotion.db"
+    with ImportDatabase(path) as db:
+        kube = ProductionShapedKube([ReleaseLookup(ReleaseLookupState.CONFIRMED_EMPTY)], created=None)
+        assert ReleasePrimitive(db, kube, "pfx", 1).promote_snapshot("snap", "plan") == (None, False)
+        assert len(kube.create_calls) == 1
+    with ImportDatabase(path) as db:
+        kube = ProductionShapedKube([ReleaseLookup(ReleaseLookupState.CONFIRMED_EMPTY)], created="must-not-create")
+        assert ReleasePrimitive(db, kube, "pfx", 1).promote_snapshot("snap", "plan") == (None, False)
+        assert kube.create_calls == []

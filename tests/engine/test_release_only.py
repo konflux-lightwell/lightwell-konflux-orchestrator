@@ -209,3 +209,19 @@ def test_release_only_defer_branches(db: ImportDatabase):
     # snapshot found but no plan and no release_name
     kube.get_snapshot_component_digests.return_value = {digest}
     assert ReleaseOnly(db, kube, "pfx", 1, release_plan=None).run() == 1
+
+
+def test_release_only_dynamically_resolves_unique_plan_without_import(db: ImportDatabase):
+    item, _ = db.add_item("quay.io/repo:tag@sha256:" + "a" * 64)
+    kube = MagicMock(spec=KubeClient)
+    kube.find_snapshot_for_import.return_value = SnapshotLookup(SnapshotLookupState.FOUND, "snapshot-1")
+    kube.get_snapshot_component_digests.return_value = {"sha256:" + "a" * 64}
+    kube.find_release_plan_for_snapshot.return_value = "unique-plan"
+    kube.lookup_release_for_snapshot.return_value = ReleaseLookup(ReleaseLookupState.CONFIRMED_EMPTY)
+    kube.create_release.return_value = "release-1"
+    kube.get_release_status.return_value = "Unknown"
+
+    assert ReleaseOnly(db, kube, "import-", 1, None, "app", import_snapshot_resolver=True).run() == 1
+    assert db.get_by_status(ImportStatus.AWAITING_RELEASE)[0].release_plan == "unique-plan"
+    kube.create_release.assert_called_once_with("snapshot-1", "unique-plan", "import-")
+    kube.create_pipelinerun.assert_not_called()

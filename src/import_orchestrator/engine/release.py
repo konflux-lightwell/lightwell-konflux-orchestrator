@@ -68,7 +68,13 @@ class ReleasePrimitive:
         release = item.release_name
         status = self.kube.get_release_status(release)
         if status == "True":
-            self.db.update_status(item.id, ImportStatus.SUCCESS, release_name=release, completed_at=datetime.now())
+            self.db.update_status(
+                item.id,
+                ImportStatus.SUCCESS,
+                release_name=release,
+                completed_at=datetime.now(),
+                clear_error_message=True,
+            )
             return True
         if status not in ("False",):
             return False
@@ -327,17 +333,26 @@ class ReleasePrimitive:
         if status == "True":
             if attempt is not None:
                 self.db.finish_release_attempt(attempt, "success", release=release)
-            self.db.update_status(item.id, ImportStatus.SUCCESS, release_name=release, completed_at=datetime.now())
+            self.db.update_status(
+                item.id,
+                ImportStatus.SUCCESS,
+                release_name=release,
+                completed_at=datetime.now(),
+                clear_error_message=True,
+            )
         elif status == "False":
             if attempt is not None:
                 self.db.finish_release_attempt(attempt, "failed", release=release, error=f"Release {release} failed")
+            # A Release is a retryable attempt for an already completed import.
+            # Retire its pointer; the next reconciliation creates/adopts a new
+            # Release for this same Snapshot rather than retriggering an import.
             self.db.update_status(
                 item.id,
-                ImportStatus.FAILED,
-                release_name=release,
-                completed_at=datetime.now(),
-                error_message=f"Release {release} failed",
+                ImportStatus.AWAITING_RELEASE,
+                release_name="",
+                error_message=f"Release {release} failed; retrying with a new Release",
             )
+            item.release_name = None
         elif status is None:
             if attempt is not None:
                 self.db.finish_release_attempt(attempt, "unknown", release=release, error="Release lookup failed")
@@ -349,23 +364,65 @@ class ReleasePrimitive:
         return True
 
     def promote_snapshot(self, snapshot: str, plan: str) -> tuple[str | None, bool]:
-        """Adopt or create one explicitly planned Release (Python promotion path)."""
+        """Adopt or create one explicitly planned Release (Python promotion path).
+
+        When backed by an ``ImportDatabase``, persist an ambiguous create before
+        contacting Kubernetes. A restarted command then recovers by scoped
+        lookup and cannot issue a duplicate create when the original response
+        was lost.
+        """
         if not snapshot or not plan:
             return None, False
+        state = self.db.get_promotion_release(snapshot, plan) if isinstance(self.db, ImportDatabase) else None
+        if state and state[0]:
+            return state[0], True
+
         lookup_fn = getattr(self.kube, "lookup_release_for_snapshot", None)
-        if callable(lookup_fn) and callable(getattr(type(self.kube), "lookup_release_for_snapshot", None)):
-            lookup = lookup_fn(snapshot, plan)
-            if isinstance(lookup, ReleaseLookup):
-                if lookup.state is ReleaseLookupState.FOUND and lookup.name:
-                    return lookup.name, True
-                if lookup.state is ReleaseLookupState.UNKNOWN:
-                    return None, False
-        else:
+        lookup = None
+        typed_lookup = callable(lookup_fn) and callable(getattr(type(self.kube), "lookup_release_for_snapshot", None))
+        if typed_lookup:
+            result = lookup_fn(snapshot, plan)
+            if isinstance(result, ReleaseLookup):
+                lookup = result
+        if lookup is None:
+            # Compatibility adapters cannot prove an empty collection, so a
+            # missing result is conservatively UNKNOWN; a returned name is safe.
             existing = self.kube.find_release_for_snapshot_and_plan(snapshot, plan)
-            if isinstance(existing, str) and existing:
-                return existing, True
-        created = self.kube.create_release(snapshot, plan, self.prefix)
-        return created, False
+            lookup = (
+                ReleaseLookup(ReleaseLookupState.FOUND, existing)
+                if isinstance(existing, str) and existing
+                else ReleaseLookup(ReleaseLookupState.CONFIRMED_EMPTY)
+                if not typed_lookup
+                else ReleaseLookup(ReleaseLookupState.UNKNOWN)
+            )
+        if lookup is not None and lookup.state is ReleaseLookupState.FOUND and lookup.name:
+            if isinstance(self.db, ImportDatabase):
+                self.db.save_promotion_release(snapshot, plan, lookup.name, False)
+            return lookup.name, True
+        if lookup is None or lookup.state is ReleaseLookupState.UNKNOWN:
+            return None, False
+        # A previous create without a saved name is ambiguous even if the first
+        # recovery list is presently empty (eventual consistency). Never retry it.
+        if state and state[1]:
+            return None, False
+        if isinstance(self.db, ImportDatabase):
+            # The marker is claimed under BEGIN IMMEDIATE before the remote call.
+            # Checking then saving would permit two independent CLI processes to
+            # both observe an empty row and both create a Release.
+            owns_create, claimed_state = self.db.claim_promotion_release_creation(snapshot, plan)
+            if not owns_create:
+                if claimed_state and claimed_state[0]:
+                    return claimed_state[0], True
+                return None, False
+        try:
+            created = self.kube.create_release(snapshot, plan, self.prefix)
+        except Exception:
+            created = None
+        if isinstance(created, str) and created:
+            if isinstance(self.db, ImportDatabase):
+                self.db.save_promotion_release(snapshot, plan, created, False)
+            return created, False
+        return None, False
 
 
 class ReleaseMonitor:
