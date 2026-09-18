@@ -37,6 +37,49 @@ explicit existing PipelineRun or Snapshot. If the requested Release is already
 successful, return a completion result and outputs without creating anything. The
 caller can then finalize; its finalization is not an orchestrator stage.
 
+## Common intent and ecosystem profiles
+
+`target` and `release_plan` are common `OperationIntent` fields across ecosystems,
+not fields exclusive to one ecosystem. A versioned `ecosystem_profile` defines
+allowed values and wire shapes, requiredness/nullability for each goal, validation,
+defaults, resolution rules, and the relationship between them. A target is not
+universally a cluster/namespace, and a release plan is not universally a Konflux
+ReleasePlan. There is **no universal one-to-one mapping**: a profile may permit
+several plans for one target, one plan for several targets, or an explicit plan
+selection independent of target-based defaults. Validate the pair under the
+selected profile; never infer equivalence from either field alone.
+
+OCI references, PURLs, Snapshots, and Releases remain profile-defined inputs,
+resources, or outputs, not additional common intent fields. The Konflux flow in
+this proposal uses PipelineRun → Snapshot → Release; its profile resolves scope
+and verifies the selected ReleasePlan identity and revision. Other profiles define
+their own resource bindings without changing the common target/plan contract.
+
+Persist `requested_target`, `requested_release_plan`, `resolved_target`,
+`resolved_release_plan`, and `resolution_source` in every checkpoint, including
+those embedded in events and results. Requested values preserve the caller's
+selection (including explicit null for a permitted default); resolved values
+preserve the validated effective selection and immutable bindings. The resolution
+source records the profile/version, method, and any configuration or mapping
+reference/revision used, not merely the latest lookup location. Freeze the
+resolved pair before side effects. A restart validates the saved pair and source;
+it must reject mismatches, never silently recompute a different plan from a target.
+
+For example, an illustrative profile permits both plans below for one target:
+
+| Requested target | Requested release plan | Resolved target | Resolved release plan | Resolution source |
+| --- | --- | --- | --- | --- |
+| `staging` | `candidate` | `staging` | `candidate@r3` | Explicit pair, profile `example-v1` |
+| `staging` | `stable` | `staging` | `stable@r8` | Explicit pair, profile `example-v1` |
+| `staging` | null | `staging` | `candidate@r3` | Default mapping `map@r4`, profile `example-v1` |
+
+These values are illustrative, not a shared enum or a required mapping policy.
+If a later mapping selects `stable@r8`, resuming the third row retains the frozen
+`candidate@r3`; it does not apply that new default. An incoming request/checkpoint
+that substitutes `stable@r8` for the saved plan is an intent conflict, not a resume.
+If the saved binding can no longer be validated, report `blocked` or `unknown`
+according to the evidence, without substituting a plan or performing side effects.
+
 ## Identity and fingerprints
 
 | Field | Contract |
@@ -60,12 +103,13 @@ resources; UID is required for observed resource identity. Binding a verified
 resource changes the state fingerprint. Waiting for a Snapshot can therefore have stage `snapshot`
 with a pre-resource identifier and a completed PipelineRun in lineage.
 
-Intent includes the target scope, ecosystem, immutable source/build inputs,
-pipeline/template revision and effective parameters, requested goal, selected
-ReleasePlan identity and revision, and retry/adoption policy. Persist requested
-and resolved effective intent, including defaults, not just fingerprints or input
-subsets. Freeze resolved values before side effects; source changes or newly
-available evidence cannot silently re-resolve them. Tags or package versions alone
+Intent includes the ecosystem profile/version, resolved target and release plan
+with their profile-defined immutable bindings (including scope and ReleasePlan
+identity/revision for Konflux), immutable source/build inputs, pipeline/template
+revision and effective parameters, requested goal, and retry/adoption policy.
+Persist requested and resolved effective intent, including defaults, not just
+fingerprints or input subsets. Freeze resolved values before side effects; source
+changes or newly available evidence cannot silently re-resolve them. Tags or package versions alone
 do not establish content equivalence. Release creation additionally binds the
 verified Snapshot UID and component digests in its durable create intent. Missing required resolution
 prevents side effects: return `unknown` for unavailable evidence or `blocked` for
@@ -73,10 +117,20 @@ a known unsatisfied prerequisite. Never silently change intent on restart. Reusi
 an operation ID with different intent is a conflict; changed goals/inputs/plans
 require a new operation, which can explicitly adopt verified prior resources.
 
-Each fingerprint is `{profile, digest}`; profiles specify exact input fields and
-normalization and ship canonical test vectors. Use canonical JSON (RFC 8785),
-include the profile in hash input, distinguish null from empty values, and sort
-set-like collections by stable identity while preserving ordered parameters.
+The intent fingerprint includes the normalized resolved target and release plan,
+not just the requested target or a mutable mapping key. Include resolution-source
+revisions when they affect effective semantics under the ecosystem profile; retain
+all resolution provenance even when excluded from the hash. Requested selections
+remain available for restart validation even if they normalize to the same effective
+intent. State/status fingerprints bind these values where they affect resource
+identity, lineage, or outputs, rather than hashing lookup timestamps or availability.
+
+Each fingerprint is `{profile, digest}`; fingerprint profiles specify exact input
+fields and normalization and ship canonical test vectors. Fingerprint profiles
+are distinct from ecosystem profiles and declare which ecosystem semantics they
+cover. Use canonical JSON (RFC 8785), include the profile in hash input, distinguish
+null from empty values, and sort set-like collections by stable identity while
+preserving ordered parameters.
 Exclude credentials from all records and hashes; exclude observation timestamps,
 poll counts, resource versions, free-text messages, and logs from state/status
 hashes. Profiles are versioned independently; do not compare unlike profiles as
@@ -96,8 +150,9 @@ callers persist the complete checkpoint even when that fingerprint is unchanged.
 
 ## Outcomes and evidence
 
-Stages are `pipelinerun`, `snapshot`, and `release`. Each operation and attempt
-has a separate outcome and structured reasons (`code`, human-readable `message`).
+Stages in the Konflux profile are `pipelinerun`, `snapshot`, and `release`. Each
+operation and attempt has a separate outcome and structured reasons (`code`,
+human-readable `message`).
 
 | Outcome | Meaning |
 | --- | --- |
@@ -153,14 +208,20 @@ Provenance = {origin, method, derived_from: EvidenceReference[]}
 Freshness = {as_of, valid_until?, source_revision?}
 Confidence = {assessment, basis}
 Fingerprint = {profile, digest}
-OperationIntent = {operation_id, target, inputs, entry_resource?, goal,
-                   pipeline_revision?, release_plan?, retry_policy, adoption_policy}
+EcosystemProfile = {name, version}
+ResolutionSource = {ecosystem_profile: EcosystemProfile, method, reference?, revision?}
+OperationIntent = {operation_id, ecosystem_profile: EcosystemProfile,
+                   target?, release_plan?, inputs, entry_resource?, goal,
+                   pipeline_revision?, retry_policy, adoption_policy}
 OrchestrationRequest = {schema_version: 1, intent: OperationIntent,
                         mode: execute|reconcile, budget: {max_seconds, max_actions}}
 State = {stage, outcome, reasons[], active_attempt_id?, current_resource?,
          state_identifier, state_fingerprint, status_fingerprint}
 Checkpoint = {schema_version: 1, operation_id, requested_intent: OperationIntent,
               resolved_intent: OperationIntent?, intent_fingerprint?,
+              requested_target?, requested_release_plan?,
+              resolved_target?, resolved_release_plan?,
+              resolution_source: ResolutionSource?,
               state: State, attempts[], resources[], lineage[], outputs[],
               artifacts: ArtifactIdentity[], evidence: Evidence[],
               unresolved_creates[], observations[], last_confirmed_state?,
@@ -178,7 +239,20 @@ Completion = {goal, terminal_resource: ResourceIdentity, outputs[],
               authoritative_evidence: Evidence[]}
 ```
 
-For example, a `current_resource` value is:
+Both common intent fields must be present on the wire; `?` permits null only as
+defined by the ecosystem profile and goal. The checkpoint's requested target/plan
+fields must equal those in `requested_intent`; resolved fields must equal those in
+`resolved_intent`. Before resolution completes, `resolved_intent`, its fingerprint,
+both resolved fields, and `resolution_source` are null. After resolution, a resolved
+field may remain null only when the profile permits it; the non-null resolved
+intent/source distinguish that from unresolved intent. Reject inconsistent copies
+and resolution sources whose profile/version differs from the accepted intent.
+`ResolutionSource.method` and its reference/revision requirements are profile-defined;
+mutable mappings must have a pinned revision or immutable content identity. The
+complete checkpoint carries all five fields in every event and final result,
+including pending, blocked, unknown, and checkpoint-only restore.
+
+For example, a `current_resource` value in the Konflux profile is:
 
 ```json
 {
@@ -209,14 +283,18 @@ operation-state access controls, and credentials are supplied separately.
 Persist accepted operation intent **before any remote side effect**, then persist
 resolved effective intent and each attempt/create intent before submission. The
 resolved intent and its fingerprint may be null while required resolution is
-unavailable; no side effects are permitted then. Hash the frozen resolved intent,
-not optional evidence metadata or source availability. On restore, preserve both
+unavailable; no side effects are permitted then. Hash the frozen resolved intent
+and any profile-required semantic resolution-source revisions, not optional
+evidence metadata or source availability. On restore, preserve both
 requested and resolved intent and revalidate their bindings; evidence-source
 changes must not substitute new defaults, artifacts, targets, or plans. A checkpoint
 is a complete portable snapshot of all known state, including histories and uncertain
 creates, not a delta or an opaque database row. Absent resources/outputs use null or
-empty collections. Loading validates schema, operation, intent, target, lineage,
-and fingerprints, then revalidates remote evidence using fresh credentials.
+empty collections. Loading validates schema, operation, ecosystem profile/version,
+requested and resolved target/plan, resolution source, lineage, and fingerprints,
+then revalidates remote evidence using fresh credentials. Reject request/store/
+checkpoint mismatches
+before acting; do not rerun target-to-plan resolution to overwrite a saved plan.
 Database/checkpoint disagreements must be explicitly reconciled by revision and
 evidence or rejected; never blindly overwrite newer state. A fingerprint or
 checkpoint does not itself authorize mutation.
@@ -231,11 +309,16 @@ safe remote reconciliation cover that case.
 
 ## Discovery, restart, and safe adoption
 
-1. Validate and durably accept intent; load the latest checkpoint/local state.
-   Reconcile known UIDs and unresolved creates before any new submission.
-2. Discover the appropriate resources and lineage within the target scope. Attach
-   operation/attempt/intent correlation metadata to created objects and use stable
-   attempt-specific names where supported. Metadata and names are lookup aids,
+1. Validate the target/plan pair under the selected ecosystem profile and durably
+   accept intent; load the latest checkpoint/local state. Resolve only unfrozen
+   intent using that profile and persist the pair and resolution source before
+   side effects. On restart, validate saved bindings and reject mismatches without
+   recomputing a plan from the target. Reconcile known UIDs and unresolved creates
+   before any new submission.
+2. Discover resources and lineage using the frozen resolved target/plan and the
+   profile-defined scope and bindings, not a target-only lookup or latest default.
+   Attach operation/attempt/intent correlation metadata to created objects and use
+   stable attempt-specific names where supported. Metadata and names are lookup aids,
    not proof: validate scope, spec/content, UID, lineage, and ReleasePlan.
 3. Adopt one verified progressing **or successful** match, including an explicitly
    supplied resource lacking correlation metadata when policy permits equivalence.
@@ -330,8 +413,14 @@ Implementation acceptance requires shared library/CLI conformance tests proving:
 - Repeated bounded invocations and checkpoint-only restore continue a completed
   PipelineRun through Snapshot/Release without importing again; an already-complete
   Release yields completion for caller finalization and creates nothing.
+- Common target/plan fields round-trip across ecosystem profiles; profile-specific
+  allowed values, nullability, validation, resolution, and relationships are enforced.
+  Fixtures cover several plans for one target, a plan shared by targets where allowed,
+  explicit selection, defaults, and invalid pairs without assuming a universal 1:1 map.
+  OCI/PURL/Snapshot/Release details remain profile-defined.
 - PipelineRun/Snapshot entry, adoption without metadata, missing lineage, multiple
-  matches, changed UIDs, and ReleasePlan mismatches enforce identity/evidence rules.
+  matches, changed UIDs, and resolved target/plan mismatches enforce identity/evidence
+  rules; target-only matches cannot authorize adoption or completion.
 - All five outcomes remain distinct; API outages, uncertain creates, missing
   Snapshot visibility, retry exhaustion, blocked prerequisites, and cancellation
   never produce false completion or uncontrolled duplicate resources.
@@ -340,7 +429,13 @@ Implementation acceptance requires shared library/CLI conformance tests proving:
   duplicate creation; completion includes authoritative goal/output evidence.
 - Checkpoint-only restore retains requested/resolved effective intent, artifact and
   resource identities, provenance, and evidence references; changed evidence sources
-  or defaults cannot silently alter frozen intent. Optional metadata round-trips.
+  or defaults cannot silently alter frozen intent. All five target/plan resolution
+  fields survive every outcome, event/result, and restore. Changed mapping revisions
+  cannot recompute a saved plan; conflicting requested/resolved values, duplicated
+  fields, profile versions, or resolution sources are rejected before side effects.
+  Golden vectors bind resolved targets/plans and semantic resolution revisions,
+  while non-semantic provenance changes do not alter hashes. Optional metadata
+  round-trips.
 - Crash points before/after intent persistence, submission, commit, and notification
   converge safely; downstream retries retain successful upstream lineage.
 - Every controlled accepted call, including unchanged polls and callback errors,
