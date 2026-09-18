@@ -22,6 +22,7 @@ import requests
 from import_orchestrator.clients import KubeClient
 from import_orchestrator.clients.kube_api import KubeAuth
 from import_orchestrator.engine.errors import TriggerError
+from import_orchestrator.models import ReleaseLookup, ReleaseLookupState
 
 
 def _make_kube_client(monkeypatch, token=None, kubearchive_api=""):
@@ -343,7 +344,7 @@ class TestFindReleaseForSnapshot:
 
         assert kube.find_release_for_snapshot("snap-1") == "release-1"
 
-    def test_skips_terminally_failed_release(self, kube: KubeClient):
+    def test_returns_terminally_failed_release_for_reconciliation(self, kube: KubeClient):
         kube._mock_api.list.return_value = {
             "items": [
                 {
@@ -354,7 +355,7 @@ class TestFindReleaseForSnapshot:
             ]
         }
 
-        assert kube.find_release_for_snapshot("snap-1") is None
+        assert kube.find_release_for_snapshot("snap-1") == "release-bad"
 
     def test_does_not_skip_progressing_false(self, kube: KubeClient):
         kube._mock_api.list.return_value = {
@@ -449,8 +450,8 @@ class TestFindReleaseForSnapshotAndPlan:
 
         assert kube.find_release_for_snapshot_and_plan("snap-1", "remediated-build-prod") is None
 
-    def test_skips_terminally_failed_release(self, kube: KubeClient):
-        """A failed prod release must not be adopted — the operator needs a fresh attempt."""
+    def test_returns_terminally_failed_release_for_reconciliation(self, kube: KubeClient):
+        """The reconciliation primitive retires failed attempts safely."""
         kube._mock_api.list.return_value = {
             "items": [
                 {
@@ -461,7 +462,7 @@ class TestFindReleaseForSnapshotAndPlan:
             ]
         }
 
-        assert kube.find_release_for_snapshot_and_plan("snap-1", "remediated-build-prod") is None
+        assert kube.find_release_for_snapshot_and_plan("snap-1", "remediated-build-prod") == "rel-bad"
 
     def test_does_not_skip_progressing_false(self, kube: KubeClient):
         kube._mock_api.list.return_value = {
@@ -721,3 +722,301 @@ class TestCreateRelease:
 
         api_path = kube._mock_api.create.call_args[0][0]
         assert "/namespaces/test-ns/" in api_path
+
+
+class TestFindSnapshotForImportArchive:
+    def test_archive_list_plr_and_annotated_snapshot_are_resolved(self, kube_with_ka):
+        digest = "sha256:" + "a" * 64
+        source = "quay.io/light-castle/rebuild-pnc@" + digest
+        plr = {
+            "metadata": {
+                "name": "pnc-import-t5dwx",
+                "labels": {
+                    "appstudio.openshift.io/application": "pnc-import",
+                    "pipelines.appstudio.io/type": "build",
+                },
+                "annotations": {"appstudio.openshift.io/snapshot": "pnc-import-snap"},
+            },
+            "spec": {"params": [{"name": "SOURCE_IMAGE", "value": source}]},
+            "status": {"conditions": [{"type": "Succeeded", "status": "True"}]},
+        }
+        snap = {"metadata": {"name": "pnc-import-snap"}, "spec": {"components": [{"containerImage": "img@" + digest}]}}
+        kube_with_ka._mock_api.list.return_value = {"items": []}
+        kube_with_ka._mock_ka_api.list.return_value = {"apiVersion": "v1", "items": [plr]}
+        kube_with_ka._mock_api.get.side_effect = requests.HTTPError("404")
+        kube_with_ka._mock_ka_api.get.return_value = {"apiVersion": "v1", "items": [snap]}
+
+        result = kube_with_ka.find_snapshot_for_import(source, "pnc-import")
+        assert result.state.name == "FOUND"
+        assert result.name == "pnc-import-snap"
+        assert kube_with_ka._mock_ka_api.list.call_args.args[0].endswith("/pipelineruns")
+
+    def test_shared_component_snapshot_is_not_used(self, kube_with_ka):
+        digest = "sha256:" + "b" * 64
+        source = "quay.io/light-castle/rebuild-pnc@" + digest
+        kube_with_ka._mock_api.list.return_value = {"items": []}
+        kube_with_ka._mock_ka_api.list.return_value = {
+            "items": [
+                {
+                    "metadata": {"name": "import-pr", "labels": {"pipelines.appstudio.io/type": "build"}},
+                    "spec": {"params": [{"name": "SOURCE_IMAGE", "value": source}]},
+                    "status": {"conditions": [{"type": "Succeeded", "status": "True"}]},
+                }
+            ]
+        }
+        kube_with_ka._mock_ka_api.list.side_effect = [
+            kube_with_ka._mock_ka_api.list.return_value,
+            {"items": [{"metadata": {"name": "shared"}, "spec": {"components": [{"containerImage": "x@" + digest}]}}]},
+        ]
+        assert kube_with_ka.find_snapshot_for_import(source, "pnc-import").state.name != "FOUND"
+
+
+class TestKubeClientHelpersAndLookups:
+    def test_api_error_detail(self):
+        from import_orchestrator.clients.kube import _api_error_detail
+
+        exc = requests.RequestException("boom")
+        assert _api_error_detail(exc) == "boom"
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"message": "not found"}
+        exc.response = mock_resp
+        assert _api_error_detail(exc) == "boom: not found"
+
+        mock_resp.json.side_effect = ValueError()
+        mock_resp.text = "raw error text"
+        assert _api_error_detail(exc) == "boom: raw error text"
+
+    def test_items_and_resource_normalization(self):
+        from import_orchestrator.clients.kube import KubeClient
+
+        assert KubeClient._items(None) == []
+        assert KubeClient._items({"items": "not a list"}) == []
+
+        # Nested list unwrapping
+        nested = {
+            "items": [
+                {"items": [{"metadata": {"name": "nested-item"}}]},
+                {"metadata": {"name": "direct-item"}},
+            ]
+        }
+        items = KubeClient._items(nested)
+        assert len(items) == 2
+        assert items[0]["metadata"]["name"] == "nested-item"
+        assert items[1]["metadata"]["name"] == "direct-item"
+
+        # _resource
+        direct = {"metadata": {"name": "res"}}
+        assert KubeClient._resource(direct) == direct
+        assert KubeClient._resource({"items": [direct]}) == direct
+        assert KubeClient._resource({"items": [direct, direct]}) is None
+
+    def test_find_snapshot_by_component_digest(self, kube_with_ka):
+        digest = "sha256:" + "c" * 64
+        # Invalid digest format returns UNKNOWN
+        res = kube_with_ka.find_snapshot_by_component_digest("invalid-digest")
+        assert res.state.name == "UNKNOWN"
+
+        # Matches found in live API
+        snap1 = {
+            "metadata": {"name": "snap1", "labels": {"appstudio.openshift.io/application": "my-app"}},
+            "spec": {"components": [{"containerImage": f"quay.io/repo@{digest}"}]},
+        }
+        kube_with_ka._mock_api.list.return_value = {"items": [snap1]}
+        res = kube_with_ka.find_snapshot_by_component_digest(digest, application="my-app")
+        assert res.state.name == "FOUND"
+        assert res.name == "snap1"
+
+        # Application mismatch
+        res = kube_with_ka.find_snapshot_by_component_digest(digest, application="other-app")
+        assert res.state.name == "CONFIRMED_EMPTY"
+
+        # Multiple matches -> AMBIGUOUS
+        snap2 = {
+            "metadata": {"name": "snap2", "labels": {"appstudio.openshift.io/application": "my-app"}},
+            "spec": {"components": [{"containerImage": f"quay.io/repo@{digest}"}]},
+        }
+        kube_with_ka._mock_api.list.return_value = {"items": [snap1, snap2]}
+        res = kube_with_ka.find_snapshot_by_component_digest(digest, application="my-app")
+        assert res.state.name == "AMBIGUOUS"
+
+        # Exception in live API falls back to KA
+        kube_with_ka._mock_api.list.side_effect = requests.RequestException("fail")
+        kube_with_ka._mock_ka_api.list.return_value = {"items": [snap1]}
+        res = kube_with_ka.find_snapshot_by_component_digest(digest, application="my-app")
+        assert res.state.name == "FOUND"
+
+    def test_taskrun_failure_detail_and_pod_logs(self, kube):
+        # Tr not found
+        kube._mock_api.get.side_effect = requests.RequestException("404")
+        assert kube._taskrun_failure_detail("tr-missing") is None
+
+        # Tr failed with steps and pod logs
+        tr = {
+            "status": {
+                "conditions": [{"type": "Succeeded", "status": "False", "reason": "Failed", "message": "error"}],
+                "podName": "my-pod",
+                "steps": [
+                    {
+                        "name": "build",
+                        "container": "step-build",
+                        "terminated": {"reason": "Error", "exitCode": 1, "message": "crash"},
+                    }
+                ],
+            }
+        }
+        kube._mock_api.get.side_effect = None
+        kube._mock_api.get.return_value = tr
+        kube._mock_api.get_text.return_value = "error line 1\nerror line 2"
+
+        detail = kube._taskrun_failure_detail("tr-1")
+        assert detail is not None
+        assert "step 'build' terminated: reason=Error exitCode=1 message=crash" in detail
+        assert "logs (step-build):" in detail
+
+    def test_get_snapshot_component_digests(self, kube_with_ka):
+        digest = "sha256:" + "d" * 64
+        snap = {
+            "metadata": {"name": "snap-x"},
+            "spec": {"components": [{"containerImage": f"quay.io/test@{digest}"}]},
+        }
+        kube_with_ka._mock_api.get.return_value = snap
+        digests = kube_with_ka.get_snapshot_component_digests("snap-x")
+        assert digests == {digest}
+
+        # Fallback to KA on live failure
+        kube_with_ka._mock_api.get.side_effect = requests.RequestException("error")
+        kube_with_ka._mock_ka_api.get.return_value = snap
+        digests = kube_with_ka.get_snapshot_component_digests("snap-x")
+        assert digests == {digest}
+
+        # If both fail
+        kube_with_ka._mock_ka_api.get.side_effect = requests.RequestException("error")
+        assert kube_with_ka.get_snapshot_component_digests("snap-x") is None
+
+    def test_find_snapshot_for_import_edge_cases(self, kube_with_ka):
+        # Invalid digest in ref
+        assert kube_with_ka.find_snapshot_for_import("not-a-valid-digest").state.name == "UNKNOWN"
+
+        digest = "sha256:" + "e" * 64
+        source = f"quay.io/repo@{digest}"
+
+        # API error on list
+        kube_with_ka._mock_api.list.side_effect = requests.RequestException("boom")
+        kube_with_ka._mock_ka_api.list.side_effect = requests.RequestException("boom")
+        assert kube_with_ka.find_snapshot_for_import(source).state.name == "UNKNOWN"
+
+        # Matched PR with non-build type is skipped
+        pr_non_build = {
+            "metadata": {"name": "pr-1", "labels": {"pipelines.appstudio.io/type": "test"}},
+            "spec": {"params": [{"name": "SOURCE_IMAGE", "value": source}]},
+            "status": {"conditions": [{"type": "Succeeded", "status": "True"}]},
+        }
+        kube_with_ka._mock_api.list.side_effect = None
+        kube_with_ka._mock_api.list.return_value = {"items": [pr_non_build]}
+        assert kube_with_ka.find_snapshot_for_import(source).state.name == "CONFIRMED_EMPTY"
+
+        # Matched PR with missing snapshot
+        pr_build = {
+            "metadata": {"name": "pr-2", "labels": {"pipelines.appstudio.io/type": "build"}},
+            "spec": {"params": [{"name": "SOURCE_IMAGE", "value": source}]},
+            "status": {"conditions": [{"type": "Succeeded", "status": "True"}]},
+        }
+        kube_with_ka._mock_api.list.return_value = {"items": [pr_build]}
+        kube_with_ka._mock_api.get.side_effect = requests.RequestException("404")
+        kube_with_ka._mock_ka_api.get.side_effect = requests.RequestException("404")
+        assert kube_with_ka.find_snapshot_for_import(source).state.name == "UNKNOWN"
+
+        # Matched PR with snapshot that has no output digests
+        kube_with_ka._mock_api.list.return_value = {
+            "items": [
+                {
+                    "metadata": {
+                        "name": "pr-3",
+                        "labels": {"pipelines.appstudio.io/type": "build"},
+                        "annotations": {"appstudio.openshift.io/snapshot": "snap-3"},
+                    },
+                    "spec": {"params": [{"name": "SOURCE_IMAGE", "value": source}]},
+                    "status": {"conditions": [{"type": "Succeeded", "status": "True"}]},
+                }
+            ]
+        }
+        # Snapshot exists check returns resource
+        kube_with_ka._mock_api.get.side_effect = None
+        kube_with_ka._mock_api.get.return_value = {"metadata": {"name": "snap-3"}}
+        with patch.object(kube_with_ka, "get_snapshot_component_digests", return_value=None):
+            assert kube_with_ka.find_snapshot_for_import(source).state.name == "UNKNOWN"
+
+
+class TestPipelineRunArchiveShapes:
+    @pytest.mark.parametrize(
+        "response",
+        [
+            {"metadata": {"name": "archived-pr"}, "status": {"conditions": [{"type": "Succeeded", "status": "True"}]}},
+            {
+                "items": [
+                    {
+                        "metadata": {"name": "archived-pr"},
+                        "status": {"conditions": [{"type": "Succeeded", "status": "True"}]},
+                    }
+                ]
+            },
+            {
+                "items": [
+                    {
+                        "items": [
+                            {
+                                "metadata": {"name": "archived-pr"},
+                                "status": {"conditions": [{"type": "Succeeded", "status": "True"}]},
+                            }
+                        ]
+                    }
+                ]
+            },
+        ],
+    )
+    def test_normalizes_direct_list_and_nested_archive_responses(self, kube_with_ka: KubeClient, response):
+        kube_with_ka._mock_api.get.side_effect = requests.HTTPError("404")
+        kube_with_ka._mock_ka_api.get.return_value = response
+        assert kube_with_ka.get_pipelinerun_status("archived-pr").is_successful
+
+
+class TestNewestReleaseAttempt:
+    def test_live_release_collection_is_authoritative_over_stale_archive(self, kube_with_ka: KubeClient):
+        kube_with_ka._mock_api.list.return_value = {"items": []}
+        kube_with_ka._mock_ka_api.list.return_value = {
+            "items": [
+                {
+                    "metadata": {"name": "stale-archive", "creationTimestamp": "2025-01-01T00:00:00Z"},
+                    "spec": {"snapshot": "snap", "releasePlan": "plan"},
+                }
+            ]
+        }
+        assert kube_with_ka.lookup_release_for_snapshot("snap", "plan") == ReleaseLookup(
+            ReleaseLookupState.CONFIRMED_EMPTY
+        )
+
+    def test_archive_is_used_when_live_release_lookup_fails(self, kube_with_ka: KubeClient):
+        kube_with_ka._mock_api.list.side_effect = requests.RequestException("offline")
+        kube_with_ka._mock_ka_api.list.return_value = {
+            "items": [{"metadata": {"name": "archived"}, "spec": {"snapshot": "snap", "releasePlan": "plan"}}]
+        }
+        assert kube_with_ka.lookup_release_for_snapshot("snap", "plan").name == "archived"
+
+    def test_returns_newest_terminal_failure_instead_of_older_success(self, kube: KubeClient):
+        kube._mock_api.list.return_value = {
+            "items": [
+                {
+                    "metadata": {"name": "old-success", "creationTimestamp": "2026-01-01T00:00:00Z"},
+                    "spec": {"snapshot": "snap", "releasePlan": "plan"},
+                    "status": {"conditions": [{"type": "Released", "status": "True"}]},
+                },
+                {
+                    "metadata": {"name": "new-failed", "creationTimestamp": "2026-02-01T00:00:00Z"},
+                    "spec": {"snapshot": "snap", "releasePlan": "plan"},
+                    "status": {"conditions": [{"type": "Released", "status": "False", "reason": "Failed"}]},
+                },
+            ]
+        }
+        lookup = kube.lookup_release_for_snapshot("snap", "plan")
+        assert lookup == ReleaseLookup(ReleaseLookupState.FOUND, "new-failed")

@@ -69,6 +69,17 @@ def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> No
         help=f"Max retry attempts for a failed import (default: {DEFAULT_MAX_RETRIES})",
     )
     parser.add_argument(
+        "--force-import",
+        action="store_true",
+        help="DANGEROUS: ignore an exact matching Snapshot and rerun the import PipelineRun",
+    )
+    parser.add_argument(
+        "--release-plan",
+        default=os.environ.get("KONFLUX_RELEASE_PLAN"),
+        metavar="NAME",
+        help="Target a specific ReleasePlan instead of resolving from the snapshot's application",
+    )
+    parser.add_argument(
         "--output-json",
         default=None,
         metavar="PATH",

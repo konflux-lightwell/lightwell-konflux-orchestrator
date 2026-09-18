@@ -22,7 +22,13 @@ from typing import Literal
 import requests
 
 from import_orchestrator.clients.kube_api import KubeAPI, KubeAuth, resolve_auth
-from import_orchestrator.models import PipelineRunStatus
+from import_orchestrator.models import (
+    PipelineRunStatus,
+    ReleaseLookup,
+    ReleaseLookupState,
+    SnapshotLookup,
+    SnapshotLookupState,
+)
 
 
 def _api_error_detail(exc: requests.RequestException) -> str:
@@ -48,6 +54,10 @@ def _api_error_detail(exc: requests.RequestException) -> str:
 class KubeClient:
     """Client for Kubernetes API operations against a cluster.
 
+    KubeArchive returns Kubernetes ``List`` envelopes even for a named GET
+    (the kubectl-ka client exposes the same shape).  Callers must therefore
+    normalize named responses before reading ``metadata`` or ``spec``.
+
     Authenticates using either a KUBECONFIG file or the KONFLUX_TOKEN environment variable.
     """
 
@@ -65,6 +75,35 @@ class KubeClient:
         if kubearchive_api:
             ka_auth = KubeAuth(server=kubearchive_api, token=auth.token, ca_cert=auth.ca_cert)
             self._ka_api = KubeAPI(ka_auth)
+
+    @staticmethod
+    def _items(result: object) -> list[dict]:
+        """Extract resources from Kubernetes and KubeArchive list envelopes.
+
+        KubeArchive's named GET/list responses are ``v1 List`` objects whose
+        ``items`` can themselves be List objects.  The normal Kubernetes API
+        returns the resource directly, so flatten only that documented wrapper.
+        """
+        if not isinstance(result, dict):
+            return []
+        items = result.get("items")
+        if not isinstance(items, list):
+            return []
+        flattened: list[dict] = []
+        for item in items:
+            if isinstance(item, dict) and isinstance(item.get("items"), list) and "metadata" not in item:
+                flattened.extend(KubeClient._items(item))
+            elif isinstance(item, dict):
+                flattened.append(item)
+        return flattened
+
+    @classmethod
+    def _resource(cls, result: object) -> dict | None:
+        """Return a resource from either a direct response or List envelope."""
+        if isinstance(result, dict) and "metadata" in result:
+            return result
+        items = cls._items(result)
+        return items[0] if len(items) == 1 else None
 
     def get_running_pipelineruns(self) -> list[PipelineRunStatus]:
         """Get all PipelineRuns with status 'Unknown' (i.e. still running)."""
@@ -86,35 +125,36 @@ class KubeClient:
             return []
 
     def get_pipelinerun_status(self, name: str) -> PipelineRunStatus | None:
-        """Get the status of a specific PipelineRun by name.
+        """Get a PipelineRun status from live Kubernetes or KubeArchive.
 
-        Checks the live cluster first, then falls back to the KubeArchive API.
-        Returns None if not found in either place.
+        A successful live response is authoritative, including one with no
+        usable ``Succeeded`` condition. Archive is only a fallback when the
+        live request fails. Both APIs may return the resource directly, a List,
+        or nested List envelopes.
         """
-        try:
-            data = self._api.get(
-                f"/apis/tekton.dev/v1/namespaces/{self.namespace}/pipelineruns/{name}",
-            )
-            conditions = data.get("status", {}).get("conditions", [])
-            status = conditions[0].get("status", "") if conditions else ""
-            if pr_status := PipelineRunStatus.from_str(name, status):
-                return pr_status
-        except requests.RequestException:
-            pass
-
-        if self._ka_api is not None:
+        path = f"/apis/tekton.dev/v1/namespaces/{self.namespace}/pipelineruns/{name}"
+        for api in (self._api, self._ka_api):
+            if api is None:
+                continue
             try:
-                data = self._ka_api.get(
-                    f"/apis/tekton.dev/v1/namespaces/{self.namespace}/pipelineruns/{name}",
-                )
-                for cond in data.get("status", {}).get("conditions", []):
-                    if cond.get("type") == "Succeeded":
-                        status = cond.get("status", "")
-                        if pr_status := PipelineRunStatus.from_str(name, status):
-                            return pr_status
-            except requests.RequestException:
-                pass
-
+                data = api.get(path)
+                resource = self._resource(data)
+            except (requests.RequestException, KeyError, TypeError, AttributeError):
+                continue
+            if resource is None and isinstance(data, dict) and "status" in data:
+                resource = data
+            if resource is None:
+                # A successful live API response is authoritative. Archive is
+                # only for a live transport/API failure, not a second opinion.
+                return None
+            conditions = resource.get("status", {}).get("conditions", [])
+            succeeded = next((condition for condition in conditions if condition.get("type") == "Succeeded"), None)
+            # Older API/test adapters omit the condition type; their sole first
+            # condition is still the PipelineRun completion condition.
+            succeeded = succeeded or (conditions[0] if conditions else None)
+            if succeeded is None:
+                return None
+            return PipelineRunStatus.from_str(name, succeeded.get("status", ""))
         return None
 
     def get_pipelinerun_failure_detail(self, name: str) -> str | None:
@@ -233,17 +273,201 @@ class KubeClient:
         running_prs = self.get_running_pipelineruns()
         return sum(1 for pr in running_prs if pr.name.startswith(prefix))
 
+    def find_snapshot_by_component_digest(self, digest: str, application: str | None = None) -> SnapshotLookup:
+        """Find a namespaced Snapshot containing exactly the canonical component digest.
+
+        Snapshot names and tags are deliberately ignored: only a lower-case canonical
+        sha256 digest in ``spec.components`` can establish content identity. Live API
+        results are preferred and KubeArchive is used when the live object is absent.
+        """
+        import re
+
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+            return SnapshotLookup(SnapshotLookupState.UNKNOWN)
+        path = f"/apis/appstudio.redhat.com/v1alpha1/namespaces/{self.namespace}/snapshots"
+        # The live API is authoritative.  Archive is a fallback only when live
+        # cannot provide a structurally valid collection response; in particular,
+        # a valid live empty result must not be combined with archive results.
+        for api in (self._api, self._ka_api):
+            if api is None:
+                continue
+            try:
+                result = api.list(path)
+            except (requests.RequestException, KeyError, TypeError, AttributeError):
+                continue
+            if not isinstance(result, dict) or not isinstance(result.get("items"), list):
+                continue
+            matches: set[str] = set()
+            for snapshot in self._items(result):
+                metadata = snapshot.get("metadata", {})
+                labels = metadata.get("labels", {}) if isinstance(metadata, dict) else {}
+                if application and labels.get("appstudio.openshift.io/application") != application:
+                    continue
+                spec = snapshot.get("spec", {})
+                components = spec.get("components", []) if isinstance(spec, dict) else []
+                if not isinstance(components, list):
+                    continue
+                if any(
+                    isinstance(component, dict)
+                    and component.get("containerImage", component.get("image", "")).rsplit("@", 1)[-1] == digest
+                    for component in components
+                ):
+                    name = metadata.get("name") if isinstance(metadata, dict) else None
+                    if isinstance(name, str) and name:
+                        matches.add(name)
+            if len(matches) > 1:
+                return SnapshotLookup(SnapshotLookupState.AMBIGUOUS)
+            if len(matches) == 1:
+                return SnapshotLookup(SnapshotLookupState.FOUND, next(iter(matches)))
+            return SnapshotLookup(SnapshotLookupState.CONFIRMED_EMPTY)
+        return SnapshotLookup(SnapshotLookupState.UNKNOWN)
+
+    def find_snapshot_for_import(self, source_ref: str, application: str | None = None) -> SnapshotLookup:
+        """Resolve a Java import through successful live or archived import PLRs."""
+        import re
+
+        digest = source_ref.rsplit("@", 1)[-1] if "@" in source_ref else ""
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+            return SnapshotLookup(SnapshotLookupState.UNKNOWN)
+        path = f"/apis/tekton.dev/v1/namespaces/{self.namespace}/pipelineruns"
+        matches: dict[str, tuple[str, dict]] = {}
+        saw_collection = False
+        for api in (self._api, self._ka_api):
+            if api is None:
+                continue
+            try:
+                result = api.list(path)
+            except (requests.RequestException, KeyError, TypeError, AttributeError):
+                continue
+            if not isinstance(result, dict) or not isinstance(result.get("items"), list):
+                continue
+            saw_collection = True
+            for pr in self._items(result):
+                metadata = pr.get("metadata") or {}
+                labels = metadata.get("labels") or {}
+                if application and labels.get("appstudio.openshift.io/application") != application:
+                    continue
+                if labels.get("pipelines.appstudio.io/type") not in (None, "build"):
+                    continue
+                spec = pr.get("spec") or {}
+                params = spec.get("params") or (spec.get("pipelineSpec") or {}).get("params") or []
+                values = {
+                    str(p.get("value"))
+                    for p in params
+                    if isinstance(p, dict) and p.get("name", "").upper() in ("SOURCE_IMAGE", "SOURCE_ARTIFACT")
+                }
+                if source_ref not in values:
+                    continue
+                condition = self._succeeded_condition(pr)
+                if not condition or condition.get("status") != "True":
+                    continue
+                name = str(metadata.get("name", ""))
+                if not name:
+                    continue
+                completed = str(
+                    condition.get("lastTransitionTime")
+                    or (pr.get("status") or {}).get("completionTime")
+                    or metadata.get("creationTimestamp")
+                    or ""
+                )
+                if name not in matches or (completed, name) > (matches[name][0], name):
+                    matches[name] = (completed, pr)
+        if not matches:
+            return (
+                SnapshotLookup(SnapshotLookupState.CONFIRMED_EMPTY)
+                if saw_collection
+                else SnapshotLookup(SnapshotLookupState.UNKNOWN)
+            )
+        ordered = sorted(
+            ((when, name, pr) for name, (when, pr) in matches.items()),
+            key=lambda item: (item[0], item[1]),
+            reverse=True,
+        )
+        for _when, pr_name, pr in ordered:
+            snapshot = self._snapshot_for_import_pr(pr, pr_name)
+            if snapshot is None:
+                continue
+            output_digests = self.get_snapshot_component_digests(snapshot)
+            if output_digests is None:
+                return SnapshotLookup(SnapshotLookupState.UNKNOWN)
+            if digest in output_digests:
+                return SnapshotLookup(SnapshotLookupState.FOUND, snapshot)
+            return SnapshotLookup(SnapshotLookupState.UNKNOWN)
+        return SnapshotLookup(SnapshotLookupState.CONFIRMED_EMPTY)
+
+    def _snapshot_for_import_pr(self, pr: dict, pr_name: str) -> str | None:
+        """Resolve a PLR Snapshot, preferring its explicit snapshot annotation."""
+        annotations = (pr.get("metadata") or {}).get("annotations") or {}
+        for key in ("appstudio.openshift.io/snapshot", "appstudio.openshift.io/snapshots"):
+            for name in str(annotations.get(key, "")).split(","):
+                name = name.strip()
+                if name and self._snapshot_exists(name):
+                    return name
+        return self.find_snapshot_by_pipelinerun(pr_name)
+
+    def _snapshot_exists(self, name: str) -> bool:
+        path = f"/apis/appstudio.redhat.com/v1alpha1/namespaces/{self.namespace}/snapshots/{name}"
+        for api in (self._api, self._ka_api):
+            if api is None:
+                continue
+            try:
+                data = api.get(path)
+                resource = self._resource(data)
+                return bool(resource and resource.get("metadata", {}).get("name") == name)
+            except (requests.RequestException, KeyError, TypeError, AttributeError):
+                continue
+        return False
+
     def find_snapshot_by_pipelinerun(self, pr_name: str) -> str | None:
         """Find the Snapshot created by a specific PipelineRun via its label."""
+        path = f"/apis/appstudio.redhat.com/v1alpha1/namespaces/{self.namespace}/snapshots"
+        for api in (self._api, self._ka_api):
+            if api is None:
+                continue
+            try:
+                result = api.list(path, labelSelector=f"appstudio.openshift.io/build-pipelinerun={pr_name}")
+                items = self._items(result)
+                if items:
+                    return items[0]["metadata"]["name"]
+            except (requests.RequestException, KeyError, IndexError, TypeError, AttributeError):
+                continue
+        return None
+
+    def get_snapshot_component_digests(self, snapshot_name: str) -> set[str] | None:
+        """Return component image digests recorded by a Snapshot, or None if absent."""
         try:
-            result = self._api.list(
-                f"/apis/appstudio.redhat.com/v1alpha1/namespaces/{self.namespace}/snapshots",
-                labelSelector=f"appstudio.openshift.io/build-pipelinerun={pr_name}",
+            data = self._api.get(
+                f"/apis/appstudio.redhat.com/v1alpha1/namespaces/{self.namespace}/snapshots/{snapshot_name}"
             )
-            items = result.get("items", [])
-            return items[0]["metadata"]["name"] if items else None
-        except (requests.RequestException, KeyError, IndexError):
-            return None
+            data = self._resource(data)
+            if data is None:
+                raise KeyError("snapshot resource missing")
+            components = data.get("spec", {}).get("components", [])
+            digests = set()
+            for component in components:
+                image = component.get("containerImage", component.get("image", ""))
+                if "@sha256:" in image:
+                    digests.add(image.split("@", 1)[1])
+            return digests
+        except (requests.RequestException, KeyError, TypeError):
+            pass
+        if self._ka_api is not None:
+            try:
+                data = self._ka_api.get(
+                    f"/apis/appstudio.redhat.com/v1alpha1/namespaces/{self.namespace}/snapshots/{snapshot_name}"
+                )
+                data = self._resource(data)
+                if data is None:
+                    raise KeyError("snapshot resource missing")
+                digests = set()
+                for component in data.get("spec", {}).get("components", []):
+                    image = component.get("containerImage", component.get("image", ""))
+                    if "@sha256:" in image:
+                        digests.add(image.split("@", 1)[1])
+                return digests
+            except (requests.RequestException, KeyError, TypeError):
+                pass
+        return None
 
     def find_release_plan_for_snapshot(self, snapshot_name: str) -> str | None:
         """Find the single auto-releasing ReleasePlan for the snapshot's application.
@@ -338,15 +562,15 @@ class KubeClient:
             return None
 
     def find_release_for_snapshot(self, snapshot_name: str) -> str | None:
-        """Find an active (non-terminally-failed) Release for the given snapshot.
-
-        Matches a Release created against any ReleasePlan. When several match, the
-        newest by creationTimestamp is returned (see find_release_for_snapshot_and_plan).
-        """
-        return self.find_release_for_snapshot_and_plan(snapshot_name, None)
+        """Compatibility wrapper returning only a discovered Release name."""
+        return self.lookup_release_for_snapshot(snapshot_name).name
 
     def find_release_for_snapshot_and_plan(self, snapshot_name: str, release_plan: str | None = None) -> str | None:
-        """Find an active Release for a snapshot, optionally scoped to one ReleasePlan.
+        """Compatibility wrapper returning only a discovered Release name."""
+        return self.lookup_release_for_snapshot(snapshot_name, release_plan).name
+
+    def lookup_release_for_snapshot(self, snapshot_name: str, release_plan: str | None = None) -> ReleaseLookup:
+        """Find the newest Release attempt for a snapshot, optionally scoped to one ReleasePlan.
 
         When `release_plan` is given, a Release created against a *different* plan for the
         same snapshot is not matched. Promotion deliberately creates a second Release for
@@ -357,57 +581,62 @@ class KubeClient:
         If several Releases match, the newest by `metadata.creationTimestamp` is returned so
         adoption is deterministic rather than dependent on API response order.
         """
-        try:
-            result = self._api.list(
-                f"/apis/appstudio.redhat.com/v1alpha1/namespaces/{self.namespace}/releases",
-            )
+        path = f"/apis/appstudio.redhat.com/v1alpha1/namespaces/{self.namespace}/releases"
+        # Live Kubernetes is authoritative. KubeArchive is historical fallback
+        # only if live cannot provide a structurally valid collection; merging
+        # them can let an old archived Release override current live state.
+        for api in (self._api, self._ka_api):
+            if api is None:
+                continue
+            try:
+                result = api.list(path)
+            except (requests.RequestException, KeyError, TypeError, AttributeError):
+                continue
+            if not isinstance(result, dict) or not isinstance(result.get("items"), list):
+                continue
             candidates = []
-            for item in result.get("items", []):
+            for item in self._items(result):
                 spec = item.get("spec", {})
                 if spec.get("snapshot") != snapshot_name:
                     continue
                 if release_plan is not None and spec.get("releasePlan") != release_plan:
                     continue
-                released = next(
-                    (c for c in item.get("status", {}).get("conditions", []) if c.get("type") == "Released"),
-                    None,
-                )
-                # Skip terminally failed releases so a new one gets created
-                if released and released.get("status") == "False" and released.get("reason") != "Progressing":
-                    continue
                 candidates.append(item)
-            if not candidates:
-                return None
-            newest = max(candidates, key=lambda item: item.get("metadata", {}).get("creationTimestamp", ""))
-            return newest["metadata"]["name"]
-        except (requests.RequestException, KeyError):
-            return None
+            if candidates:
+                newest = max(candidates, key=lambda item: item.get("metadata", {}).get("creationTimestamp", ""))
+                name = newest.get("metadata", {}).get("name")
+                if isinstance(name, str) and name:
+                    return ReleaseLookup(ReleaseLookupState.FOUND, name)
+                return ReleaseLookup(ReleaseLookupState.UNKNOWN)
+            return ReleaseLookup(ReleaseLookupState.CONFIRMED_EMPTY)
+        return ReleaseLookup(ReleaseLookupState.UNKNOWN)
 
     def get_release_status(self, release_name: str) -> Literal["True", "False", "Unknown"] | None:
-        """Get the effective status of the 'Released' condition.
-
-        Returns "True" on success, "False" on terminal failure, "Unknown" while still progressing,
-        and None if the Release object itself cannot be fetched.
-
-        The Released condition starts as False/Progressing while in flight, so we only treat
-        False as a failure when the reason is not "Progressing".
-        """
-        try:
-            data = self._api.get(
-                f"/apis/appstudio.redhat.com/v1alpha1/namespaces/{self.namespace}/releases/{release_name}",
-            )
-            released = next(
-                (c for c in data.get("status", {}).get("conditions", []) if c.get("type") == "Released"),
-                None,
-            )
-            if released is None:
+        """Get the effective Released condition from live Kubernetes or archive."""
+        path = f"/apis/appstudio.redhat.com/v1alpha1/namespaces/{self.namespace}/releases/{release_name}"
+        for api in (self._api, self._ka_api):
+            if api is None:
+                continue
+            try:
+                data = api.get(path)
+                resource = self._resource(data)
+                if resource is None and isinstance(data, dict) and "status" in data:
+                    resource = data
+                if resource is None:
+                    continue
+                released = next(
+                    (c for c in resource.get("status", {}).get("conditions", []) if c.get("type") == "Released"),
+                    None,
+                )
+                if released is None:
+                    return "Unknown"
+                status = released.get("status", "")
+                reason = released.get("reason", "")
+                if status == "True":
+                    return "True"
+                if status == "False" and reason != "Progressing":
+                    return "False"
                 return "Unknown"
-            status = released.get("status", "")
-            reason = released.get("reason", "")
-            if status == "True":
-                return "True"
-            if status == "False" and reason != "Progressing":
-                return "False"
-            return "Unknown"
-        except requests.RequestException:
-            return None
+            except (requests.RequestException, KeyError, TypeError, AttributeError):
+                continue
+        return None

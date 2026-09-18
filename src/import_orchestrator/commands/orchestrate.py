@@ -51,12 +51,19 @@ def run_orchestrate(args: argparse.Namespace, empty_db_warning: str) -> int:
             build_pipelinerun=lambda ref: eco.build_pipelinerun(ref, args),
             max_parallel=args.max_parallel,
             max_retries=args.max_retries,
+            force_import=getattr(args, "force_import", False),
+            expected_application=getattr(eco, "snapshot_application", lambda a: None)(args),
+            import_snapshot_resolver=getattr(eco, "import_snapshot_resolver", False),
         )
         target = getattr(args, "target", None)
         skip_release = target is not None and getattr(eco, "target_skip_release", lambda t: False)(target)
         pipeline_monitor = PipelineMonitor(db=db, kube=kube, skip_release=skip_release)
         release_monitor = ReleaseMonitor(
-            db=db, kube=kube, max_parallel=args.max_parallel, prefix=eco.pipelinerun_prefix
+            db=db,
+            kube=kube,
+            max_parallel=args.max_parallel,
+            prefix=eco.pipelinerun_prefix,
+            release_plan=getattr(args, "release_plan", None),
         )
 
         orchestrator = ImportOrchestrator(

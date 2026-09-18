@@ -35,6 +35,12 @@ class JavaEcosystem:
     default_db_path = config.JAVA_DEFAULT_DB_PATH
     pipelinerun_prefix = config.PIPELINERUN_PREFIX
     namespace = NAMESPACE
+    # Java components are shared across sources. Only a completed import
+    # PipelineRun whose SOURCE_IMAGE matches may authorize Snapshot reuse.
+    import_snapshot_resolver = True
+
+    def snapshot_application(self, args: argparse.Namespace) -> str:
+        return config.ARTIFACT_CONFIGS[getattr(args, "artifact_type", "STAGE")]["app"]
 
     def build_pipelinerun(self, ref: str, args: argparse.Namespace) -> dict:
         artifact_type = getattr(args, "artifact_type", "STAGE")
@@ -61,6 +67,7 @@ class JavaEcosystem:
         from import_orchestrator.ecosystems.java.commands import (
             import_manifest,
             orchestrate,
+            release,
             run,
             trigger,
         )
@@ -70,6 +77,7 @@ class JavaEcosystem:
         import_file.register(eco_sub, self)
         import_manifest.register(eco_sub, self)
         orchestrate.register(eco_sub, self)
+        release.register(eco_sub, self)
         run.register(eco_sub, self)
         trigger.register(eco_sub, self)
         eco_parser.set_defaults(_ecosystem_parser=eco_parser)

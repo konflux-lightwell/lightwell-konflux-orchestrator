@@ -21,154 +21,436 @@ from datetime import datetime
 
 from import_orchestrator.clients import KubeClient
 from import_orchestrator.database import ImportDatabase
-from import_orchestrator.models import ImportItem, ImportStatus
-from import_orchestrator.utils import extract_tag
+from import_orchestrator.models import ImportItem, ImportStatus, ReleaseLookup, ReleaseLookupState
+
+
+class ReleasePrimitive:
+    """The single release reconciliation primitive used by every command.
+
+    Core Invariants:
+    1. Fail-closed on ambiguity: UNKNOWN or unconfirmed lookup outcomes never authorize Release creation.
+    2. Dynamic plan discovery: ReleasePlan resolution defaults to dynamic application/snapshot derivation
+       unless explicitly overridden by the operator.
+    3. Retryable releases: A failed Release attempt retires only its pointer (after checking replacement admission
+       capacity); it does not terminally fail the completed Snapshot import.
+    4. Anti-duplication gate: `release_creation_pending` and atomic SQLite slot claims prevent racing workers
+       from creating duplicate Releases after ambiguous remote creations.
+    5. Single shared budget: Global concurrency is shared across active imports and releases without self-deadlock.
+    """
+
+    def __init__(self, db: ImportDatabase, kube: KubeClient, prefix: str, max_parallel: int):
+        if max_parallel <= 0:
+            raise ValueError("max_parallel must be positive")
+        self.db, self.kube, self.prefix, self.max_parallel = db, kube, prefix, max_parallel
+
+    def snapshot(self, item: ImportItem, *, dry_run: bool = False) -> str | None:
+        if item.snapshot_name:
+            return item.snapshot_name
+        if not item.pipelinerun_name or item.id is None:
+            return None
+        name = self.kube.find_snapshot_by_pipelinerun(item.pipelinerun_name)
+        if name and not dry_run:
+            self.db.update_status(item.id, ImportStatus.AWAITING_RELEASE, snapshot_name=name)
+        return name
+
+    def reconcile_tracked(self, item: ImportItem, *, dry_run: bool = False) -> bool | None:
+        """Reconcile a persisted Release pointer without requiring its Snapshot.
+
+        Returns ``None`` when there is no tracked Release.  A failed Release is
+        retired only after admission for its replacement has been checked; the
+        caller can then perform Snapshot validation and retry creation.
+        """
+        if item.id is None or not item.release_name:
+            return None
+        if dry_run:
+            return self._record(item, item.release_name, dry_run=True)
+
+        release = item.release_name
+        status = self.kube.get_release_status(release)
+        if status == "True":
+            self.db.update_status(
+                item.id,
+                ImportStatus.SUCCESS,
+                release_name=release,
+                completed_at=datetime.now(),
+                clear_error_message=True,
+            )
+            return True
+        if status not in ("False",):
+            return False
+
+        in_flight = self.db.count_in_flight()
+        if item.status is ImportStatus.AWAITING_RELEASE:
+            in_flight = max(0, in_flight - 1)
+        if in_flight >= self.max_parallel:
+            print(
+                f"Release deferred for {item.ref}: capacity full ({in_flight}/{self.max_parallel})",
+                file=sys.stderr,
+            )
+            return False
+        self.db.update_status(
+            item.id,
+            ImportStatus.AWAITING_RELEASE,
+            release_name="",
+            error_message=f"Release {release} failed; retrying with a new Release",
+        )
+        item.release_name = None
+        return False
+
+    def reconcile(self, item: ImportItem, *, plan: str | None = None, dry_run: bool = False) -> bool:
+        """Adopt, create, and poll one Release. No PipelineRun operation is possible here."""
+        if item.id is None:
+            return False
+        snapshot = self.snapshot(item, dry_run=dry_run)
+        if not snapshot:
+            return False
+        # Persist the selected plan before the remote operation so a restart can
+        # reconcile an in-flight creation without guessing a different plan.
+        selected_plan = plan or item.release_plan
+        if not selected_plan and not item.release_name:
+            discovered_plan = self.kube.find_release_plan_for_snapshot(snapshot)
+            if isinstance(discovered_plan, str) and discovered_plan:
+                selected_plan = discovered_plan
+        # Normal orchestration can adopt any existing release before selecting a
+        # plan. Explicit promotion/release-only paths remain plan-scoped.
+        # KubeClient's typed lookup is authoritative, including when the
+        # production client is used directly (rather than through a subclass).
+        # Check the adapter interface itself; never infer behavior from module
+        # names or test doubles.  Adapters that genuinely do not expose this
+        # method use the conservative name-only compatibility path below.
+        lookup = None
+        typed_lookup_fn = getattr(self.kube, "lookup_release_for_snapshot", None)
+        if item.release_name and not dry_run:
+            # A persisted pointer is already plan-scoped from its creation; poll it
+            # directly rather than allowing an untyped compatibility adapter to turn
+            # a valid pointer into UNKNOWN.
+            lookup = ReleaseLookup(ReleaseLookupState.CONFIRMED_EMPTY)
+        elif callable(typed_lookup_fn):
+            result = typed_lookup_fn(snapshot, selected_plan)
+            if isinstance(result, ReleaseLookup):
+                lookup = result
+            elif not callable(getattr(type(self.kube), "lookup_release_for_snapshot", None)):
+                # Dynamic adapter without class-level typed method implementation;
+                # fall back to compatibility lookup.
+                lookup = None
+            else:
+                return False
+
+        if lookup is None:
+            # Legacy adapters cannot distinguish an empty result from an API
+            # failure, so a missing name is always UNKNOWN unless a name is found.
+            name = (
+                self.kube.find_release_for_snapshot_and_plan(snapshot, selected_plan)
+                if selected_plan
+                else self.kube.find_release_for_snapshot(snapshot)
+            )
+            if selected_plan and not isinstance(name, (str, type(None))):
+                legacy_name = self.kube.find_release_for_snapshot(snapshot)
+                name = legacy_name if isinstance(legacy_name, str) else None
+            lookup = (
+                ReleaseLookup(ReleaseLookupState.FOUND, name)
+                if isinstance(name, str) and name
+                else ReleaseLookup(ReleaseLookupState.UNKNOWN)
+            )
+        existing = lookup.name
+        if lookup.state is ReleaseLookupState.UNKNOWN:
+            return False
+        # A cached pointer remains useful for monitoring, but only after a live
+        # status check; terminal failure explicitly retires it below.
+        if existing is None and item.release_name:
+            cached_status = self.kube.get_release_status(item.release_name)
+            if cached_status in ("True", "Unknown"):
+                existing = item.release_name
+            elif cached_status == "False":
+                # Retire only after all replacement preconditions include
+                # admission.  A failed row is not counted in the shared budget;
+                # therefore do not subtract the current item here.
+                in_flight = self.db.count_in_flight()
+                if item.status is ImportStatus.AWAITING_RELEASE:
+                    in_flight = max(0, in_flight - 1)
+                if in_flight >= self.max_parallel:
+                    print(
+                        f"Release deferred for {item.ref}: capacity full ({in_flight}/{self.max_parallel})",
+                        file=sys.stderr,
+                    )
+                    return False
+                # Retire only the active pointer.  A failed Release is an attempt,
+                # not a terminal import failure: the same completed Snapshot may
+                # be promoted by a distinct replacement Release.
+                if not dry_run:
+                    self.db.update_status(
+                        item.id,
+                        ImportStatus.AWAITING_RELEASE,
+                        release_name="",
+                        error_message=f"Release {item.release_name} failed; retrying with a new Release",
+                    )
+                item.release_name = None
+            elif cached_status is None:
+                return False
+        if existing is not None:
+            # A discovered Release may itself be terminally failed. Retire only
+            # the pointer and continue to create a distinct replacement; never
+            # turn the import permanently ineligible or overwrite its attempts.
+            existing_status = self.kube.get_release_status(existing)
+            if existing_status == "False":
+                # Admission must precede retiring the failed pointer.  In
+                # particular, a full shared budget must not leave this row in
+                # releasing with no release to monitor.
+                in_flight = self.db.count_in_flight()
+                if item.status is ImportStatus.AWAITING_RELEASE:
+                    in_flight = max(0, in_flight - 1)
+                if in_flight >= self.max_parallel:
+                    print(
+                        f"Release deferred for {item.ref}: capacity full ({in_flight}/{self.max_parallel})",
+                        file=sys.stderr,
+                    )
+                    return False
+                if not dry_run:
+                    self.db.update_status(
+                        item.id,
+                        ImportStatus.AWAITING_RELEASE,
+                        release_name="",
+                        error_message=f"Release {existing} failed; retrying with a new Release",
+                    )
+                item.release_name = None
+                existing = None
+            elif existing_status is None:
+                return False
+        if existing is None and item.release_creation_pending:
+            # An ambiguous create is blocked indefinitely until an observed Release
+            # is adopted or an explicit operator policy clears the marker.
+            return False
+        # Existing Releases are monitoring/adoption and do not consume admission
+        # capacity. Only a genuinely new Release is subject to max_parallel.
+        # The current row is already marked ``releasing`` while it is reconciled;
+        # exclude that row from the budget so max_parallel=1 cannot self-deadlock.
+        if not existing:
+            in_flight = self.db.count_in_flight()
+            if item.status is ImportStatus.AWAITING_RELEASE:
+                in_flight = max(0, in_flight - 1)
+            if in_flight >= self.max_parallel:
+                print(
+                    f"Release deferred for {item.ref}: capacity full ({in_flight}/{self.max_parallel})",
+                    file=sys.stderr,
+                )
+                return False
+        selected = selected_plan or (None if existing else self.kube.find_release_plan_for_snapshot(snapshot))
+        if not isinstance(selected, str) or not selected:
+            selected = None
+        if not existing and not selected:
+            return False
+        if selected != item.release_plan and not dry_run:
+            self.db.update_status(item.id, ImportStatus.AWAITING_RELEASE, release_plan=selected)
+            item.release_plan = selected
+        # A cached name can be stale.  Only rediscovery is authoritative; API errors
+        # are treated as unknown and never immediately followed by a duplicate create.
+        if existing is None and item.release_name:
+            status = self.kube.get_release_status(item.release_name)
+            if status is None:
+                return False
+            # A terminally failed prior attempt is deliberately not active: clear
+            # its cached name and create a distinct retry after the plan lookup.
+            if status == "False":
+                self.db.update_status(item.id, ImportStatus.AWAITING_RELEASE, release_name="")
+                item.release_name = None
+            else:
+                return False
+        if existing:
+            adopted = item.release_name != existing
+            if not dry_run:
+                self.db.update_status(
+                    item.id,
+                    ImportStatus.AWAITING_RELEASE,
+                    release_name=existing,
+                    release_creation_pending=False,
+                )
+                item.release_name = existing
+                item.release_creation_pending = False
+            return self._record(item, existing, dry_run, adopted=adopted)
+        if dry_run:
+            print(f"Would create Release for {snapshot} via {selected}", file=sys.stderr)
+            return True
+        if not self.db.claim_release_slot(item.id, self.max_parallel):
+            print(f"Release capacity full ({self.db.count_in_flight()}/{self.max_parallel})", file=sys.stderr)
+            return False
+        attempt = self.db.start_release_attempt(item.id, snapshot, item.pipelinerun_name)
+        self.db.update_status(item.id, ImportStatus.AWAITING_RELEASE, release_creation_pending=True)
+        try:
+            release = self.kube.create_release(snapshot, selected, self.prefix)
+        except Exception as exc:  # remote call may have succeeded before transport failure
+            release = None
+            error = f"Release creation ambiguous: {exc}"
+        else:
+            error = "Release creation failed or API error"
+        if not isinstance(release, str) or not release:
+            # A lost response must not cause a second Release.  Never retry from an
+            # API-unknown lookup; the client returns None for both unknown/not-found,
+            # so leave the marker set and recover on the next poll.
+            recovery = None
+            if callable(typed_lookup_fn):
+                result = typed_lookup_fn(snapshot, selected)
+                if isinstance(result, ReleaseLookup):
+                    recovery = result
+            if recovery is None:
+                recovered_name = self.kube.find_release_for_snapshot_and_plan(snapshot, selected)
+                # A legacy name-only lookup cannot prove the collection is
+                # empty: None may represent an API failure. Preserve ambiguity.
+                recovery = (
+                    ReleaseLookup(ReleaseLookupState.FOUND, recovered_name)
+                    if isinstance(recovered_name, str) and recovered_name
+                    else ReleaseLookup(ReleaseLookupState.UNKNOWN)
+                )
+            recovered = recovery.name
+            if recovery.state is ReleaseLookupState.FOUND and recovered:
+                self.db.finish_release_attempt(attempt, "adopted", release=recovered)
+                self.db.update_status(
+                    item.id, ImportStatus.AWAITING_RELEASE, release_name=recovered, release_creation_pending=False
+                )
+                return True
+            # Every non-FOUND result remains ambiguous after create. Even a
+            # confirmed-empty collection may be stale during eventual
+            # consistency, so retain the marker and never authorize a retry.
+            # Record it as unknown rather than a terminal failed attempt.
+            self.db.finish_release_attempt(attempt, "unknown", error=error)
+            return False
+        self.db.finish_release_attempt(attempt, "created", release=release)
+        self.db.update_status(
+            item.id, ImportStatus.AWAITING_RELEASE, release_name=release, release_creation_pending=False
+        )
+        item.release_name = release
+        return True
+
+    def _record(self, item: ImportItem, release: str, dry_run: bool, *, adopted: bool = False) -> bool:
+        if dry_run:
+            print(f"Would adopt release/{release} for {item.ref}", file=sys.stderr)
+            return True
+        status = self.kube.get_release_status(release)
+        # Adoption is an actual lifecycle event; repeated observations of the
+        # already-selected Release are not new attempts.
+        attempt = (
+            self.db.start_release_attempt(item.id, item.snapshot_name or "", item.pipelinerun_name) if adopted else None
+        )
+        if status == "True":
+            if attempt is not None:
+                self.db.finish_release_attempt(attempt, "success", release=release)
+            self.db.update_status(
+                item.id,
+                ImportStatus.SUCCESS,
+                release_name=release,
+                completed_at=datetime.now(),
+                clear_error_message=True,
+            )
+        elif status == "False":
+            if attempt is not None:
+                self.db.finish_release_attempt(attempt, "failed", release=release, error=f"Release {release} failed")
+            # A Release is a retryable attempt for an already completed import.
+            # Retire its pointer; the next reconciliation creates/adopts a new
+            # Release for this same Snapshot rather than retriggering an import.
+            self.db.update_status(
+                item.id,
+                ImportStatus.AWAITING_RELEASE,
+                release_name="",
+                error_message=f"Release {release} failed; retrying with a new Release",
+            )
+            item.release_name = None
+        elif status is None:
+            if attempt is not None:
+                self.db.finish_release_attempt(attempt, "unknown", release=release, error="Release lookup failed")
+            return False
+        else:
+            if attempt is not None:
+                self.db.finish_release_attempt(attempt, "progressing", release=release)
+            self.db.update_status(item.id, ImportStatus.AWAITING_RELEASE, release_name=release)
+        return True
+
+    def promote_snapshot(self, snapshot: str, plan: str) -> tuple[str | None, bool]:
+        """Adopt or create one explicitly planned Release (Python promotion path).
+
+        When backed by an ``ImportDatabase``, persist an ambiguous create before
+        contacting Kubernetes. A restarted command then recovers by scoped
+        lookup and cannot issue a duplicate create when the original response
+        was lost.
+        """
+        if not snapshot or not plan:
+            return None, False
+        state = self.db.get_promotion_release(snapshot, plan) if isinstance(self.db, ImportDatabase) else None
+        if state and state[0]:
+            return state[0], True
+
+        lookup_fn = getattr(self.kube, "lookup_release_for_snapshot", None)
+        lookup = None
+        typed_lookup = callable(lookup_fn) and callable(getattr(type(self.kube), "lookup_release_for_snapshot", None))
+        if typed_lookup:
+            result = lookup_fn(snapshot, plan)
+            if isinstance(result, ReleaseLookup):
+                lookup = result
+        if lookup is None:
+            # Compatibility adapters cannot prove an empty collection, so a
+            # missing result is conservatively UNKNOWN; a returned name is safe.
+            existing = self.kube.find_release_for_snapshot_and_plan(snapshot, plan)
+            lookup = (
+                ReleaseLookup(ReleaseLookupState.FOUND, existing)
+                if isinstance(existing, str) and existing
+                else ReleaseLookup(ReleaseLookupState.CONFIRMED_EMPTY)
+                if not typed_lookup
+                else ReleaseLookup(ReleaseLookupState.UNKNOWN)
+            )
+        if lookup is not None and lookup.state is ReleaseLookupState.FOUND and lookup.name:
+            if isinstance(self.db, ImportDatabase):
+                self.db.save_promotion_release(snapshot, plan, lookup.name, False)
+            return lookup.name, True
+        if lookup is None or lookup.state is ReleaseLookupState.UNKNOWN:
+            return None, False
+        # A previous create without a saved name is ambiguous even if the first
+        # recovery list is presently empty (eventual consistency). Never retry it.
+        if state and state[1]:
+            return None, False
+        if isinstance(self.db, ImportDatabase):
+            # The marker is claimed under BEGIN IMMEDIATE before the remote call.
+            # Checking then saving would permit two independent CLI processes to
+            # both observe an empty row and both create a Release.
+            owns_create, claimed_state = self.db.claim_promotion_release_creation(snapshot, plan)
+            if not owns_create:
+                if claimed_state and claimed_state[0]:
+                    return claimed_state[0], True
+                return None, False
+        try:
+            created = self.kube.create_release(snapshot, plan, self.prefix)
+        except Exception:
+            created = None
+        if isinstance(created, str) and created:
+            if isinstance(self.db, ImportDatabase):
+                self.db.save_promotion_release(snapshot, plan, created, False)
+            return created, False
+        return None, False
 
 
 class ReleaseMonitor:
-    """Manages the release lifecycle for completed PipelineRuns.
+    """Reconciles releases for normal orchestration using ReleasePrimitive."""
 
-    Discovers snapshots, finds or creates releases, and tracks release status
-    to manage the AWAITING_RELEASE -> SUCCESS/FAILED transitions.
-    """
-
-    def __init__(self, db: ImportDatabase, kube: KubeClient, max_parallel: int, prefix: str):
-        self.db = db
-        self.kube = kube
-        self.max_parallel = max_parallel
-        self.prefix = prefix
+    def __init__(
+        self,
+        db: ImportDatabase,
+        kube: KubeClient,
+        max_parallel: int,
+        prefix: str,
+        release_plan: str | None = None,
+    ):
+        self.primitive = ReleasePrimitive(db, kube, prefix, max_parallel)
+        self.db, self.kube, self.max_parallel, self.prefix = db, kube, max_parallel, prefix
+        self.release_plan = release_plan
 
     def update_statuses(self) -> None:
-        """For AWAITING_RELEASE imports, find the Release and check its status."""
-        releasing = self.db.get_by_status(ImportStatus.AWAITING_RELEASE)
+        for item in self.db.get_by_status(ImportStatus.AWAITING_RELEASE):
+            self.primitive.reconcile(item, plan=self.release_plan)
 
-        # Count how many releases are already actively tracked this cycle.
-        # Only create new releases up to max_parallel to avoid flooding the release pipeline.
-        active_releases = sum(1 for r in releasing if r.release_name)
+    # Kept as compatibility helpers for integrations/tests that used the old monitor API.
+    def _discover_snapshot(self, item, tag):
+        return self.primitive.snapshot(item) is not None
 
-        for item in releasing:
-            if item.id is None or not item.pipelinerun_name:
-                continue
+    def _find_or_create_release(self, item, tag, can_create=True):
+        self.primitive.reconcile(item)
+        return item.release_name
 
-            tag = extract_tag(item.ref)
-
-            # Step 1: Discover snapshot if not yet cached
-            if item.snapshot_name is None or item.snapshot_name == "":
-                if self._discover_snapshot(item, tag):
-                    continue  # Snapshot found and cached, check for release next poll
-                else:
-                    continue  # Snapshot not found, skip this cycle
-
-            # Step 2: Find or create a release if not yet cached
-            if item.release_name is None or item.release_name == "":
-                can_create = active_releases < self.max_parallel
-                release_name = self._find_or_create_release(item, tag, can_create)
-                if release_name:
-                    active_releases += 1
-                    # Release just created/found, wait for next poll to check status
-                    continue
-                else:
-                    continue  # Will retry next poll
-
-            # Step 3: Check release completion status
-            self._check_release_completion(item, tag)
-
-    def _discover_snapshot(self, item: ImportItem, tag: str) -> bool:
-        """Discover and cache the snapshot for a PipelineRun.
-
-        Returns:
-            True if snapshot was found and cached (caller should continue to next iteration),
-            False if snapshot discovery failed (caller should skip this item this cycle).
-        """
-        assert item.id is not None
-        assert item.pipelinerun_name is not None
-
-        # Konflux Integration Service always sets the build-pipelinerun label
-        snapshot_name = self.kube.find_snapshot_by_pipelinerun(item.pipelinerun_name)
-        if not snapshot_name:
-            print(f"  Waiting for snapshot for {tag}...", file=sys.stderr)
-            return False
-
-        # Cache snapshot_name; check for a release next poll to give Integration Service time
-        self.db.update_status(item.id, ImportStatus.AWAITING_RELEASE, snapshot_name=snapshot_name)
-        print(
-            f"  Found snapshot {snapshot_name} for {tag}, checking for release next poll",
-            file=sys.stderr,
-        )
-        return True
-
-    def _find_or_create_release(self, item: ImportItem, tag: str, can_create: bool) -> str | None:
-        """Find an existing release or create a new one for the snapshot.
-
-        Args:
-            item: The import item with a cached snapshot_name.
-            tag: The extracted tag for logging.
-            can_create: Whether we're allowed to create a new release (respects max_parallel).
-
-        Returns:
-            The release name if found or created, None if creation was deferred or failed.
-        """
-        assert item.id is not None
-        assert item.snapshot_name is not None
-
-        # Check if a release already exists for this snapshot
-        release_name = self.kube.find_release_for_snapshot(item.snapshot_name)
-        if release_name:
-            self.db.update_status(item.id, ImportStatus.AWAITING_RELEASE, release_name=release_name)
-            print(f"  Tracking release/{release_name} ({tag})", file=sys.stderr)
-            return release_name
-
-        # No existing release - need to create one
-        if not can_create:
-            active_count = sum(1 for r in self.db.get_by_status(ImportStatus.AWAITING_RELEASE) if r.release_name)
-            print(
-                f"  Release capacity full ({active_count}/{self.max_parallel}), deferring {tag}",
-                file=sys.stderr,
-            )
-            return None
-
-        # Find the ReleasePlan for this snapshot
-        release_plan = self.kube.find_release_plan_for_snapshot(item.snapshot_name)
-        if not release_plan:
-            print(f"  No ReleasePlan found for {item.snapshot_name} ({tag}), will retry", file=sys.stderr)
-            return None
-
-        # Create the release
-        print(
-            f"  No release found for {item.snapshot_name}, creating via {release_plan} ({tag})...",
-            file=sys.stderr,
-        )
-        release_name = self.kube.create_release(item.snapshot_name, release_plan, self.prefix)
-
-        if not release_name:
-            print(f"  Failed to create release for {item.snapshot_name} ({tag}), will retry", file=sys.stderr)
-            return None
-
-        self.db.update_status(item.id, ImportStatus.AWAITING_RELEASE, release_name=release_name)
-        print(f"  Tracking release/{release_name} ({tag})", file=sys.stderr)
-        return release_name
-
-    def _check_release_completion(self, item: ImportItem, tag: str) -> None:
-        """Poll release status and record completion or failure.
-
-        Args:
-            item: The import item with a cached release_name.
-            tag: The extracted tag for logging.
-        """
-        assert item.id is not None
-        assert item.release_name is not None
-
-        release_status = self.kube.get_release_status(item.release_name)
-        if release_status == "True":
-            self.db.update_status(item.id, ImportStatus.SUCCESS, completed_at=datetime.now())
-            print(f"  ✓ Released: {tag} (release/{item.release_name})", file=sys.stderr)
-        elif release_status == "False":
-            self.db.update_status(
-                item.id,
-                ImportStatus.FAILED,
-                completed_at=datetime.now(),
-                error_message=f"Release {item.release_name} failed",
-            )
-            print(f"  ✗ Release failed: {tag} (release/{item.release_name})", file=sys.stderr)
-        else:
-            print(f"  Waiting for release/{item.release_name} ({tag})...", file=sys.stderr)
+    def _check_release_completion(self, item, tag):
+        return self.primitive.reconcile(item)
