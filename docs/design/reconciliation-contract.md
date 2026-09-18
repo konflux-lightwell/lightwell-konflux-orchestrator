@@ -44,6 +44,8 @@ caller can then finalize; its finalization is not an orchestrator stage.
 | `operation_id` | Caller-supplied opaque identity of one logical intent, stable across invocations and restarts. |
 | `attempt_id` | Persisted identity of a stage execution; stable during polling, adoption, or uncertain-create recovery. A deliberate replacement gets a new ID. |
 | `invocation_id` | New identity for every bounded call, including observation-only calls. |
+| `ArtifactIdentity` | Immutable content digest (algorithm and value), with optional package/build coordinates; identifies content, not a resource or execution. |
+| `EvidenceReference` | Source-qualified locator for a supporting record; not artifact, resource, operation, or attempt identity. |
 | `ResourceIdentity` | Stable cluster ID, API group, kind, namespace, name, and UID. API version is observation metadata, not a different identity. |
 | `intent_fingerprint` | Versioned SHA-256 of normalized effective intent, independent of database path and invocation. |
 | `state_fingerprint` | Versioned SHA-256 of stage plus immutable resource identity, or a persisted pre-resource identifier. Stable while the same stage/resource remains current. |
@@ -61,9 +63,11 @@ with a pre-resource identifier and a completed PipelineRun in lineage.
 Intent includes the target scope, ecosystem, immutable source/build inputs,
 pipeline/template revision and effective parameters, requested goal, selected
 ReleasePlan identity and revision, and retry/adoption policy. Persist requested
-and resolved values and defaults. Tags or package versions alone do not establish
-content equivalence. Release creation additionally binds the verified Snapshot UID
-and component digests in its durable create intent. Missing required resolution
+and resolved effective intent, including defaults, not just fingerprints or input
+subsets. Freeze resolved values before side effects; source changes or newly
+available evidence cannot silently re-resolve them. Tags or package versions alone
+do not establish content equivalence. Release creation additionally binds the
+verified Snapshot UID and component digests in its durable create intent. Missing required resolution
 prevents side effects: return `unknown` for unavailable evidence or `blocked` for
 a known unsatisfied prerequisite. Never silently change intent on restart. Reusing
 an operation ID with different intent is a conflict; changed goals/inputs/plans
@@ -107,7 +111,9 @@ A failed attempt can coexist with a pending operation. An import-only goal can
 succeed at `pipelinerun`; a release goal cannot succeed there. Budget expiry and
 cancellation describe the invocation, not remote failure. On unknown observations,
 retain the last confirmed state, observation time, and evidence source separately;
-do not present stale evidence as fresh success. Known running conditions are
+do not present stale evidence as fresh success. Completion requires authoritative
+evidence bound to the exact goal, intent, resource identities, and required outputs,
+not merely a confidence score or an evidence reference. Known running conditions are
 pending, whereas an API lookup error is unknown.
 
 Record typed resource references and verified edges, including source/build
@@ -115,7 +121,16 @@ identity, Snapshot component digests, ReleasePlan identity/revision, and output
 locations/digests. Evidence comes from structured API fields, owner references,
 validated correlation metadata and content, or authoritative archive records,
 never log parsing or naming conventions. Archive absence does not prove live
-absence. Explicit Snapshot entry may have unavailable upstream PipelineRun
+absence. Optional external evidence may support discovery or verification, but is
+not required for standalone operation using authoritative Konflux observations.
+Qualify each claim by source, subject identity, provenance, freshness, and authority;
+record unavailable or conflicting evidence without replacing last confirmed facts.
+Stale, empty, or conflicting evidence cannot prove absence or success, authorize
+a duplicate create, or override frozen intent. Missing optional evidence alone
+need not prevent progress when authoritative evidence is sufficient; otherwise
+return `unknown` and retain candidates/conflicts for reconciliation.
+
+Explicit Snapshot entry may have unavailable upstream PipelineRun
 lineage; record that gap and enforce the requested adoption policy, rather than
 fabricating an edge. Retain all failed/replaced attempts and their lineage. Distinguish
 multiple Releases by exact Snapshot, plan, and attempt, not newest name or timestamp.
@@ -125,9 +140,18 @@ multiple Releases by exact Snapshot, plan, and attempt, not newest name or times
 The following is the required v1 model shape, not an available import. Named nested
 types must have published wire schemas and serialization fixtures at implementation.
 `?` means an explicit nullable field, not a silently omitted required field.
+Optional evidence metadata uses null or empty collections when unavailable; no
+external evidence source or new integration interface is required.
 
 ```text
+ArtifactIdentity = {digest: {algorithm, value}, coordinates?}
 ResourceIdentity = {cluster_id, api_group, kind, namespace, name, uid}
+EvidenceReference = {source, locator, record_digest?}
+Evidence = {source, reference?, subject, claim, observed_at,
+            provenance?, freshness?, confidence?}
+Provenance = {origin, method, derived_from: EvidenceReference[]}
+Freshness = {as_of, valid_until?, source_revision?}
+Confidence = {assessment, basis}
 Fingerprint = {profile, digest}
 OperationIntent = {operation_id, target, inputs, entry_resource?, goal,
                    pipeline_revision?, release_plan?, retry_policy, adoption_policy}
@@ -135,9 +159,10 @@ OrchestrationRequest = {schema_version: 1, intent: OperationIntent,
                         mode: execute|reconcile, budget: {max_seconds, max_actions}}
 State = {stage, outcome, reasons[], active_attempt_id?, current_resource?,
          state_identifier, state_fingerprint, status_fingerprint}
-Checkpoint = {schema_version: 1, operation_id, intent: OperationIntent,
-              requested_inputs, resolved_inputs, intent_fingerprint,
+Checkpoint = {schema_version: 1, operation_id, requested_intent: OperationIntent,
+              resolved_intent: OperationIntent?, intent_fingerprint?,
               state: State, attempts[], resources[], lineage[], outputs[],
+              artifacts: ArtifactIdentity[], evidence: Evidence[],
               unresolved_creates[], observations[], last_confirmed_state?,
               retry_counts, revision, last_event_sequence, created_at, updated_at}
 OrchestrationEvent = {schema_version: 1, record_type: status|transition,
@@ -149,7 +174,8 @@ OrchestrationResult = {schema_version: 1, record_type: result,
                        stop_reason: completed|observed|budget_exhausted|
                                     blocked|cancelled|error,
                        invocation_error?, completion?, checkpoint: Checkpoint}
-Completion = {goal, terminal_resource: ResourceIdentity, outputs[]}
+Completion = {goal, terminal_resource: ResourceIdentity, outputs[],
+              authoritative_evidence: Evidence[]}
 ```
 
 For example, a `current_resource` value is:
@@ -169,14 +195,25 @@ Attempts include their ID, stage, outcome/reasons, retry predecessor, resources,
 creation/adoption provenance, and timestamps. Unresolved creates include the attempt,
 exact target/name, normalized desired spec and its digest, lineage bindings, and
 submission/observation evidence. Observations include resource, API version, source,
-time, confidence, and structured conditions. Lineage edges identify both endpoints
-and supporting evidence; explicit gaps carry reasons. Output records include type,
-location, and immutable digest when applicable. Sensitive inputs/checkpoints need
+time, structured conditions, and optional evidence/provenance/freshness/confidence.
+Evidence subjects explicitly distinguish artifacts, resources, and operation/attempt
+IDs; claims describe what is supported, not blanket trust in a source. Provenance
+records origin and derivation; freshness records the source fact's currency (not
+just retrieval time); confidence records an assessment and its basis, never proof
+by itself. Evidence references are non-secret locators, not credentials or resume
+tokens. Retain the qualified facts needed for restore, not only external links.
+Lineage edges identify both endpoints and supporting evidence; explicit gaps carry
+reasons. Output records include type, location, and immutable digest when applicable. Sensitive inputs/checkpoints need
 operation-state access controls, and credentials are supplied separately.
 
 Persist accepted operation intent **before any remote side effect**, then persist
-resolved intent and each attempt/create intent before submission. A checkpoint is
-a complete portable snapshot of all known state, including histories and uncertain
+resolved effective intent and each attempt/create intent before submission. The
+resolved intent and its fingerprint may be null while required resolution is
+unavailable; no side effects are permitted then. Hash the frozen resolved intent,
+not optional evidence metadata or source availability. On restore, preserve both
+requested and resolved intent and revalidate their bindings; evidence-source
+changes must not substitute new defaults, artifacts, targets, or plans. A checkpoint
+is a complete portable snapshot of all known state, including histories and uncertain
 creates, not a delta or an opaque database row. Absent resources/outputs use null or
 empty collections. Loading validates schema, operation, intent, target, lineage,
 and fingerprints, then revalidates remote evidence using fresh credentials.
@@ -217,8 +254,9 @@ safe remote reconciliation cover that case.
    not yet visible. A confirmed failed attempt may get a new attempt under explicit
    retry policy; release retries retain the verified Snapshot and upstream lineage.
    Reconcile mode reports the same state without performing remote actions.
-6. Return verified completion if the goal is already met. Repeated invocations
-   must not create additional resources or repeat caller-owned finalization.
+6. Return completion only with authoritative evidence that the goal is already met.
+   Repeated invocations must not create additional resources or repeat caller-owned
+   finalization.
 
 ## Library and CLI parity
 
@@ -297,6 +335,12 @@ Implementation acceptance requires shared library/CLI conformance tests proving:
 - All five outcomes remain distinct; API outages, uncertain creates, missing
   Snapshot visibility, retry exhaustion, blocked prerequisites, and cancellation
   never produce false completion or uncontrolled duplicate resources.
+- Standalone operation without external evidence and unavailable/stale/empty/conflicting
+  evidence lookups preserve qualified facts without false absence, completion, or
+  duplicate creation; completion includes authoritative goal/output evidence.
+- Checkpoint-only restore retains requested/resolved effective intent, artifact and
+  resource identities, provenance, and evidence references; changed evidence sources
+  or defaults cannot silently alter frozen intent. Optional metadata round-trips.
 - Crash points before/after intent persistence, submission, commit, and notification
   converge safely; downstream retries retain successful upstream lineage.
 - Every controlled accepted call, including unchanged polls and callback errors,
