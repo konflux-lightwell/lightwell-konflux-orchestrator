@@ -1,213 +1,311 @@
-# Versioned reconciliation contract for CLI and library consumers
+# Generic orchestration and reconciliation contract
 
-**Status: proposal, not an implemented API.** This document defines a small shared
-contract for integrations that start work, record progress, and resume after an
-interruption without inferring state from log messages or SQLite internals.
+**Status: target design proposal, not an implemented API.** This contract defines
+what the generic library and CLI must provide to integration callers. Existing
+commands and [PR #45](https://github.com/konflux-lightwell/lightwell-konflux-orchestrator/pull/45)
+are implementation context, not the source of truth or constraints on this design;
+they may need to change to conform. This proposal changes no runtime behavior.
 
-Today, `run` waits for completion and emits an unversioned JSON object containing
-resource names and import status. Its default database is ephemeral; an explicit
-database may contain other items that affect the invocation's exit code.
-[PR #45](https://github.com/konflux-lightwell/lightwell-konflux-orchestrator/pull/45)
-proposes release-only reconciliation, adoption, and release-attempt history. This
-contract builds on those concepts without depending on that draft's implementation.
-It does not add a service, distributed scheduler, or general workflow framework.
+## Ownership and invocation model
 
-## Identity and stable fingerprints
+The caller supplies intent, persists the latest complete checkpoint and its
+fingerprints, chooses when to invoke again, and performs its own finalization.
+The orchestrator owns Konflux discovery, resource identity, execution, observation,
+and **PipelineRun → Snapshot → Release** lineage. Callers must not reconstruct
+that chain from names, parse logs, query private database tables, or implement a
+second Konflux state machine.
 
-Keep logical intent, executions, and observed Kubernetes objects distinct:
+Initially, one logical operation uses **one persistent database and one active
+orchestrator process at a time**. Repeated scheduled invocations reuse that database
+and `operation_id`; invocations are bounded and serialized, not a permanent service.
+The store must reject another operation or conflicting intent and prevent concurrent
+writers. Independent operations can later use independent processes/databases with
+the same contract; shared storage, cross-process work distribution, and scheduler
+design are out of scope. Local isolation does not prevent remote resource conflicts.
 
-| Field | Meaning |
+Each invocation chooses `execute` (observe and perform permitted actions toward the
+goal) or `reconcile` (discover, adopt into local state, and observe; no remote
+mutations). Both use the same engine, checkpoints, outcomes, and events. Switching
+mode or observation budget does not change intent. A caller can stop after any
+bounded invocation and resume from durable state, or restore a checkpoint into an
+empty persistent store and validate it before acting.
+
+In particular, a completed PipelineRun is **not** a completed release operation.
+The orchestrator must discover its Snapshot, then discover/adopt or create the
+appropriate Release, without re-importing. An operation may also start from an
+explicit existing PipelineRun or Snapshot. If the requested Release is already
+successful, return a completion result and outputs without creating anything. The
+caller can then finalize; its finalization is not an orchestrator stage.
+
+## Identity and fingerprints
+
+| Field | Contract |
 | --- | --- |
-| `operation_id` | Caller-supplied opaque ID, persisted before side effects and reused across invocations for one logical request. |
-| `invocation_id` | Unique ID for each bounded CLI call or library call, including read-only reconciliation. |
-| `attempt_id` | Persisted ID for one import or release attempt; unchanged when an uncertain create is retried or adopted. A deliberate replacement gets a new ID. |
-| `resource` | Cluster identity, API group/version, kind, namespace, name, and UID when observed; names alone are not globally unique. |
-| `intent_fingerprint` | Versioned SHA-256 hash of the normalized effective request, independent of process or database location. |
-| `status_fingerprint` | Versioned SHA-256 hash of normalized semantic state, used to detect meaningful changes. |
+| `operation_id` | Caller-supplied opaque identity of one logical intent, stable across invocations and restarts. |
+| `attempt_id` | Persisted identity of a stage execution; stable during polling, adoption, or uncertain-create recovery. A deliberate replacement gets a new ID. |
+| `invocation_id` | New identity for every bounded call, including observation-only calls. |
+| `ResourceIdentity` | Stable cluster ID, API group, kind, namespace, name, and UID. API version is observation metadata, not a different identity. |
+| `intent_fingerprint` | Versioned SHA-256 of normalized effective intent, independent of database path and invocation. |
+| `state_fingerprint` | Versioned SHA-256 of stage plus immutable resource identity, or a persisted pre-resource identifier. Stable while the same stage/resource remains current. |
+| `status_fingerprint` | Versioned SHA-256 of semantic status, including state fingerprint, outcome, stable reason codes, attempts, lineage, and output digests. |
 
-The intent includes ecosystem, immutable source/build inputs, target cluster and
-namespace, pipeline/template revision and effective parameters, requested terminal
-stage, and selected release policy/ReleasePlan identity and revision. Resolve
-mutable references where possible and retain both requested and resolved values;
-a package version or tag alone is not proof of equivalent content. If required
-inputs cannot be resolved, report `unknown` rather than claim safe reuse.
-A release-attempt fingerprint also binds the exact Snapshot UID/component digests
-and ReleasePlan. Persist resolved defaults so a restart cannot silently change them.
+A cluster ID must survive kubeconfig/context renaming and distinguish clusters;
+a URL or context alias alone is not sufficient. A same-name object with a new UID
+is a different resource. Before a resource is observed, use the tagged identifier
+`{operation_id, attempt_id}` (`attempt_id: null` before allocating an attempt),
+never a guessed name or fabricated UID. Namespace is null for cluster-scoped
+resources; UID is required for observed resource identity. Binding a verified
+resource changes the state fingerprint. Waiting for a Snapshot can therefore have stage `snapshot`
+with a pre-resource identifier and a completed PipelineRun in lineage.
 
-Before v1 ships, each fingerprint profile must specify its input fields,
-normalization (including nulls and unordered collections), and canonical JSON
-encoding. Include the profile version in the hash input and expose it alongside
-the digest. Exclude timestamps, poll counters, resource versions, transient error
-text, credentials, and log messages from semantic status hashes. Status hashes
-include resource identities, outcomes, lineage, stable reason codes, and output
-digests. Do not hash credentials into intent or expose them in records. The same
-`operation_id` with a different intent fingerprint is a conflict, not an update;
-intentional changed inputs or promotion to another plan require a new operation.
-Fingerprints express equivalence, not authorization or proof of ownership.
+Intent includes the target scope, ecosystem, immutable source/build inputs,
+pipeline/template revision and effective parameters, requested goal, selected
+ReleasePlan identity and revision, and retry/adoption policy. Persist requested
+and resolved values and defaults. Tags or package versions alone do not establish
+content equivalence. Release creation additionally binds the verified Snapshot UID
+and component digests in its durable create intent. Missing required resolution
+prevents side effects: return `unknown` for unavailable evidence or `blocked` for
+a known unsatisfied prerequisite. Never silently change intent on restart. Reusing
+an operation ID with different intent is a conflict; changed goals/inputs/plans
+require a new operation, which can explicitly adopt verified prior resources.
 
-## Outcomes and lineage
+Each fingerprint is `{profile, digest}`; profiles specify exact input fields and
+normalization and ship canonical test vectors. Use canonical JSON (RFC 8785),
+include the profile in hash input, distinguish null from empty values, and sort
+set-like collections by stable identity while preserving ordered parameters.
+Exclude credentials from all records and hashes; exclude observation timestamps,
+poll counts, resource versions, free-text messages, and logs from state/status
+hashes. Profiles are versioned independently; do not compare unlike profiles as
+equivalent. Fingerprints are neither authorization nor ownership proof.
 
-Every operation and attempt has an `outcome`, a stage (`import`, `snapshot`, or
-`release`), and a structured reason with a stable code and human-readable message.
+For example, with a fixed intent and Release UID:
 
-| Outcome | Interpretation |
+| Observation | State fingerprint | Status fingerprint | Notification |
+| --- | --- | --- | --- |
+| Release progressing | `state-v1:A` | `status-v1:B` | Transition with complete checkpoint |
+| Same Release, progress message refreshed | `state-v1:A` | `status-v1:B` | Status update allowed, no transition required |
+| Same Release succeeds | `state-v1:A` | `status-v1:C` | Transition and completion result |
+| Replacement Release has new UID | `state-v1:D` | `status-v1:E` | Transition; retain prior attempt/lineage |
+
+Letters above abbreviate digests. A state fingerprint alone is not a resume token:
+callers persist the complete checkpoint even when that fingerprint is unchanged.
+
+## Outcomes and evidence
+
+Stages are `pipelinerun`, `snapshot`, and `release`. Each operation and attempt
+has a separate outcome and structured reasons (`code`, human-readable `message`).
+
+| Outcome | Meaning |
 | --- | --- |
-| `pending` | Accepted but not started, known progressing, or waiting for a retry allowed by policy. Not terminal. |
-| `unknown` | Available evidence cannot establish current state: unavailable API, ambiguous lookup/create, or missing lineage. Not terminal and not permission to retry a create. |
-| `failed` | Confirmed terminal failure. An operation fails only when the requested goal cannot be reached under its retry policy. |
-| `succeeded` | Positive evidence that the requested terminal stage completed successfully, with the required outputs recorded. |
+| `pending` | Known progressing, accepted but not started, or waiting for an allowed retry. |
+| `succeeded` | Positive evidence that the requested goal completed with required outputs. |
+| `failed` | Confirmed terminal failure; the operation cannot reach its goal under its retry policy. |
+| `blocked` | Known prerequisite, policy, or configuration prevents progress and requires intervention; not a failed remote execution. |
+| `unknown` | Insufficient or conflicting evidence, such as API outage, ambiguous create/matches, or unverifiable lineage. Not permission to create again. |
 
-A failed attempt can coexist with a pending operation if a replacement is allowed.
-Deadline expiry or local cancellation is an invocation stop reason, not evidence
-that remote work failed. Keep the last confirmed observation and its timestamp
-when the current outcome is unknown. A valid running condition is pending; an API
-lookup failure is unknown. Neither an empty lookup nor a process exit code proves
-success or terminal failure.
+A failed attempt can coexist with a pending operation. An import-only goal can
+succeed at `pipelinerun`; a release goal cannot succeed there. Budget expiry and
+cancellation describe the invocation, not remote failure. On unknown observations,
+retain the last confirmed state, observation time, and evidence source separately;
+do not present stale evidence as fresh success. Known running conditions are
+pending, whereas an API lookup error is unknown.
 
-Represent **PipelineRun → Snapshot → Release** as explicit resource references and
-edges, not an assumed chain reconstructed from naming conventions. Record the
-source/build identity, Snapshot component image digests, selected ReleasePlan, and
-known output locations/digests. Each observation records its time and source (live
-API or archive). A same-name object with a different UID is not the original.
+Record typed resource references and verified edges, including source/build
+identity, Snapshot component digests, ReleasePlan identity/revision, and output
+locations/digests. Evidence comes from structured API fields, owner references,
+validated correlation metadata and content, or authoritative archive records,
+never log parsing or naming conventions. Archive absence does not prove live
+absence. Explicit Snapshot entry may have unavailable upstream PipelineRun
+lineage; record that gap and enforce the requested adoption policy, rather than
+fabricating an edge. Retain all failed/replaced attempts and their lineage. Distinguish
+multiple Releases by exact Snapshot, plan, and attempt, not newest name or timestamp.
 
-Snapshot reuse or release-only operation may have no known import PipelineRun;
-record that gap explicitly rather than fabricate one. Retain every failed/replaced
-attempt and its lineage while identifying the active attempt. Multiple Releases
-for a Snapshot must be distinguished by plan and attempt. Release retries reuse
-the verified Snapshot and do not rerun the import. Success means the requested
-goal is satisfied: import-only success does not imply release success.
+## Typed request, checkpoint, and result
 
-## Events and complete bounded results
+The following is the required v1 model shape, not an available import. Named nested
+types must have published wire schemas and serialization fixtures at implementation.
+`?` means an explicit nullable field, not a silently omitted required field.
 
-A reconciliation invocation has a caller-selected time/work budget, including
-bounded remote requests. It observes existing work, performs permitted actions,
-and returns even if remote work remains pending. These records are shared by both
-interfaces:
-
-| Record | Required content |
-| --- | --- |
-| Common envelope | `schema_version`, `record_type`, operation/invocation IDs, intent fingerprint and profile, observation timestamp. |
-| `status` | Full current state of the operation on initial observation and reconciliation; stage, outcome, reasons, resource/attempt references, and status fingerprint/profile. |
-| `transition` | Change from previous to current semantic state, including previous/current fingerprints, attempt ID when applicable, and resulting state. |
-| `result` | Complete invocation result/checkpoint as described below; emitted once on a controlled exit. |
-
-An event has an operation-scoped, persisted monotonic `sequence`; duplicates retain
-the same sequence and are deduplicated by `(operation_id, sequence)`. Commit state
-and its sequence before notification. Delivery is best-effort and can be repeated
-or missed around crashes; this proposal does not require a durable event broker
-or replay log. Consumers replace their view from a complete result or a later
-reconciliation status, rather than requiring every transition. Polls with an
-unchanged status fingerprint need not emit another transition.
-
-The final `result` is a snapshot of **all known state**, not just changes since the
-last callback. It contains the effective request, all correlation IDs, current
-stage/outcome/reasons, invocation stop reason (`completed`, `budget_exhausted`,
-`cancelled`, or `error`), timestamps, retry policy/counts, active and historical
-attempts, full resource lineage and known outputs, unresolved create intents,
-observation confidence, last event sequence, and a versioned resume checkpoint.
-Absent resources/outputs are explicit nulls or empty collections; missing evidence
-must not appear as success. It is complete even when no transition occurred.
-
-The checkpoint includes the same persisted intent, resolved inputs, resource and
-attempt identities, and pending-create markers needed to resume safely without
-the event stream. It is serializable, validated on load, and bound to the operation,
-intent fingerprint, and target. Do not embed credentials or require a private
-SQLite row layout. Loading it requires fresh credentials and remote validation;
-it is not authority to create resources or proof that observations remain current.
-A supplied database and checkpoint that disagree must be reconciled or rejected,
-never silently overwritten. Return the latest checkpoint in every controlled
-pending, unknown, failed, or succeeded result. Abrupt termination may prevent a
-final result; durable local state and cluster reconciliation cover that case.
-
-## Restart and idempotent adoption
-
-Before a remote create, persist the attempt and create intent. Attach correlation
-metadata for the operation, attempt, and fingerprint to created objects, and use a
-stable attempt-specific resource name where supported. These are lookup aids;
-adoption must also validate target scope, spec/content, lineage, and release plan.
-Existing resources without that metadata may be reused only after an unambiguous,
-explicit equivalence check. Preserve original resource identity and record adoption
-rather than implying that this invocation created it.
-
-On restart, load and validate durable state/checkpoint, then reconcile known UIDs
-and unresolved create intents before scheduling work. Prefer authoritative live
-observations; use archive evidence for retained lineage/terminal observations when
-appropriate, without treating archive absence as current cluster absence.
-Adopt a matching progressing or successful object. If a create timed out, query
-for the same attempt before retrying; an empty eventually consistent lookup is not
-proof that creation failed. Retrying the exact same stable name can converge via
-conflict-and-validate, but never generate a new name solely because visibility is
-uncertain. Ambiguous matches or unverifiable absence remain unknown and may require
-operator recovery. SQLite and the remote API do not form an atomic transaction;
-this is convergence with guarded retries, not an exactly-once guarantee.
-
-A confirmed failed attempt may get a new attempt ID under explicit retry policy.
-Adoption, polling, and process restart do not consume a new attempt. Preserve
-successful import/Snapshot lineage while retrying a Release. A completed operation
-is not automatically rerun on the next invocation.
-
-## CLI and library surfaces
-
-An opt-in versioned CLI mode emits one UTF-8 JSON object per line (JSONL) on
-**stdout**: status/transition records followed by one final result on controlled
-exit. Flush each record; put all human progress, diagnostics, and dependency logs
-on **stderr**. The final-result file option writes the same result atomically,
-not the event stream. A truncated stream or missing result means the invocation
-was interrupted, not that remote work failed. Consumers use the structured
-outcome and stop reason; exit codes distinguish successful completion, confirmed
-failure, incomplete reconciliation, and invocation/usage errors. Exact flags and
-numeric codes should be agreed during implementation, without silently changing
-existing `run`/`promote` output or exit-code behavior.
-
-The library exposes the same semantics without printing or exiting the process.
-An illustrative signature (not an available import) is:
-
-```python
-reconcile(
-    request: ReconcileRequest,
-    *,
-    checkpoint: Checkpoint | None = None,
-    on_event: Callable[[ReconcileEvent], None] | None = None,
-) -> ReconcileResult
+```text
+ResourceIdentity = {cluster_id, api_group, kind, namespace, name, uid}
+Fingerprint = {profile, digest}
+OperationIntent = {operation_id, target, inputs, entry_resource?, goal,
+                   pipeline_revision?, release_plan?, retry_policy, adoption_policy}
+OrchestrationRequest = {schema_version: 1, intent: OperationIntent,
+                        mode: execute|reconcile, budget: {max_seconds, max_actions}}
+State = {stage, outcome, reasons[], active_attempt_id?, current_resource?,
+         state_identifier, state_fingerprint, status_fingerprint}
+Checkpoint = {schema_version: 1, operation_id, intent: OperationIntent,
+              requested_inputs, resolved_inputs, intent_fingerprint,
+              state: State, attempts[], resources[], lineage[], outputs[],
+              unresolved_creates[], observations[], last_confirmed_state?,
+              retry_counts, revision, last_event_sequence, created_at, updated_at}
+OrchestrationEvent = {schema_version: 1, record_type: status|transition,
+                      operation_id, invocation_id, sequence, observed_at,
+                      previous_state_fingerprint?, previous_status_fingerprint?,
+                      checkpoint: Checkpoint}
+OrchestrationResult = {schema_version: 1, record_type: result,
+                       operation_id, invocation_id, observed_at,
+                       stop_reason: completed|observed|budget_exhausted|
+                                    blocked|cancelled|error,
+                       invocation_error?, completion?, checkpoint: Checkpoint}
+Completion = {goal, terminal_resource: ResourceIdentity, outputs[]}
 ```
 
-Use typed request, event, result, resource, and checkpoint models with explicit
-serialization to the wire schema. The request includes the operation ID, budget,
-target, inputs, goal, and retry policy; database/client configuration is supplied
-explicitly, not through global CLI state. Callbacks run in sequence after durable
-state updates and should return promptly. A callback exception stops further
-scheduling and returns an invocation-error result with the last checkpoint; it
-must not be classified as a failed remote attempt or cause automatic resubmission.
-Validation errors before accepting an operation can raise typed exceptions.
-Cancellation after acceptance should return a partial result when possible and
-does not delete remote work. An async API is not required for the initial contract.
+For example, a `current_resource` value is:
 
-## Versioning, isolation, and delivery
+```json
+{
+  "cluster_id": "cluster-7e8149",
+  "api_group": "tekton.dev",
+  "kind": "PipelineRun",
+  "namespace": "build-tenant",
+  "name": "import-attempt-001",
+  "uid": "84d8a5b0-1c07-4a32-a2ab-a676394375d4"
+}
+```
 
-Every wire record and checkpoint declares an integer `schema_version`, initially
-`1`. Additive optional fields may remain in v1; consumers ignore unknown fields.
-Required-field, outcome-enum, identity, or semantic changes require a new major
-version. Reject unsupported major versions before side effects. Fingerprint
-profiles are versioned separately; never compare different profiles as equivalent.
-Schema versioning is independent of package and SQLite schema versions. Ship
-published schema/serialization fixtures with implementation; no migration or new
-runtime interface is introduced by this design-only change.
+Attempts include their ID, stage, outcome/reasons, retry predecessor, resources,
+creation/adoption provenance, and timestamps. Unresolved creates include the attempt,
+exact target/name, normalized desired spec and its digest, lineage bindings, and
+submission/observation evidence. Observations include resource, API version, source,
+time, confidence, and structured conditions. Lineage edges identify both endpoints
+and supporting evidence; explicit gaps carry reasons. Output records include type,
+location, and immutable digest when applicable. Sensitive inputs/checkpoints need
+operation-state access controls, and credentials are supplied separately.
 
-Until operation-scoped storage and locking exist, use **one logical operation per
-persistent database, with one active orchestrator process**. A restart reuses that
-database and operation ID; serialize invocations externally. Do not share default
-ecosystem databases among independent integrations or assume SQLite locking
-protects remote creation. Use a durable private database path, retain checkpoints,
-and avoid `--reset` during resume. The current ephemeral `run` database is suitable
-for disposable calls, not crash recovery; an explicit shared database may process
-unrelated rows. Proposed resumable mode should reject conflicting database intent
-rather than silently adopt it. Checkpoints and outputs may reveal source locations
-and should be stored with the same access controls as operation state.
+Persist accepted operation intent **before any remote side effect**, then persist
+resolved intent and each attempt/create intent before submission. A checkpoint is
+a complete portable snapshot of all known state, including histories and uncertain
+creates, not a delta or an opaque database row. Absent resources/outputs use null or
+empty collections. Loading validates schema, operation, intent, target, lineage,
+and fingerprints, then revalidates remote evidence using fresh credentials.
+Database/checkpoint disagreements must be explicitly reconciled by revision and
+evidence or rejected; never blindly overwrite newer state. A fingerprint or
+checkpoint does not itself authorize mutation.
 
-Implement incrementally: shared models/serialization and fingerprint fixtures,
-then bounded reconciliation/checkpoints, then CLI JSONL and library callbacks over
-the same engine. Acceptance tests should cover unchanged polls and complete final
-results, import-only/release-only lineage, failure then release retry, API outage,
-ambiguous creates and adoption after restart, conflicting operation IDs, callback
-failure/cancellation, missing final output, schema compatibility, and clean JSONL
-stdout. Full implementation and multi-process scheduling are outside this PR.
+Every controlled bounded invocation after acceptance returns the complete latest
+checkpoint for **all five outcomes**, even when no transition occurred or an error
+stopped work. `completion` is present only for verified goal success; a pending
+result is complete as a record, not completed work. Invalid requests/checkpoints
+rejected before acceptance have typed validation errors and no side effects.
+Abrupt process termination can prevent the final record; durable local state and
+safe remote reconciliation cover that case.
+
+## Discovery, restart, and safe adoption
+
+1. Validate and durably accept intent; load the latest checkpoint/local state.
+   Reconcile known UIDs and unresolved creates before any new submission.
+2. Discover the appropriate resources and lineage within the target scope. Attach
+   operation/attempt/intent correlation metadata to created objects and use stable
+   attempt-specific names where supported. Metadata and names are lookup aids,
+   not proof: validate scope, spec/content, UID, lineage, and ReleasePlan.
+3. Adopt one verified progressing **or successful** match, including an explicitly
+   supplied resource lacking correlation metadata when policy permits equivalence.
+   Record adoption, preserve original identity, and do not consume a retry.
+   Multiple plausible matches remain `unknown` with candidates/evidence in the
+   checkpoint until safely disambiguated; never pick the first/latest or create
+   another resource to resolve ambiguity.
+4. On a timed-out create, retain the original attempt/create intent and query for
+   that attempt. An empty eventually consistent lookup is not proof of failure.
+   Retry only when safe: the same exact stable name/spec can converge through
+   conflict-and-validate. If safety cannot be established, return `unknown` rather
+   than generate a fresh name. There is no atomic database/API transaction or
+   exactly-once creation promise.
+5. In execute mode, advance from completed PipelineRun to Snapshot to Release.
+   Never rerun successful upstream work merely because a downstream resource is
+   not yet visible. A confirmed failed attempt may get a new attempt under explicit
+   retry policy; release retries retain the verified Snapshot and upstream lineage.
+   Reconcile mode reports the same state without performing remote actions.
+6. Return verified completion if the goal is already met. Repeated invocations
+   must not create additional resources or repeat caller-owned finalization.
+
+## Library and CLI parity
+
+An illustrative library entry point is:
+
+```python
+orchestrate(
+    request: OrchestrationRequest,
+    *,
+    store: OperationStore,
+    clients: KonfluxClients,
+    checkpoint: Checkpoint | None = None,
+    on_event: Callable[[OrchestrationEvent], None] | None = None,
+) -> OrchestrationResult
+```
+
+The library has typed requests/results/checkpoints and callback events, with no
+printing, process exits, or global CLI configuration. An iterator adapter may
+expose the same events and final result. The engine bounds remote calls and work
+by the requested budget, reserving time to persist and return. Callbacks are
+ordered, run after commit, and must return promptly; a callback exception stops
+further actions and returns an invocation-error result with the last checkpoint,
+not a failed remote attempt. Cancellation after acceptance returns a checkpoint
+when controlled and never implicitly deletes remote work.
+
+Emit an initial `status` on each invocation, a `transition` for every observed
+meaningful change (state **or status** fingerprint), and optional status refreshes
+even when both fingerprints are unchanged. Each event includes the resulting
+complete checkpoint. Persist state, checkpoint revision, and operation-scoped
+monotonic event sequence before notification. Duplicate deliveries retain sequence
+and are deduplicated by `(operation_id, sequence)`. Delivery can be repeated or
+missed across crashes; there is no required event broker/replay log. A final result
+or later reconciliation status fully repairs a caller's view without event replay.
+
+The CLI is an adapter over the same API. Machine mode writes one UTF-8 JSON object
+per line to **stdout**, flushing every event, followed by exactly one final result
+on a controlled accepted invocation. Human progress, diagnostics, and dependency
+logs go to **stderr**. An optional result file is an atomic write of the same final
+result, not the stream. Missing/truncated final output indicates interrupted
+observation, not failed remote work. Exact command/flag spelling is not prescribed.
+
+Proposed machine-mode exit codes separate domain outcomes from invocation errors:
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Successfully completed invocation, including `pending`, `unknown`, or `blocked`; inspect checkpoint outcome and `completion` for goal success. |
+| `1` | Confirmed terminal operation failure (`failed`). |
+| `2` | Invalid request or invocation error; not evidence of remote failure. |
+
+Budget exhaustion during healthy bounded execution is code `0`. Controlled
+cancellation is an invocation error (code `2`), with its explicit stop reason and
+checkpoint; abrupt signal termination may prevent output. Invocation errors take
+precedence over domain codes, and never overwrite the observed domain outcome.
+Numeric shell status alone is deliberately not a completion signal.
+
+A caller loop is conceptually: invoke with persisted intent/checkpoint; atomically
+replace its checkpoint on each event and final result; finalize only when
+`completion` is present; otherwise decide when or whether to invoke again. The
+orchestrator does not prescribe that scheduling or the caller's finalization logic.
+
+## Versioning and acceptance requirements
+
+Every request, event, result, and checkpoint declares integer `schema_version`,
+initially `1`. Additive optional fields may remain in v1; consumers ignore unknown
+fields. Required-field, enum, identity, or semantic changes require a new major
+version. Reject unsupported versions before side effects. Wire, fingerprint,
+package, and database schema versions are independent.
+
+Implementation acceptance requires shared library/CLI conformance tests proving:
+
+- Repeated bounded invocations and checkpoint-only restore continue a completed
+  PipelineRun through Snapshot/Release without importing again; an already-complete
+  Release yields completion for caller finalization and creates nothing.
+- PipelineRun/Snapshot entry, adoption without metadata, missing lineage, multiple
+  matches, changed UIDs, and ReleasePlan mismatches enforce identity/evidence rules.
+- All five outcomes remain distinct; API outages, uncertain creates, missing
+  Snapshot visibility, retry exhaustion, blocked prerequisites, and cancellation
+  never produce false completion or uncontrolled duplicate resources.
+- Crash points before/after intent persistence, submission, commit, and notification
+  converge safely; downstream retries retain successful upstream lineage.
+- Every controlled accepted call, including unchanged polls and callback errors,
+  supplies a complete serializable checkpoint; events cover state/status changes
+  and permit unchanged-fingerprint status updates. Golden vectors verify hashes.
+- Conflicting intent/database/checkpoints and unsupported schemas are rejected
+  safely; one-operation isolation and writer exclusion hold without a scheduler.
+- Library calls never print/exit; CLI JSONL is flushed, uncontaminated, and ends in
+  the same complete result, with tested exit codes and interrupted-stream handling.
+
+These are requirements for subsequent implementation, including changes to existing
+code or PR #45 as needed, not claims that current behavior already satisfies them.

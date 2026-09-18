@@ -535,8 +535,9 @@ import-orchestrator/
 
 ## Design proposals
 
-- [Versioned reconciliation contract for CLI and library consumers](docs/design/reconciliation-contract.md)
-  — proposed identities, events, checkpoints, and recovery semantics; not an implemented API.
+- [Generic orchestration and reconciliation contract](docs/design/reconciliation-contract.md)
+  — target library/CLI design for repeated bounded calls, resource lineage, stable
+  fingerprints, and resumable checkpoints; not an implemented API or limited by current behavior.
 
 ## Development
 
