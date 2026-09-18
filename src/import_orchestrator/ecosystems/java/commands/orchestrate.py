@@ -67,6 +67,18 @@ def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> No
         help="Artifact type (default: STAGE, or LIGHTWELL_ARTIFACT_TYPE env var)",
     )
 
+    parser.add_argument(
+        "--release-plan",
+        default=None,
+        metavar="NAME",
+        help=(
+            "Create every Release against this specific ReleasePlan instead of "
+            "resolving one from each snapshot's application. Required when several "
+            "auto-releasing ReleasePlans share an application (e.g. the -stage "
+            "plans: pnc-import-java-pulp-novel-stage vs -validated-stage)."
+        ),
+    )
+
     parser.set_defaults(func=run, ecosystem=ecosystem)
 
 
