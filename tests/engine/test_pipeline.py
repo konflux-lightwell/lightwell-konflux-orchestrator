@@ -191,3 +191,15 @@ class TestUpdateStatuses:
         awaiting = monitor.db.get_by_status(ImportStatus.AWAITING_RELEASE)
         assert len(running) == 1
         assert len(awaiting) == 1
+
+
+def test_success_clears_prior_error_message(monitor: PipelineMonitor, mock_kube: MagicMock):
+    item, _ = monitor.db.add_item("quay.io/repo:tag@sha256:abc")
+    monitor.db.update_status(
+        item.id, ImportStatus.TRIGGERED, pipelinerun_name="pnc-import-abc", error_message="temporary failure"
+    )
+    mock_kube.get_pipelinerun_status.return_value = PipelineRunStatus(name="pnc-import-abc", status="True")
+
+    monitor.update_statuses()
+
+    assert monitor.db.get_by_status(ImportStatus.AWAITING_RELEASE)[0].error_message is None

@@ -15,6 +15,7 @@ limitations under the License.
 """
 
 import argparse
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -28,6 +29,7 @@ from import_orchestrator.ecosystems.python.commands.promote import (
     EXIT_TIMEOUT,
     promote,
 )
+from import_orchestrator.models import ReleaseLookup, ReleaseLookupState
 
 
 class TestPromoteArgParsing:
@@ -94,6 +96,7 @@ def _run(kube, **overrides) -> tuple[int, dict]:
         poll_interval=overrides.get("poll_interval", 0),
         timeout=overrides.get("timeout", DEFAULT_TIMEOUT),
         output_json=overrides.get("output_json", None),
+        db=overrides.get("db", None),
         ecosystem=MagicMock(namespace="lightwell-python-tenant", pipelinerun_prefix="remediated-build-"),
     )
 
@@ -128,6 +131,21 @@ class TestPromoteCommand:
             "status": "True",
             "adopted": False,
         }
+
+    def test_cli_persists_created_promotion_for_reinvocation(self, tmp_path: Path):
+        db_path = tmp_path / "promotion.db"
+        first = MagicMock()
+        first.lookup_release_for_snapshot.return_value = ReleaseLookup(ReleaseLookupState.CONFIRMED_EMPTY)
+        first.create_release.return_value = "rel-persisted"
+        first.get_release_status.return_value = "True"
+        assert _run(first, db=db_path)[0] == EXIT_OK
+
+        second = MagicMock()
+        second.get_release_status.return_value = "True"
+        rc, payload = _run(second, db=db_path)
+        assert rc == EXIT_OK and payload["adopted"] is True
+        second.create_release.assert_not_called()
+        second.lookup_release_for_snapshot.assert_not_called()
 
     def test_adopts_existing_release_without_creating_another(self):
         """Re-running after a timeout must attach to the in-flight release, not duplicate it."""

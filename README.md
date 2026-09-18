@@ -124,7 +124,7 @@ other malformed values are `UNKNOWN`.
 
 ### Java release-only reconciliation
 
-Normal Java orchestration first searches live/KubeArchive Snapshots by the exact canonical `sha256:` digest in each OCI ref. A match skips import and enters the shared `engine/release.py` Snapshot→Release primitive; no match runs the normal import PipelineRun and then releases its resulting Snapshot. Use the conspicuous `--force-import` option on `java orchestrate` only to intentionally bypass reuse. Java plan inference is fail-closed when multiple valid plans exist; pass `--release-plan` where supported (the validated configured default is used only as the established Java safe default). Java release reconciliation uses the shared `engine/release.py` primitive and never creates or reruns an import PipelineRun. It requires the configured/explicit ReleasePlan, scopes Snapshot and Release lookups/creation to the ecosystem namespace, and relies on Conforma for application policy. A progressing or successful Release is adopted; a new Release is created only after the prior Release for the same Snapshot+plan is terminally failed. The orchestrator is intentionally a single process: SQLite transitions prevent duplicate local selection, but cannot make a remote API call transactional. Ambiguous create failures are re-queried before any retry, and pending creation markers are cleared/reconciled on a later poll.
+Normal Java `orchestrate` and `run` search completed import PipelineRuns by the exact `SOURCE_IMAGE` OCI ref, then resolve that PipelineRun's Snapshot. Java components are shared, so generic component-digest Snapshot reuse is never used. A source match skips import and enters the shared `engine/release.py` Snapshot→Release primitive; a `CONFIRMED_EMPTY` source lookup starts a fresh normal import PipelineRun. Use the conspicuous `--force-import` option only to intentionally bypass source reuse. Java plan inference is fail-closed when multiple valid plans exist; pass `--release-plan` where supported (the validated configured default is used only as the established Java safe default). Java release reconciliation uses the shared `engine/release.py` primitive and never creates or reruns an import PipelineRun. It requires the configured/explicit ReleasePlan, scopes Snapshot and Release lookups/creation to the ecosystem namespace, and relies on Conforma for application policy. A progressing or successful Release is adopted; a new Release is created only after the prior Release for the same Snapshot+plan is terminally failed.
 
 ```bash
 import-orchestrator java release --release-plan <plan>
@@ -576,8 +576,14 @@ even a typed `CONFIRMED_EMPTY` lookup remains ambiguous because Kubernetes
 visibility may lag; only observing and adopting a Release, or explicit operator
 recovery, clears the marker. This conservative policy avoids duplicates during
 Kubernetes eventual consistency; an externally created Release may therefore be
-observed one poll later. The orchestrator assumes a single process (no
-distributed lock).
+observed one poll later. Normal import orchestration assumes a single process,
+but Python `promote` atomically claims its `(snapshot, release_plan)` pending
+marker under SQLite's writer lock before its remote create, so independent CLI
+processes sharing a database cannot both create that Release. For Release
+lookup, a structurally valid live Kubernetes list is authoritative; KubeArchive
+is consulted only when live is unavailable, and live/archive Release lists are
+never merged. This prevents stale archive history from overriding valid live
+state.
 
 ## Development
 

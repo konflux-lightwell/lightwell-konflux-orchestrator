@@ -87,8 +87,6 @@ class ImportDatabase:
         """
         )
 
-        # Append-only release audit history.  CREATE IF NOT EXISTS is intentionally
-        # used rather than replacing/rewriting state so upgrades preserve history.
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS release_attempts (
@@ -107,16 +105,18 @@ class ImportDatabase:
         )
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_release_attempt_item ON release_attempts(import_item_id)")
 
-        for col in (
-            "release_name TEXT",
-            "snapshot_name TEXT",
-            "release_creation_pending INTEGER NOT NULL DEFAULT 0",
-            "release_plan TEXT",
-        ):
-            try:
-                cursor.execute(f"ALTER TABLE import_items ADD COLUMN {col}")
-            except sqlite3.OperationalError:
-                pass  # column already exists
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS promotion_releases (
+                snapshot_name TEXT NOT NULL,
+                release_plan TEXT NOT NULL,
+                release_name TEXT,
+                creation_pending INTEGER NOT NULL DEFAULT 0,
+                updated_at TIMESTAMP NOT NULL,
+                PRIMARY KEY(snapshot_name, release_plan)
+            )
+            """
+        )
 
         self.conn.commit()
 
@@ -176,6 +176,7 @@ class ImportDatabase:
         retry_count: int | None = None,
         release_creation_pending: bool | None = None,
         release_plan: str | None = None,
+        clear_error_message: bool = False,
     ) -> None:
         """Update the status and optional fields for an import item."""
         assert self.conn is not None
@@ -200,6 +201,8 @@ class ImportDatabase:
         if error_message is not None:
             fields.append("error_message = ?")
             values.append(error_message)
+        elif clear_error_message:
+            fields.append("error_message = NULL")
 
         if triggered_at is not None:
             fields.append("triggered_at = ?")
@@ -371,6 +374,65 @@ class ImportDatabase:
         if item_id is None:
             return list(self.conn.execute("SELECT * FROM release_attempts ORDER BY id"))
         return list(self.conn.execute("SELECT * FROM release_attempts WHERE import_item_id=? ORDER BY id", (item_id,)))
+
+    def get_promotion_release(self, snapshot: str, plan: str) -> tuple[str | None, bool] | None:
+        """Return durable promotion release state for an exact Snapshot/ReleasePlan."""
+        assert self.conn is not None
+        row = self.conn.execute(
+            "SELECT release_name, creation_pending FROM promotion_releases WHERE snapshot_name=? AND release_plan=?",
+            (snapshot, plan),
+        ).fetchone()
+        return (row["release_name"], bool(row["creation_pending"])) if row else None
+
+    def claim_promotion_release_creation(self, snapshot: str, plan: str) -> tuple[bool, tuple[str | None, bool] | None]:
+        """Atomically acquire remote-create ownership for one Snapshot/ReleasePlan.
+
+        The successful caller has inserted the durable pending marker while
+        holding SQLite's writer lock and is the *only* caller allowed to invoke
+        the remote create. A caller which loses the race receives the persisted
+        state and must observe/retry it rather than issue another create.
+        """
+        assert self.conn is not None
+        try:
+            self.conn.execute("BEGIN IMMEDIATE")
+            row = self.conn.execute(
+                "SELECT release_name, creation_pending FROM promotion_releases "
+                "WHERE snapshot_name=? AND release_plan=?",
+                (snapshot, plan),
+            ).fetchone()
+            if row is not None:
+                self.conn.rollback()
+                return False, (row["release_name"], bool(row["creation_pending"]))
+            self.conn.execute(
+                "INSERT INTO promotion_releases("
+                "snapshot_name, release_plan, release_name, creation_pending, updated_at) "
+                "VALUES (?, ?, NULL, 1, ?)",
+                (snapshot, plan, datetime.now().isoformat()),
+            )
+            self.conn.commit()
+            return True, None
+        except sqlite3.Error:
+            try:
+                self.conn.rollback()
+            except sqlite3.Error:
+                pass
+            return False, self.get_promotion_release(snapshot, plan)
+
+    def save_promotion_release(self, snapshot: str, plan: str, release: str | None, pending: bool) -> None:
+        """Persist a promotion pointer or ambiguous-create marker after ownership is claimed."""
+        assert self.conn is not None
+        self.conn.execute(
+            """
+            INSERT INTO promotion_releases(snapshot_name, release_plan, release_name, creation_pending, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(snapshot_name, release_plan) DO UPDATE SET
+                release_name=excluded.release_name,
+                creation_pending=excluded.creation_pending,
+                updated_at=excluded.updated_at
+            """,
+            (snapshot, plan, release, int(pending), datetime.now().isoformat()),
+        )
+        self.conn.commit()
 
     def get_statistics(self) -> dict[str, int]:
         """Return counts grouped by status for progress reporting."""

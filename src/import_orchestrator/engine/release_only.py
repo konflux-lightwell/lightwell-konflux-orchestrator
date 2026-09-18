@@ -187,6 +187,11 @@ class ReleaseOnly:
         # Monitoring an already persisted Release does not need either value;
         # a plan is required only if reconciliation must create a new Release.
         plan = self.release_plan or item.release_plan
+        # Java release-only has no safe static default: resolve the unique plan
+        # for this exact Snapshot only when neither CLI nor persisted state chose
+        # one. This remains release-only; it never invokes import triggering.
+        if not plan and not item.release_name:
+            plan = self.kube.find_release_plan_for_snapshot(snapshot)
         if not plan and not item.release_name:
             print(f"Release deferred for {item.ref}: no ReleasePlan", file=sys.stderr)
             return False

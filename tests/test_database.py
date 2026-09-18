@@ -225,6 +225,27 @@ class TestImportDatabase:
         monkeypatch.setattr(db, "conn", BrokenConn())
         assert db.claim_release_slot(ref.id, 5) is False
 
+    def test_claim_promotion_release_creation_returns_durable_state_after_lock_error(
+        self, db: ImportDatabase, monkeypatch
+    ):
+        """A transient writer-lock failure must not grant remote-create ownership."""
+        assert db.conn is not None
+
+        class LockedConnection:
+            def execute(self, *args, **kwargs):
+                raise sqlite3.OperationalError("database is locked")
+
+            def rollback(self):
+                raise sqlite3.OperationalError("rollback also failed")
+
+        monkeypatch.setattr(db, "conn", LockedConnection())
+        monkeypatch.setattr(db, "get_promotion_release", lambda *_args: ("existing-release", True))
+
+        claimed, state = db.claim_promotion_release_creation("snapshot", "plan")
+
+        assert claimed is False
+        assert state == ("existing-release", True)
+
     def test_release_attempts_lifecycle(self, db: ImportDatabase):
         ref, _ = db.add_item("quay.io/repo:tag@sha256:abc")
         assert ref.id is not None

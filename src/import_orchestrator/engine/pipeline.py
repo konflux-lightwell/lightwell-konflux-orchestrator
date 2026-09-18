@@ -58,10 +58,12 @@ class PipelineMonitor:
                     print(f"  Running: {tag}", file=sys.stderr)
             elif pr_status.is_successful:
                 if self.skip_release:
-                    self.db.update_status(item.id, ImportStatus.SUCCESS, completed_at=datetime.now())
+                    self.db.update_status(
+                        item.id, ImportStatus.SUCCESS, completed_at=datetime.now(), clear_error_message=True
+                    )
                     print(f"  ✓ Build done (scratch, no release): {tag}", file=sys.stderr)
                 else:
-                    self.db.update_status(item.id, ImportStatus.AWAITING_RELEASE)
+                    self.db.update_status(item.id, ImportStatus.AWAITING_RELEASE, clear_error_message=True)
                     print(f"  Pipeline done, awaiting release: {tag}", file=sys.stderr)
             elif pr_status.is_failed:
                 detail = self.kube.get_pipelinerun_failure_detail(item.pipelinerun_name)

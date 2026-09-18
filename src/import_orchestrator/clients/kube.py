@@ -125,35 +125,36 @@ class KubeClient:
             return []
 
     def get_pipelinerun_status(self, name: str) -> PipelineRunStatus | None:
-        """Get the status of a specific PipelineRun by name.
+        """Get a PipelineRun status from live Kubernetes or KubeArchive.
 
-        Checks the live cluster first, then falls back to the KubeArchive API.
-        Returns None if not found in either place.
+        A successful live response is authoritative, including one with no
+        usable ``Succeeded`` condition. Archive is only a fallback when the
+        live request fails. Both APIs may return the resource directly, a List,
+        or nested List envelopes.
         """
-        try:
-            data = self._api.get(
-                f"/apis/tekton.dev/v1/namespaces/{self.namespace}/pipelineruns/{name}",
-            )
-            conditions = data.get("status", {}).get("conditions", [])
-            status = conditions[0].get("status", "") if conditions else ""
-            if pr_status := PipelineRunStatus.from_str(name, status):
-                return pr_status
-        except requests.RequestException:
-            pass
-
-        if self._ka_api is not None:
+        path = f"/apis/tekton.dev/v1/namespaces/{self.namespace}/pipelineruns/{name}"
+        for api in (self._api, self._ka_api):
+            if api is None:
+                continue
             try:
-                data = self._ka_api.get(
-                    f"/apis/tekton.dev/v1/namespaces/{self.namespace}/pipelineruns/{name}",
-                )
-                for cond in data.get("status", {}).get("conditions", []):
-                    if cond.get("type") == "Succeeded":
-                        status = cond.get("status", "")
-                        if pr_status := PipelineRunStatus.from_str(name, status):
-                            return pr_status
-            except requests.RequestException:
-                pass
-
+                data = api.get(path)
+                resource = self._resource(data)
+            except (requests.RequestException, KeyError, TypeError, AttributeError):
+                continue
+            if resource is None and isinstance(data, dict) and "status" in data:
+                resource = data
+            if resource is None:
+                # A successful live API response is authoritative. Archive is
+                # only for a live transport/API failure, not a second opinion.
+                return None
+            conditions = resource.get("status", {}).get("conditions", [])
+            succeeded = next((condition for condition in conditions if condition.get("type") == "Succeeded"), None)
+            # Older API/test adapters omit the condition type; their sole first
+            # condition is still the PipelineRun completion condition.
+            succeeded = succeeded or (conditions[0] if conditions else None)
+            if succeeded is None:
+                return None
+            return PipelineRunStatus.from_str(name, succeeded.get("status", ""))
         return None
 
     def get_pipelinerun_failure_detail(self, name: str) -> str | None:
@@ -569,7 +570,7 @@ class KubeClient:
         return self.lookup_release_for_snapshot(snapshot_name, release_plan).name
 
     def lookup_release_for_snapshot(self, snapshot_name: str, release_plan: str | None = None) -> ReleaseLookup:
-        """Find an active Release for a snapshot, optionally scoped to one ReleasePlan.
+        """Find the newest Release attempt for a snapshot, optionally scoped to one ReleasePlan.
 
         When `release_plan` is given, a Release created against a *different* plan for the
         same snapshot is not matched. Promotion deliberately creates a second Release for
@@ -581,59 +582,61 @@ class KubeClient:
         adoption is deterministic rather than dependent on API response order.
         """
         path = f"/apis/appstudio.redhat.com/v1alpha1/namespaces/{self.namespace}/releases"
-        successful_lookup = False
+        # Live Kubernetes is authoritative. KubeArchive is historical fallback
+        # only if live cannot provide a structurally valid collection; merging
+        # them can let an old archived Release override current live state.
         for api in (self._api, self._ka_api):
             if api is None:
                 continue
             try:
                 result = api.list(path)
-                successful_lookup = True
-                candidates = []
-                for item in result.get("items", []):
-                    spec = item.get("spec", {})
-                    if spec.get("snapshot") != snapshot_name:
-                        continue
-                    if release_plan is not None and spec.get("releasePlan") != release_plan:
-                        continue
-                    released = next(
-                        (c for c in item.get("status", {}).get("conditions", []) if c.get("type") == "Released"),
-                        None,
-                    )
-                    if released and released.get("status") == "False" and released.get("reason") != "Progressing":
-                        continue
-                    candidates.append(item)
-                if candidates:
-                    newest = max(candidates, key=lambda item: item.get("metadata", {}).get("creationTimestamp", ""))
-                    return ReleaseLookup(ReleaseLookupState.FOUND, newest["metadata"]["name"])
-            except (requests.RequestException, KeyError, TypeError):
+            except (requests.RequestException, KeyError, TypeError, AttributeError):
                 continue
-        return ReleaseLookup(ReleaseLookupState.CONFIRMED_EMPTY if successful_lookup else ReleaseLookupState.UNKNOWN)
+            if not isinstance(result, dict) or not isinstance(result.get("items"), list):
+                continue
+            candidates = []
+            for item in self._items(result):
+                spec = item.get("spec", {})
+                if spec.get("snapshot") != snapshot_name:
+                    continue
+                if release_plan is not None and spec.get("releasePlan") != release_plan:
+                    continue
+                candidates.append(item)
+            if candidates:
+                newest = max(candidates, key=lambda item: item.get("metadata", {}).get("creationTimestamp", ""))
+                name = newest.get("metadata", {}).get("name")
+                if isinstance(name, str) and name:
+                    return ReleaseLookup(ReleaseLookupState.FOUND, name)
+                return ReleaseLookup(ReleaseLookupState.UNKNOWN)
+            return ReleaseLookup(ReleaseLookupState.CONFIRMED_EMPTY)
+        return ReleaseLookup(ReleaseLookupState.UNKNOWN)
 
     def get_release_status(self, release_name: str) -> Literal["True", "False", "Unknown"] | None:
-        """Get the effective status of the 'Released' condition.
-
-        Returns "True" on success, "False" on terminal failure, "Unknown" while still progressing,
-        and None if the Release object itself cannot be fetched.
-
-        The Released condition starts as False/Progressing while in flight, so we only treat
-        False as a failure when the reason is not "Progressing".
-        """
-        try:
-            data = self._api.get(
-                f"/apis/appstudio.redhat.com/v1alpha1/namespaces/{self.namespace}/releases/{release_name}",
-            )
-            released = next(
-                (c for c in data.get("status", {}).get("conditions", []) if c.get("type") == "Released"),
-                None,
-            )
-            if released is None:
+        """Get the effective Released condition from live Kubernetes or archive."""
+        path = f"/apis/appstudio.redhat.com/v1alpha1/namespaces/{self.namespace}/releases/{release_name}"
+        for api in (self._api, self._ka_api):
+            if api is None:
+                continue
+            try:
+                data = api.get(path)
+                resource = self._resource(data)
+                if resource is None and isinstance(data, dict) and "status" in data:
+                    resource = data
+                if resource is None:
+                    continue
+                released = next(
+                    (c for c in resource.get("status", {}).get("conditions", []) if c.get("type") == "Released"),
+                    None,
+                )
+                if released is None:
+                    return "Unknown"
+                status = released.get("status", "")
+                reason = released.get("reason", "")
+                if status == "True":
+                    return "True"
+                if status == "False" and reason != "Progressing":
+                    return "False"
                 return "Unknown"
-            status = released.get("status", "")
-            reason = released.get("reason", "")
-            if status == "True":
-                return "True"
-            if status == "False" and reason != "Progressing":
-                return "False"
-            return "Unknown"
-        except requests.RequestException:
-            return None
+            except (requests.RequestException, KeyError, TypeError, AttributeError):
+                continue
+        return None

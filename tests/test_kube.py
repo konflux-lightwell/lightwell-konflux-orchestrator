@@ -22,6 +22,7 @@ import requests
 from import_orchestrator.clients import KubeClient
 from import_orchestrator.clients.kube_api import KubeAuth
 from import_orchestrator.engine.errors import TriggerError
+from import_orchestrator.models import ReleaseLookup, ReleaseLookupState
 
 
 def _make_kube_client(monkeypatch, token=None, kubearchive_api=""):
@@ -343,7 +344,7 @@ class TestFindReleaseForSnapshot:
 
         assert kube.find_release_for_snapshot("snap-1") == "release-1"
 
-    def test_skips_terminally_failed_release(self, kube: KubeClient):
+    def test_returns_terminally_failed_release_for_reconciliation(self, kube: KubeClient):
         kube._mock_api.list.return_value = {
             "items": [
                 {
@@ -354,7 +355,7 @@ class TestFindReleaseForSnapshot:
             ]
         }
 
-        assert kube.find_release_for_snapshot("snap-1") is None
+        assert kube.find_release_for_snapshot("snap-1") == "release-bad"
 
     def test_does_not_skip_progressing_false(self, kube: KubeClient):
         kube._mock_api.list.return_value = {
@@ -449,8 +450,8 @@ class TestFindReleaseForSnapshotAndPlan:
 
         assert kube.find_release_for_snapshot_and_plan("snap-1", "remediated-build-prod") is None
 
-    def test_skips_terminally_failed_release(self, kube: KubeClient):
-        """A failed prod release must not be adopted — the operator needs a fresh attempt."""
+    def test_returns_terminally_failed_release_for_reconciliation(self, kube: KubeClient):
+        """The reconciliation primitive retires failed attempts safely."""
         kube._mock_api.list.return_value = {
             "items": [
                 {
@@ -461,7 +462,7 @@ class TestFindReleaseForSnapshotAndPlan:
             ]
         }
 
-        assert kube.find_release_for_snapshot_and_plan("snap-1", "remediated-build-prod") is None
+        assert kube.find_release_for_snapshot_and_plan("snap-1", "remediated-build-prod") == "rel-bad"
 
     def test_does_not_skip_progressing_false(self, kube: KubeClient):
         kube._mock_api.list.return_value = {
@@ -945,3 +946,77 @@ class TestKubeClientHelpersAndLookups:
         kube_with_ka._mock_api.get.return_value = {"metadata": {"name": "snap-3"}}
         with patch.object(kube_with_ka, "get_snapshot_component_digests", return_value=None):
             assert kube_with_ka.find_snapshot_for_import(source).state.name == "UNKNOWN"
+
+
+class TestPipelineRunArchiveShapes:
+    @pytest.mark.parametrize(
+        "response",
+        [
+            {"metadata": {"name": "archived-pr"}, "status": {"conditions": [{"type": "Succeeded", "status": "True"}]}},
+            {
+                "items": [
+                    {
+                        "metadata": {"name": "archived-pr"},
+                        "status": {"conditions": [{"type": "Succeeded", "status": "True"}]},
+                    }
+                ]
+            },
+            {
+                "items": [
+                    {
+                        "items": [
+                            {
+                                "metadata": {"name": "archived-pr"},
+                                "status": {"conditions": [{"type": "Succeeded", "status": "True"}]},
+                            }
+                        ]
+                    }
+                ]
+            },
+        ],
+    )
+    def test_normalizes_direct_list_and_nested_archive_responses(self, kube_with_ka: KubeClient, response):
+        kube_with_ka._mock_api.get.side_effect = requests.HTTPError("404")
+        kube_with_ka._mock_ka_api.get.return_value = response
+        assert kube_with_ka.get_pipelinerun_status("archived-pr").is_successful
+
+
+class TestNewestReleaseAttempt:
+    def test_live_release_collection_is_authoritative_over_stale_archive(self, kube_with_ka: KubeClient):
+        kube_with_ka._mock_api.list.return_value = {"items": []}
+        kube_with_ka._mock_ka_api.list.return_value = {
+            "items": [
+                {
+                    "metadata": {"name": "stale-archive", "creationTimestamp": "2025-01-01T00:00:00Z"},
+                    "spec": {"snapshot": "snap", "releasePlan": "plan"},
+                }
+            ]
+        }
+        assert kube_with_ka.lookup_release_for_snapshot("snap", "plan") == ReleaseLookup(
+            ReleaseLookupState.CONFIRMED_EMPTY
+        )
+
+    def test_archive_is_used_when_live_release_lookup_fails(self, kube_with_ka: KubeClient):
+        kube_with_ka._mock_api.list.side_effect = requests.RequestException("offline")
+        kube_with_ka._mock_ka_api.list.return_value = {
+            "items": [{"metadata": {"name": "archived"}, "spec": {"snapshot": "snap", "releasePlan": "plan"}}]
+        }
+        assert kube_with_ka.lookup_release_for_snapshot("snap", "plan").name == "archived"
+
+    def test_returns_newest_terminal_failure_instead_of_older_success(self, kube: KubeClient):
+        kube._mock_api.list.return_value = {
+            "items": [
+                {
+                    "metadata": {"name": "old-success", "creationTimestamp": "2026-01-01T00:00:00Z"},
+                    "spec": {"snapshot": "snap", "releasePlan": "plan"},
+                    "status": {"conditions": [{"type": "Released", "status": "True"}]},
+                },
+                {
+                    "metadata": {"name": "new-failed", "creationTimestamp": "2026-02-01T00:00:00Z"},
+                    "spec": {"snapshot": "snap", "releasePlan": "plan"},
+                    "status": {"conditions": [{"type": "Released", "status": "False", "reason": "Failed"}]},
+                },
+            ]
+        }
+        lookup = kube.lookup_release_for_snapshot("snap", "plan")
+        assert lookup == ReleaseLookup(ReleaseLookupState.FOUND, "new-failed")
