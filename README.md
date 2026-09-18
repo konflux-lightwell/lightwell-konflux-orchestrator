@@ -533,6 +533,11 @@ import-orchestrator/
 └── tests/                 # Pytest test suite
 ```
 
+## Design proposals
+
+- [Versioned reconciliation contract for CLI and library consumers](docs/design/reconciliation-contract.md)
+  — proposed identities, events, checkpoints, and recovery semantics; not an implemented API.
+
 ## Development
 
 ### Running Tests
