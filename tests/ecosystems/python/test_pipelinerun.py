@@ -93,7 +93,12 @@ class TestBuildManifest:
         params = {p["name"]: p["value"] for p in _manifest()["spec"]["params"]}
         assert params["PACKAGE"] == "foolib"
         assert params["VERSION"] == "0.4.0"
+        assert params["FIX_TYPE"] == "Backport"
         assert params["LIGHTWELL_BUILDS_TAG"] == "foolib/0.4.0"
+
+    def test_fix_type_is_passed_to_pipeline(self):
+        params = {p["name"]: p["value"] for p in _manifest(fix_type="Novel")["spec"]["params"]}
+        assert params["FIX_TYPE"] == "Novel"
 
     def test_builds_tag_defaults_to_validated_version_tag(self):
         # With no builds_tag, the tag falls back to the validated <package>/<version>.

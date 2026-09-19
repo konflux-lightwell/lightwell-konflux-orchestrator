@@ -31,39 +31,47 @@ class TestTriggerArgParsing:
 
     def test_ref_parsed(self):
         parser = make_parser()
-        args = parser.parse_args(["python", "trigger", "ntplib==0.4.0"])
+        args = parser.parse_args(["python", "trigger", "--fix-type", "Backport", "ntplib==0.4.0"])
         assert args.ref == "ntplib==0.4.0"
 
     def test_command_is_trigger(self):
         parser = make_parser()
-        args = parser.parse_args(["python", "trigger", "ntplib==0.4.0"])
+        args = parser.parse_args(["python", "trigger", "--fix-type", "Backport", "ntplib==0.4.0"])
         assert args.command == "trigger"
 
     def test_ecosystem_attached(self):
         parser = make_parser()
-        args = parser.parse_args(["python", "trigger", "ntplib==0.4.0"])
+        args = parser.parse_args(["python", "trigger", "--fix-type", "Backport", "ntplib==0.4.0"])
         assert args.ecosystem.name == "python"
 
     def test_target_default(self, monkeypatch):
         monkeypatch.delenv("LIGHTWELL_PYTHON_TARGET", raising=False)
         parser = make_parser()
-        args = parser.parse_args(["python", "trigger", "ntplib==0.4.0"])
+        args = parser.parse_args(["python", "trigger", "--fix-type", "Backport", "ntplib==0.4.0"])
         assert args.target == "REMEDIATED"
 
     def test_invalid_target_rejected(self):
         parser = make_parser()
         with pytest.raises(SystemExit):
-            parser.parse_args(["python", "trigger", "--target", "NOPE", "ntplib==0.4.0"])
+            parser.parse_args(["python", "trigger", "--fix-type", "Backport", "--target", "NOPE", "ntplib==0.4.0"])
 
     def test_builds_tag_defaults_to_none(self):
         parser = make_parser()
-        args = parser.parse_args(["python", "trigger", "ntplib==0.4.0"])
+        args = parser.parse_args(["python", "trigger", "--fix-type", "Backport", "ntplib==0.4.0"])
         assert args.builds_tag is None
 
     def test_builds_tag_parsed(self):
         parser = make_parser()
         args = parser.parse_args(
-            ["python", "trigger", "--builds-tag", "CVE-2025-1234/0.4.0/pipeline-9", "ntplib==0.4.0"]
+            [
+                "python",
+                "trigger",
+                "--fix-type",
+                "Backport",
+                "--builds-tag",
+                "CVE-2025-1234/0.4.0/pipeline-9",
+                "ntplib==0.4.0",
+            ]
         )
         assert args.builds_tag == "CVE-2025-1234/0.4.0/pipeline-9"
 
@@ -71,7 +79,15 @@ class TestTriggerArgParsing:
         # A commit SHA is a valid git revision, accepted verbatim like a branch or tag.
         parser = make_parser()
         args = parser.parse_args(
-            ["python", "trigger", "--builds-tag", "deadbeefcafe1234567890abcdef1234567890ab", "ntplib==0.4.0"]
+            [
+                "python",
+                "trigger",
+                "--fix-type",
+                "Backport",
+                "--builds-tag",
+                "deadbeefcafe1234567890abcdef1234567890ab",
+                "ntplib==0.4.0",
+            ]
         )
         assert args.builds_tag == "deadbeefcafe1234567890abcdef1234567890ab"
 
@@ -79,7 +95,15 @@ class TestTriggerArgParsing:
         # --builds-ref is a synonym for --builds-tag and writes the same dest.
         parser = make_parser()
         args = parser.parse_args(
-            ["python", "trigger", "--builds-ref", "deadbeefcafe1234567890abcdef1234567890ab", "ntplib==0.4.0"]
+            [
+                "python",
+                "trigger",
+                "--fix-type",
+                "Backport",
+                "--builds-ref",
+                "deadbeefcafe1234567890abcdef1234567890ab",
+                "ntplib==0.4.0",
+            ]
         )
         assert args.builds_tag == "deadbeefcafe1234567890abcdef1234567890ab"
 

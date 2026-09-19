@@ -49,6 +49,7 @@ def build_pipelinerun_manifest(
     git_auth_secret: str,
     service_account: str | None = None,
     builds_tag: str | None = None,
+    fix_type: str = "Backport",
 ) -> dict[str, Any]:
     """Build a python-remediated-build PipelineRun manifest for one package/version.
 
@@ -63,6 +64,9 @@ def build_pipelinerun_manifest(
     task's ``revision``, which accepts any of the three). When None, it defaults
     to the validated ``<package>/<version>`` tag; a caller passes the remediation
     branch or a pinned commit to build patched source instead.
+
+    ``fix_type`` identifies the remediation stream and is passed to the Pipeline
+    as ``FIX_TYPE`` for commit-distance version calculation.
     """
     # Push to the Konflux component repository (<tenant>/<application>/<component>),
     # which is the only repo the build service account can push to. The package and
@@ -74,6 +78,7 @@ def build_pipelinerun_manifest(
         "params": [
             {"name": "PACKAGE", "value": package},
             {"name": "VERSION", "value": version},
+            {"name": "FIX_TYPE", "value": fix_type},
             {"name": "LIGHTWELL_BUILDS_REPO_URL", "value": f"{repo_base}/pypi.org-{package}"},
             {"name": "LIGHTWELL_BUILDS_TAG", "value": tag},
             {"name": "IMAGE", "value": image},
