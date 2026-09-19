@@ -189,7 +189,7 @@ spec:
         resolver: bundles
         params:
           - name: bundle
-            value: quay.io/redhat-user-workloads/lightwell-python-tenant/tekton-bundles/fromager-build-wheels@sha256:32a0366d3295b569c3ebd1c92a164eeef9f870238b364ebad9b7cc5c6f047643
+            value: quay.io/redhat-user-workloads/lightwell-python-tenant/tekton-bundles/fromager-build-wheels:0.1@sha256:32a0366d3295b569c3ebd1c92a164eeef9f870238b364ebad9b7cc5c6f047643
           - name: name
             value: fromager-build-wheels
           - name: kind
