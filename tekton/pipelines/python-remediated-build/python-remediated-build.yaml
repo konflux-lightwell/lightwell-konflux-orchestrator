@@ -184,7 +184,7 @@ spec:
           value: $(params.caTrustConfigMapKey)
 
     # ── Step 3: fromager bootstrap from pre-placed sdist → wheels OCI artifact ─
-    - name: python-fromager-build-wheels
+    - name: fromager-build-wheels
       taskRef:
         resolver: bundles
         params:
