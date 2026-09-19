@@ -35,6 +35,7 @@ class PythonEcosystem:
         package, version = parse_ref(ref)
         target = getattr(args, "target", config.DEFAULT_TARGET)
         builds_tag = getattr(args, "builds_tag", None)
+        fix_type = getattr(args, "fix_type", "Backport")
         cfg = config.TARGET_CONFIGS[target]
         pipeline_spec = load_pipeline(config.pipeline_definition_path())
         return build_pipelinerun_manifest(
@@ -50,6 +51,7 @@ class PythonEcosystem:
             image_repo_base=config.IMAGE_REPO_BASE,
             git_auth_secret=config.GIT_AUTH_SECRET,
             builds_tag=builds_tag,
+            fix_type=fix_type,
         )
 
     def target_skip_release(self, target: str) -> bool:

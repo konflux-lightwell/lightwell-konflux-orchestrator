@@ -46,6 +46,12 @@ def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> No
         help=f"Build target (default: {config.DEFAULT_TARGET}, or LIGHTWELL_PYTHON_TARGET env var)",
     )
     parser.add_argument(
+        "--fix-type",
+        choices=("Backport", "Novel"),
+        required=True,
+        help="Remediation type passed to the Pipeline for version calculation.",
+    )
+    parser.add_argument(
         "--builds-tag",
         "--builds-ref",
         dest="builds_tag",

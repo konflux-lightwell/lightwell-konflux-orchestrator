@@ -32,60 +32,84 @@ class TestRunArgParsing:
 
     def test_ref_parsed(self):
         parser = make_parser()
-        args = parser.parse_args(["python", "run", "ntplib==0.4.0"])
+        args = parser.parse_args(["python", "run", "--fix-type", "Backport", "ntplib==0.4.0"])
         assert args.ref == "ntplib==0.4.0"
 
     def test_command_name(self):
         parser = make_parser()
-        args = parser.parse_args(["python", "run", "ntplib==0.4.0"])
+        args = parser.parse_args(["python", "run", "--fix-type", "Backport", "ntplib==0.4.0"])
         assert args.command == "run"
 
     def test_ecosystem_attached(self):
         parser = make_parser()
-        args = parser.parse_args(["python", "run", "ntplib==0.4.0"])
+        args = parser.parse_args(["python", "run", "--fix-type", "Backport", "ntplib==0.4.0"])
         assert args.ecosystem.name == "python"
 
     def test_target_default(self, monkeypatch):
         monkeypatch.delenv("LIGHTWELL_PYTHON_TARGET", raising=False)
         parser = make_parser()
-        args = parser.parse_args(["python", "run", "ntplib==0.4.0"])
+        args = parser.parse_args(["python", "run", "--fix-type", "Backport", "ntplib==0.4.0"])
         assert args.target == "REMEDIATED"
 
     def test_builds_tag_defaults_to_none(self):
         parser = make_parser()
-        args = parser.parse_args(["python", "run", "ntplib==0.4.0"])
+        args = parser.parse_args(["python", "run", "--fix-type", "Backport", "ntplib==0.4.0"])
         assert args.builds_tag is None
 
     def test_builds_ref_alias_parsed(self):
         parser = make_parser()
-        args = parser.parse_args(["python", "run", "--builds-ref", "cumulative/0.4.0/pipeline-9", "ntplib==0.4.0"])
+        args = parser.parse_args(
+            [
+                "python",
+                "run",
+                "--fix-type",
+                "Backport",
+                "--builds-ref",
+                "cumulative/0.4.0/pipeline-9",
+                "ntplib==0.4.0",
+            ]
+        )
         assert args.builds_tag == "cumulative/0.4.0/pipeline-9"
 
     def test_poll_interval_and_max_retries_defaults(self):
         parser = make_parser()
-        args = parser.parse_args(["python", "run", "ntplib==0.4.0"])
+        args = parser.parse_args(["python", "run", "--fix-type", "Backport", "ntplib==0.4.0"])
         assert args.poll_interval == DEFAULT_POLL_INTERVAL
         assert args.max_retries == DEFAULT_MAX_RETRIES
 
     def test_poll_interval_and_max_retries_override(self):
         parser = make_parser()
-        args = parser.parse_args(["python", "run", "--poll-interval", "5", "--max-retries", "1", "ntplib==0.4.0"])
+        args = parser.parse_args(
+            [
+                "python",
+                "run",
+                "--fix-type",
+                "Backport",
+                "--poll-interval",
+                "5",
+                "--max-retries",
+                "1",
+                "ntplib==0.4.0",
+            ]
+        )
         assert args.poll_interval == 5
         assert args.max_retries == 1
 
     def test_no_max_parallel_flag(self):
         parser = make_parser()
-        args = parser.parse_args(["python", "run", "ntplib==0.4.0"])
+        args = parser.parse_args(["python", "run", "--fix-type", "Backport", "ntplib==0.4.0"])
         assert not hasattr(args, "max_parallel")
 
     def test_output_json_defaults_to_none(self):
         parser = make_parser()
-        args = parser.parse_args(["python", "run", "ntplib==0.4.0"])
+        args = parser.parse_args(["python", "run", "--fix-type", "Backport", "ntplib==0.4.0"])
         assert args.output_json is None
 
     def test_output_json_parsed(self):
         parser = make_parser()
-        args = parser.parse_args(["python", "run", "--output-json", "/tmp/result.json", "ntplib==0.4.0"])
+        args = parser.parse_args(
+            ["python", "run", "--fix-type", "Backport", "--output-json", "/tmp/result.json", "ntplib==0.4.0"]
+        )
         assert args.output_json == "/tmp/result.json"
 
 

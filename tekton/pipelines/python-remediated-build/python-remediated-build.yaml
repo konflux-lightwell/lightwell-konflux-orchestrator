@@ -38,6 +38,12 @@ spec:
         Package version string to build. For example: 0.4.0, 2.5.0.
       type: string
 
+    - name: FIX_TYPE
+      description: >-
+        Remediation type controlling commit-distance calculation. Must be
+        Backport or Novel.
+      type: string
+
     - name: LIGHTWELL_BUILDS_REPO_URL
       description: >-
         URL of the lightwell-builds git repository for this package.
@@ -172,6 +178,8 @@ spec:
           value: $(params.PACKAGE)
         - name: VERSION
           value: $(params.VERSION)
+        - name: FIX_TYPE
+          value: $(params.FIX_TYPE)
         - name: LIGHTWELL_BUILDS_TAG
           value: $(params.LIGHTWELL_BUILDS_TAG)
         - name: ociStorage
