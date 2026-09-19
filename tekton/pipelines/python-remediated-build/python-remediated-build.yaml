@@ -18,7 +18,7 @@ spec:
       2. source-to-sdist: Run git archive HEAD:source/ | gzip -n to reconstruct
          a deterministic sdist. Pre-place it at sdists-repo/downloads/ and export
          as a Trusted Artifact.
-      3. fromager-build-wheels: Run fromager bootstrap <package>==<version>. fromager
+      3. python-fromager-build-wheels: Run fromager bootstrap <package>==<version>. fromager
          detects the pre-placed sdist ("already have") and builds wheels without any
          network sdist download. Push wheels as an OCI artifact.
 
@@ -184,12 +184,12 @@ spec:
           value: $(params.caTrustConfigMapKey)
 
     # ── Step 3: fromager bootstrap from pre-placed sdist → wheels OCI artifact ─
-    - name: fromager-build-wheels
+    - name: python-fromager-build-wheels
       taskRef:
         resolver: bundles
         params:
           - name: bundle
-            value: quay.io/konflux-ci/tekton-catalog/task-fromager-build-wheels:0.1@sha256:4796fc62e094dfd1fa463f58252d2224bfb26df2bfa1a8138ff4b3616b2f7642
+            value: quay.io/konflux-ci/tekton-catalog/task-fromager-build-wheels:0.1@sha256:f8aac7aaa8cbed561479d975ffdbdc53785abdd608988ab6430b5c2e893dcc6e
           - name: name
             value: python-fromager-build-wheels
           - name: kind
