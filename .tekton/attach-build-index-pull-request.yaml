@@ -30,7 +30,7 @@ spec:
   - name: dockerfile
     value: Dockerfile
   - name: path-context
-    value: tekton/tasks/attach-build-index
+    value: tekton/tasks/attach-build-index/0.1
   pipelineSpec:
     params:
     - description: Source Repository URL
