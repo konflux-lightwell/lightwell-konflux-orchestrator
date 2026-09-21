@@ -262,16 +262,21 @@ spec:
     #
     # TODO(LWLP-1746): the bundle digest below is a non-resolvable SENTINEL.
     # Pin it to the real digest AFTER the attach-build-index bundle is first
-    # published by .tekton/attach-build-index-push.yaml (fires on merge to
-    # main). Until then this pipeline must not be run for production builds —
-    # the sentinel will fail to resolve by design, preventing a wrong digest
-    # from silently shipping.
+    # RELEASED to the external shared catalog. The flow: merge to main fires
+    # .tekton/attach-build-index-push.yaml (builds+pushes the bundle to the
+    # lightwell-poc-tenant namespace), then the auto-release ReleasePlan/RPA
+    # onboarded in konflux-release-data promotes it to
+    # quay.io/konflux-ci/tekton-catalog/task-attach-build-index (matching the
+    # source-to-sdist peer above). Pin to the released digest at :0.1. Until
+    # then this pipeline must not be run for production builds — the sentinel
+    # will fail to resolve by design, preventing a wrong digest from silently
+    # shipping.
     - name: attach-build-index
       taskRef:
         resolver: bundles
         params:
           - name: bundle
-            value: quay.io/redhat-user-workloads/lightwell-poc-tenant/tekton-bundles/attach-build-index:REPLACE_AFTER_FIRST_BUNDLE_PUBLISH@sha256:0000000000000000000000000000000000000000000000000000000000000000
+            value: quay.io/konflux-ci/tekton-catalog/task-attach-build-index:0.1@sha256:0000000000000000000000000000000000000000000000000000000000000000
           - name: name
             value: attach-build-index
           - name: kind
