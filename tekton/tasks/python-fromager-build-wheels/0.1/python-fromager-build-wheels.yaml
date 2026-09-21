@@ -43,9 +43,13 @@ spec:
       type: string
       default: ""
     - name: WHEEL_SERVER_URL
-      description: Optional wheel server URL for prebuilt wheel lookup during fromager dependency resolution.
+      description: Wheel server URL for prebuilt wheel lookup during fromager dependency resolution.
       type: string
-      default: ""
+      default: https://packages.redhat.com/lightwell/python/validated/simple/
+    - name: PULP_SECRET_NAME
+      description: Optional Secret name containing Pulp credentials (basic-auth username/password or SERVICE_ACCOUNT_USERNAME/SERVICE_ACCOUNT_PASSWORD).
+      type: string
+      default: lightwell-pulp-read-secret
     - name: BUILD_CONFIGS_REPO_URL
       description: URL of the calunga-python build-configs git repository.
       type: string
@@ -85,6 +89,10 @@ spec:
           - key: $(params.caTrustConfigMapKey)
             path: ca-bundle.crt
         name: $(params.caTrustConfigMapName)
+        optional: true
+    - name: pulp-secret
+      secret:
+        secretName: $(params.PULP_SECRET_NAME)
         optional: true
     - name: workdir
       emptyDir: {}
@@ -288,6 +296,9 @@ spec:
         - mountPath: /mnt/trusted-ca
           name: trusted-ca
           readOnly: true
+        - mountPath: /mnt/pulp-secret
+          name: pulp-secret
+          readOnly: true
       env:
         - name: PACKAGE
           value: $(params.PACKAGE)
@@ -302,6 +313,20 @@ spec:
       script: |
         #!/bin/bash
         set -euo pipefail
+
+        # Load Pulp credentials from optional secret mount if available
+        if [ -d /mnt/pulp-secret ]; then
+          if [ -f /mnt/pulp-secret/SERVICE_ACCOUNT_USERNAME ]; then
+            export SERVICE_ACCOUNT_USERNAME="$(cat /mnt/pulp-secret/SERVICE_ACCOUNT_USERNAME)"
+          elif [ -f /mnt/pulp-secret/username ]; then
+            export SERVICE_ACCOUNT_USERNAME="$(cat /mnt/pulp-secret/username)"
+          fi
+          if [ -f /mnt/pulp-secret/SERVICE_ACCOUNT_PASSWORD ]; then
+            export SERVICE_ACCOUNT_PASSWORD="$(cat /mnt/pulp-secret/SERVICE_ACCOUNT_PASSWORD)"
+          elif [ -f /mnt/pulp-secret/password ]; then
+            export SERVICE_ACCOUNT_PASSWORD="$(cat /mnt/pulp-secret/password)"
+          fi
+        fi
 
         ARGS=()
         if [[ -n "$WHEEL_SERVER_URL" ]]; then

@@ -52,6 +52,7 @@ class PythonEcosystem:
             git_auth_secret=config.GIT_AUTH_SECRET,
             builds_tag=builds_tag,
             fix_type=fix_type,
+            wheel_server_url=getattr(args, "wheel_server_url", None),
         )
 
     def target_skip_release(self, target: str) -> bool:

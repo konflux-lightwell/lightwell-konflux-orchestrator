@@ -53,6 +53,12 @@ IMAGE_REPO_BASE = "quay.io/redhat-user-workloads/lightwell-python-tenant"
 # against the lightwell-builds git repositories.
 GIT_AUTH_SECRET = "lightwell-builds-git-auth"
 
+# Wheel cache server URL pointing to the Lightwell validated Python repository.
+WHEEL_SERVER_URL = os.environ.get(
+    "WHEEL_SERVER_URL",
+    "https://packages.redhat.com/lightwell/python/validated/simple/",
+)
+
 
 def pipeline_definition_path() -> Path:
     """Return the path to the python-remediated-build pipeline definition.
