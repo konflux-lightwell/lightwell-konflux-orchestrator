@@ -19,6 +19,7 @@ from __future__ import annotations
 from typing import Any
 
 from import_orchestrator.ecosystems.base import DEFAULT_PIPELINERUN_ANNOTATIONS
+from import_orchestrator.ecosystems.python import config
 from import_orchestrator.engine.errors import TriggerError
 
 __all__ = ["TriggerError", "build_pipelinerun_manifest", "parse_ref"]
@@ -50,6 +51,7 @@ def build_pipelinerun_manifest(
     service_account: str | None = None,
     builds_tag: str | None = None,
     fix_type: str = "Backport",
+    wheel_server_url: str | None = None,
 ) -> dict[str, Any]:
     """Build a python-remediated-build PipelineRun manifest for one package/version.
 
@@ -83,6 +85,7 @@ def build_pipelinerun_manifest(
             {"name": "LIGHTWELL_BUILDS_TAG", "value": tag},
             {"name": "IMAGE", "value": image},
             {"name": "ociStorage", "value": f"{image}.src"},
+            {"name": "WHEEL_SERVER_URL", "value": wheel_server_url or config.WHEEL_SERVER_URL},
         ],
         "workspaces": [
             {"name": "git-auth", "secret": {"secretName": git_auth_secret}},

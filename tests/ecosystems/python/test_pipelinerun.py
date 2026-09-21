@@ -95,6 +95,14 @@ class TestBuildManifest:
         assert params["VERSION"] == "0.4.0"
         assert params["FIX_TYPE"] == "Backport"
         assert params["LIGHTWELL_BUILDS_TAG"] == "foolib/0.4.0"
+        assert params["WHEEL_SERVER_URL"] == "https://packages.redhat.com/lightwell/python/validated/simple/"
+
+    def test_wheel_server_url_override(self):
+        params = {
+            p["name"]: p["value"]
+            for p in _manifest(wheel_server_url="https://custom.repo/simple/")["spec"]["params"]
+        }
+        assert params["WHEEL_SERVER_URL"] == "https://custom.repo/simple/"
 
     def test_fix_type_is_passed_to_pipeline(self):
         params = {p["name"]: p["value"] for p in _manifest(fix_type="Novel")["spec"]["params"]}

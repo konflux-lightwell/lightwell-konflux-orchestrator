@@ -83,9 +83,9 @@ spec:
       default: ""
 
     - name: WHEEL_SERVER_URL
-      description: Optional wheel server URL for prebuilt wheel lookup during fromager dependency resolution.
+      description: Wheel server URL for prebuilt wheel lookup during fromager dependency resolution.
       type: string
-      default: ""
+      default: https://packages.redhat.com/lightwell/python/validated/simple/
 
     - name: caTrustConfigMapName
       description: The name of the ConfigMap to read CA bundle data from.
