@@ -261,11 +261,13 @@ spec:
         echo -n "${N}" > $(results.N_VALUE.path)
 
         # Save to environment file for next steps
+        SHORT_COMMIT=$(git rev-parse --short=7 HEAD)
         cat > /var/workdir/version-env.sh <<EOF
         export COMPUTED_VERSION="${COMPUTED_VERSION}"
         export B_VALUE="${B}"
         export N_VALUE="${N}"
         export UPSTREAM_VERSION="${VERSION}"
+        export SHORT_COMMIT="${SHORT_COMMIT}"
         EOF
 
     - name: rewrite-version-metadata
@@ -449,13 +451,15 @@ spec:
         """
         import tarfile, gzip, io, os, sys, hashlib
 
-        # Load computed version from version-env.sh
+        # Load computed version and short commit from version-env.sh
         computed_version = None
+        short_commit = None
         with open('/var/workdir/version-env.sh') as f:
             for line in f:
                 if line.startswith('export COMPUTED_VERSION='):
                     computed_version = line.split('=', 1)[1].strip().strip('"')
-                    break
+                elif line.startswith('export SHORT_COMMIT='):
+                    short_commit = line.split('=', 1)[1].strip().strip('"')
 
         if not computed_version:
             print("ERROR: Could not load COMPUTED_VERSION from version-env.sh", file=sys.stderr)
@@ -479,8 +483,12 @@ spec:
             sys.exit(1)
 
         print(f"Building deterministic sdist: {sdist_name}")
+        # Use 1980-01-01 00:00:00 UTC (315532800) for deterministic mtime.
+        # Epoch 0 (1970) causes Python zipfile / wheel builders (e.g. flit_core)
+        # to fail with "ValueError: ZIP does not support timestamps before 1980".
+        DETERMINISTIC_MTIME = 315532800
         buf = io.BytesIO()
-        with gzip.GzipFile(filename="", mtime=0, mode="wb", fileobj=buf) as gz:
+        with gzip.GzipFile(filename="", mtime=DETERMINISTIC_MTIME, mode="wb", fileobj=buf) as gz:
             with tarfile.open(fileobj=gz, mode="w:", format=tarfile.GNU_FORMAT) as tf:
                 for root, dirs, files in os.walk(src_dir):
                     dirs.sort()
@@ -491,7 +499,7 @@ spec:
                     info.mode = 0o755
                     info.uid = info.gid = 0
                     info.uname = info.gname = ""
-                    info.mtime = 0
+                    info.mtime = DETERMINISTIC_MTIME
                     tf.addfile(info)
                     for fname in sorted(files):
                         fpath = os.path.join(root, fname)
@@ -501,7 +509,7 @@ spec:
                         info.mode = 0o644
                         info.uid = info.gid = 0
                         info.uname = info.gname = ""
-                        info.mtime = 0
+                        info.mtime = DETERMINISTIC_MTIME
                         with open(fpath, "rb") as f:
                             tf.addfile(info, f)
 
@@ -511,9 +519,40 @@ spec:
         print(f"  SHA256: {sha256}")
         print(f"  Size:   {size} bytes")
 
-        for dest_dir in [downloads, builds]:
-            os.makedirs(dest_dir, exist_ok=True)
-            dest = os.path.join(dest_dir, sdist_name)
+        # Discover raw package name from PKG-INFO if present, e.g. "PyPDF2"
+        raw_name = pkg
+        pkg_info_path = os.path.join(src_dir, "PKG-INFO")
+        if os.path.exists(pkg_info_path):
+            with open(pkg_info_path, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    if line.startswith("Name:"):
+                        raw_name = line.split(":", 1)[1].strip()
+                        break
+
+        # Create multiple filenames so fromager finds the sdist regardless of
+        # case convention (PyPDF2 vs pypdf2), separator (- vs _), or whether
+        # it queries by upstream version or COMPUTED_VERSION.
+        names_to_create = {
+            f"{pkg}-{ver}.tar.gz",
+            f"{raw_name}-{ver}.tar.gz",
+            f"{pkg.replace('-', '_')}-{ver}.tar.gz",
+            f"{pkg}-{computed_version}.tar.gz",
+            f"{raw_name}-{computed_version}.tar.gz",
+            f"{pkg.replace('-', '_')}-{computed_version}.tar.gz",
+        }
+
+        # Write exclusively to downloads/ (Fromager's offline download cache).
+        # We place both the canonical name and any original-case name from PKG-INFO
+        # so Fromager's case-sensitive lookup finds the sdist.
+        # Do NOT write to builds/ - Fromager's build phase generates the built sdist.
+        os.makedirs(downloads, exist_ok=True)
+        if short_commit:
+            with open("/var/workdir/sdists-repo/.commit", "w") as f:
+                f.write(short_commit)
+            print(f"  Recorded commit {short_commit} in sdists-repo/.commit")
+
+        for fname in sorted(names_to_create):
+            dest = os.path.join(downloads, fname)
             with open(dest, "wb") as f:
                 f.write(data)
             print(f"  Written: {dest}")

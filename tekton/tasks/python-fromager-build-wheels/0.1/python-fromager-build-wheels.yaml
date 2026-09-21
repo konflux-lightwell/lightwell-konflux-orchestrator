@@ -120,26 +120,41 @@ spec:
           value: $(params.PACKAGE)
         - name: VERSION
           value: $(params.VERSION)
+        - name: COMPUTED_VERSION
+          value: $(params.COMPUTED_VERSION)
       script: |
         #!/bin/bash
         set -euo pipefail
 
-        SDIST="${PACKAGE}-${VERSION}.tar.gz"
-        SDIST_PATH="/var/workdir/sdists-repo/downloads/${SDIST}"
+        mkdir -p /var/workdir/sdists-repo/downloads
 
-        if [[ ! -f "${SDIST_PATH}" ]]; then
-          if [[ -f "/var/workdir/sdists-repo/${SDIST}" ]]; then
-            mkdir -p /var/workdir/sdists-repo/downloads
-            cp "/var/workdir/sdists-repo/${SDIST}" "${SDIST_PATH}"
-          else
-            echo "ERROR: pre-placed sdist not found: ${SDIST_PATH}" >&2
-            exit 1
-          fi
+        # Find any matching sdist in sdists-repo (checking case-insensitively or via pattern)
+        PKG_NORM="${PACKAGE//-/_}"
+        FOUND=""
+        for d in "/var/workdir/sdists-repo/downloads" "/var/workdir/sdists-repo"; do
+          for f in "$d"/*.tar.gz; do
+            [ -f "$f" ] || continue
+            fname="$(basename "$f")"
+            fname_lower="$(echo "$fname" | tr '[:upper:]' '[:lower:]')"
+            if [[ "$fname_lower" == "${PACKAGE}-${VERSION}"* || "$fname_lower" == "${PKG_NORM}-${VERSION}"* || \
+                  "$fname_lower" == "${PACKAGE}-${COMPUTED_VERSION}"* || "$fname_lower" == "${PKG_NORM}-${COMPUTED_VERSION}"* ]]; then
+              FOUND="$f"
+              break 2
+            fi
+          done
+        done
+
+        if [[ -z "$FOUND" ]]; then
+          echo "ERROR: pre-placed sdist not found in /var/workdir/sdists-repo" >&2
+          ls -la /var/workdir/sdists-repo >&2
+          exit 1
         fi
 
-        SDIST_SIZE=$(stat -c%s "${SDIST_PATH}" 2>/dev/null || stat -f%z "${SDIST_PATH}")
-        SDIST_SHA256=$(sha256sum "${SDIST_PATH}" | cut -d' ' -f1)
-        echo "Pre-placed sdist verified: ${SDIST_PATH} (${SDIST_SIZE} bytes, sha256: ${SDIST_SHA256})"
+        echo "Pre-placed sdist verified: ${FOUND}"
+        # Ensure it exists under the standard upstream name in downloads/
+        if [[ ! -f "/var/workdir/sdists-repo/downloads/${PACKAGE}-${VERSION}.tar.gz" ]]; then
+          cp "$FOUND" "/var/workdir/sdists-repo/downloads/${PACKAGE}-${VERSION}.tar.gz"
+        fi
       computeResources:
         requests:
           cpu: 100m
@@ -278,14 +293,15 @@ spec:
           value: $(params.PACKAGE)
         - name: VERSION
           value: $(params.VERSION)
+        - name: COMPUTED_VERSION
+          value: $(params.COMPUTED_VERSION)
         - name: WHEEL_SERVER_URL
           value: $(params.WHEEL_SERVER_URL)
+        - name: FROMAGER_SDISTS_REPO
+          value: /var/workdir/sdists-repo
       script: |
         #!/bin/bash
         set -euo pipefail
-
-        mkdir -p output
-        cp -r /var/workdir/sdists-repo output/sdists-repo
 
         ARGS=()
         if [[ -n "$WHEEL_SERVER_URL" ]]; then
@@ -293,7 +309,27 @@ spec:
         fi
         ARGS+=(--package-settings-dir /var/workdir/fromager-settings)
 
-        exec build-wheels "${ARGS[@]}" "${PACKAGE}==${VERSION}"
+        build-wheels "${ARGS[@]}" "${PACKAGE}==${VERSION}"
+
+        # Fromager (via FROMAGER_SDISTS_REPO) writes built sdists to
+        # /var/workdir/sdists-repo/builds. Sync them into output/sdists-repo/builds
+        # for collect-build-files, aligning the primary sdist to COMPUTED_VERSION.
+        mkdir -p /var/workdir/output/sdists-repo/builds
+        if [ -d "/var/workdir/sdists-repo/builds" ]; then
+          cp -r /var/workdir/sdists-repo/builds/* /var/workdir/output/sdists-repo/builds/ 2>/dev/null || true
+        fi
+
+        PKG_NORM="${PACKAGE//-/_}"
+        AUTHORITATIVE_NAME="${PACKAGE}-${COMPUTED_VERSION}.tar.gz"
+        for f in "/var/workdir/output/sdists-repo/builds"/*.tar.gz; do
+          [ -f "$f" ] || continue
+          fname="$(basename "$f")"
+          fname_lower="$(echo "$fname" | tr '[:upper:]' '[:lower:]')"
+          if [[ "$fname_lower" == "${PACKAGE}-${VERSION}.tar.gz" || "$fname_lower" == "${PKG_NORM}-${VERSION}.tar.gz" ]]; then
+            echo "Renaming built sdist $fname to $AUTHORITATIVE_NAME"
+            mv "$f" "/var/workdir/output/sdists-repo/builds/$AUTHORITATIVE_NAME"
+          fi
+        done
 
     - name: collect-build-files
       image: quay.io/redhat-user-workloads/calunga-tenant/plumbing-builder@sha256:d8355de03d57adef033743da1f1a3bb2f0ff038192e3220b155e9dd7dba5d37c
@@ -320,6 +356,8 @@ spec:
           value: $(params.PACKAGE)
         - name: VERSION
           value: $(params.VERSION)
+        - name: COMPUTED_VERSION
+          value: $(params.COMPUTED_VERSION)
       script: |
         #!/bin/bash
         set -euo pipefail
@@ -338,12 +376,31 @@ spec:
           exit 1
         fi
 
+        # Discover and sanitize extra tags (Quay / OCI tags disallow '+')
+        IMAGE_BASE="${IMAGE%:*}"
+        EXTRA_TAGS=()
+        COMMIT_SHA=""
+        if [ -f /var/workdir/sdists-repo/.commit ]; then
+          COMMIT_SHA="$(cat /var/workdir/sdists-repo/.commit)"
+        fi
+        if [ -n "${COMPUTED_VERSION:-}" ]; then
+          BN_TAG_SUFFIX="${COMPUTED_VERSION//+/-}"
+          BN_TAG="${PACKAGE}-${BN_TAG_SUFFIX}"
+          if [ "${IMAGE_BASE}:${BN_TAG}" != "$IMAGE" ]; then
+            EXTRA_TAGS+=("${BN_TAG}")
+          fi
+          if [ -n "${COMMIT_SHA:-}" ]; then
+            EXTRA_TAGS+=("${BN_TAG}-${COMMIT_SHA}")
+          fi
+        fi
+
         echo "Pushing wheels OCI artifact to ${IMAGE}"
         if ! retry oras push "$IMAGE" \
           --registry-config "${AUTHFILE}" \
           "${EXPIRE_LABEL[@]}" \
           --annotation "dev.lightwell.package=${PACKAGE}" \
-          --annotation "dev.lightwell.version=${VERSION}" \
+          --annotation "dev.lightwell.version=${COMPUTED_VERSION:-$VERSION}" \
+          --annotation "dev.lightwell.upstream-version=${VERSION}" \
           --annotation "dev.lightwell.pipeline=python-remediated-build" \
           --artifact-type "application/vnd.python.wheels" \
           "${FILES[@]}"
@@ -353,6 +410,11 @@ spec:
         fi
 
         RESULTING_DIGEST=$(retry oras resolve --registry-config "${AUTHFILE}" "${IMAGE}")
+
+        if [ ${#EXTRA_TAGS[@]} -gt 0 ]; then
+          echo "Applying additional tags: ${EXTRA_TAGS[*]}"
+          retry oras tag --registry-config "${AUTHFILE}" "${IMAGE_BASE}@${RESULTING_DIGEST}" "${EXTRA_TAGS[@]}"
+        fi
 
         echo -n "$IMAGE" | tee "$(results.IMAGE_URL.path)"
         echo -n "$RESULTING_DIGEST" | tee "$(results.IMAGE_DIGEST.path)"
@@ -377,6 +439,8 @@ spec:
           value: $(params.PACKAGE)
         - name: VERSION
           value: $(params.VERSION)
+        - name: COMPUTED_VERSION
+          value: $(params.COMPUTED_VERSION)
       script: |
         #!/bin/bash
         set -euo pipefail
@@ -386,14 +450,16 @@ spec:
         PRIMARY_WHEEL=""
         for whl in /var/workdir/artifact/*.whl; do
           base="$(basename "$whl")"
-          if [[ "$base" == "${PKG_NORM}-${VERSION}-"* || "$base" == "${PKG_NORM}-${VERSION}.dist-info"* ]]; then
+          if [[ "$base" == "${PKG_NORM}-${COMPUTED_VERSION}-"* || "$base" == "${PKG_NORM}-${COMPUTED_VERSION}.dist-info"* || \
+                "$base" == "${PKG_NORM}-${VERSION}-"* || "$base" == "${PKG_NORM}-${VERSION}.dist-info"* ]]; then
             PRIMARY_WHEEL="$whl"
             break
           fi
         done
 
         if [[ -z "$PRIMARY_WHEEL" ]]; then
-          echo "ERROR: could not find primary wheel for ${PACKAGE}==${VERSION} in artifact/" >&2
+          echo "ERROR: could not find primary wheel for ${PACKAGE}==${COMPUTED_VERSION:-$VERSION} in artifact/" >&2
+          ls -la /var/workdir/artifact/ >&2
           exit 1
         fi
 
