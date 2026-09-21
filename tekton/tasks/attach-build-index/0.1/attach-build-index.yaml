@@ -1,0 +1,161 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  annotations:
+    tekton.dev/pipelines.minVersion: 0.12.1
+    tekton.dev/tags: python, osv, build-index, lightwell, konflux
+  labels:
+    app.kubernetes.io/version: "0.1"
+    build.appstudio.redhat.com/build_type: attach-build-index
+  name: attach-build-index
+spec:
+  description: >-
+    Generate a build-index.json for a remediated Python build and attach it to
+    the component image as an OCI referrer (media type
+    application/vnd.lightwell.build-index.v1+json), so the release-side
+    generate-py-osv task (LWLP-1253) can discover it with `oras discover` and
+    hand it to slan-cuan for OSV record generation.
+
+    The primary PURL, the remediated version, and the vulnerability IDs are
+    derived from the ADR-0005 `Lightwell-Fix:` commit trailers on the checked-out
+    lightwell-builds source (restored from SOURCE_ARTIFACT, whose HEAD is the
+    tagged cumulative-patch commit). The task fails closed (`--require-vuln`): a
+    remediated build with no resolvable vulnerability IDs is a hard error rather
+    than an index that silently ships `vulns: []`.
+  params:
+    - name: SOURCE_ARTIFACT
+      description: >-
+        Trusted Artifact URI of the cloned lightwell-builds source tree, as
+        produced by the pipeline's git-clone-oci-ta step. Must include the .git
+        directory so the ADR-0005 Lightwell-Fix trailers can be read from the
+        HEAD (tagged) commit — the same artifact source-to-sdist consumes for
+        its `git archive`, so .git is guaranteed present.
+      type: string
+    - name: IMAGE_REF
+      description: >-
+        Digest-pinned reference (repo@sha256:...) of the wheels component image
+        the build-index referrer is attached to. Digest-pinning guarantees the
+        referrer lands on exactly the image that was built.
+      type: string
+    - name: PACKAGE
+      description: >-
+        Canonical Python package name (PEP 503 normalized, hyphens only), used
+        to construct the pkg:pypi PURL.
+      type: string
+    - name: VERSION
+      description: >-
+        Upstream package version. Recorded as build-index version.upstream and
+        used as the PURL/OSV upstream base; must differ from COMPUTED_VERSION.
+      type: string
+    - name: COMPUTED_VERSION
+      description: >-
+        Full remediated (PEP 440 local) version, e.g. 3.0.1+rhlw.1. Recorded as
+        version.full and used as the PURL version, so primaryPurl matches
+        version.full (enforced by the BuildIndex schema).
+      type: string
+    - name: caTrustConfigMapName
+      description: The name of the ConfigMap to read CA bundle data from.
+      type: string
+      default: trusted-ca
+    - name: caTrustConfigMapKey
+      description: The name of the key in the ConfigMap that contains the CA bundle data.
+      type: string
+      default: ca-bundle.crt
+  results:
+    - name: BUILD_INDEX_ATTACHED_REF
+      description: >-
+        The component image reference the build-index referrer was attached to
+        (repo@sha256:...). Empty if nothing was attached.
+  stepTemplate:
+    env:
+      - name: IMAGE_REF
+        value: $(params.IMAGE_REF)
+    volumeMounts:
+      - mountPath: /mnt/trusted-ca
+        name: trusted-ca
+        readOnly: true
+  steps:
+    # ── Restore the cloned lightwell-builds source (incl. .git) ───────────────
+    - name: use-source-artifact
+      image: quay.io/konflux-ci/build-trusted-artifacts:latest@sha256:9bd32f6bafb517b309e11a2d89365052b4ab3f1c9c23c4ffd45aff6f03960476
+      computeResources:
+        limits:
+          memory: 512Mi
+        requests:
+          cpu: 100m
+          memory: 512Mi
+      volumeMounts:
+        - mountPath: /var/workdir
+          name: workdir
+      args:
+        - use
+        - $(params.SOURCE_ARTIFACT)=/var/workdir/source
+    # ── Generate build-index.json from trailers and attach it as a referrer ───
+    - name: create-and-attach
+      image: quay.io/light-castle/slan-cuan:latest
+      computeResources:
+        limits:
+          memory: 512Mi
+        requests:
+          cpu: 100m
+          memory: 512Mi
+      volumeMounts:
+        - mountPath: /var/workdir
+          name: workdir
+      script: |
+        #!/bin/bash
+        set -euo pipefail
+
+        ca_bundle=/mnt/trusted-ca/ca-bundle.crt
+        if [ -f "$ca_bundle" ]; then
+          export SSL_CERT_FILE="$ca_bundle"
+          export REQUESTS_CA_BUNDLE="$ca_bundle"
+        fi
+
+        if [[ "$IMAGE_REF" != *@sha256:* ]]; then
+          echo "ERROR: IMAGE_REF must be digest-pinned (contain @sha256:)" >&2
+          exit 1
+        fi
+
+        # Tekton injects the pipeline service account's registry credentials
+        # into $HOME/.docker/config.json; oras (via fath-cuan's OrasRegistry,
+        # which calls auth.load_configs) loads them from DOCKER_CONFIG.
+        export DOCKER_CONFIG="$HOME/.docker"
+
+        SRC=/var/workdir/source
+        if [ ! -d "$SRC/.git" ]; then
+          echo "ERROR: restored source at $SRC has no .git directory;" >&2
+          echo "       cannot read ADR-0005 Lightwell-Fix trailers for --require-vuln" >&2
+          exit 1
+        fi
+
+        PURL="pkg:pypi/$(params.PACKAGE)@$(params.COMPUTED_VERSION)"
+        echo "Generating build-index for ${PURL} (upstream $(params.VERSION))"
+
+        # --require-vuln: fail closed if no vuln IDs resolve from the trailers.
+        # b/n default to 0; a populated vulns list is itself the remediation
+        # signal the BuildIndex schema and downstream OSV generation rely on.
+        fath-cuan index create \
+          --ecosystem pypi \
+          --purl "$PURL" \
+          --version-upstream "$(params.VERSION)" \
+          --version-local "$(params.COMPUTED_VERSION)" \
+          --git-dir "$SRC" \
+          --require-vuln \
+          --attach-to "$IMAGE_REF" \
+          --output /var/workdir/build-index.json
+
+        echo "--- build-index.json ---"
+        cat /var/workdir/build-index.json
+        echo
+        echo -n "$IMAGE_REF" | tee "$(results.BUILD_INDEX_ATTACHED_REF.path)"
+  volumes:
+    - configMap:
+        items:
+          - key: $(params.caTrustConfigMapKey)
+            path: ca-bundle.crt
+        name: $(params.caTrustConfigMapName)
+        optional: true
+      name: trusted-ca
+    - emptyDir: {}
+      name: workdir

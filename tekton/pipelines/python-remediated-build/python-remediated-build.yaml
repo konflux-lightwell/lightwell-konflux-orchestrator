@@ -21,6 +21,12 @@ spec:
       3. python-fromager-build-wheels: Run fromager bootstrap <package>==<version>. fromager
          detects the pre-placed sdist ("already have") and builds wheels without any
          network sdist download. Push wheels as an OCI artifact.
+      4. clamav-scan: Scan the wheels artifact for malware.
+      5. attach-build-index: Emit a build-index.json (purl, remediated version,
+         vuln IDs from the ADR-0005 Lightwell-Fix commit trailers) and attach it
+         to the wheels image as an OCI referrer
+         (application/vnd.lightwell.build-index.v1+json) for release-side OSV
+         generation. Fails closed if no vuln IDs resolve.
 
     The lightwell-builds repo stores each validated package version as a tagged commit
     with source content in source/ and SLSA provenance in .lightwell/metadata.json.
@@ -245,3 +251,45 @@ spec:
           value: $(tasks.fromager-build-wheels.results.IMAGE_URL)
       runAfter:
         - fromager-build-wheels
+
+    # ── Step 5: Attach build-index.json OCI referrer for release OSV gen ──────
+    # Emits a build-index.json (purl + remediated version + vuln IDs, resolved
+    # from the ADR-0005 Lightwell-Fix commit trailers) and attaches it to the
+    # wheels image as an OCI referrer (media type
+    # application/vnd.lightwell.build-index.v1+json) so the release-side
+    # generate-py-osv task (LWLP-1253) can discover it. Fails closed if no vuln
+    # IDs resolve. See tekton/tasks/attach-build-index/0.1/attach-build-index.yaml.
+    #
+    # TODO(LWLP-1746): the bundle digest below is a non-resolvable SENTINEL.
+    # Pin it to the real digest AFTER the attach-build-index bundle is first
+    # published by .tekton/attach-build-index-push.yaml (fires on merge to
+    # main). Until then this pipeline must not be run for production builds —
+    # the sentinel will fail to resolve by design, preventing a wrong digest
+    # from silently shipping.
+    - name: attach-build-index
+      taskRef:
+        resolver: bundles
+        params:
+          - name: bundle
+            value: quay.io/redhat-user-workloads/lightwell-poc-tenant/tekton-bundles/attach-build-index:REPLACE_AFTER_FIRST_BUNDLE_PUBLISH@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          - name: name
+            value: attach-build-index
+          - name: kind
+            value: task
+      runAfter:
+        - fromager-build-wheels
+      params:
+        - name: SOURCE_ARTIFACT
+          value: $(tasks.clone-lightwell-builds.results.SOURCE_ARTIFACT)
+        - name: IMAGE_REF
+          value: $(tasks.fromager-build-wheels.results.IMAGE_REF)
+        - name: PACKAGE
+          value: $(params.PACKAGE)
+        - name: VERSION
+          value: $(params.VERSION)
+        - name: COMPUTED_VERSION
+          value: $(tasks.source-to-sdist.results.COMPUTED_VERSION)
+        - name: caTrustConfigMapName
+          value: $(params.caTrustConfigMapName)
+        - name: caTrustConfigMapKey
+          value: $(params.caTrustConfigMapKey)
