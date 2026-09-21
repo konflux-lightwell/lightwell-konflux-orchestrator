@@ -483,10 +483,16 @@ spec:
             sys.exit(1)
 
         print(f"Building deterministic sdist: {sdist_name}")
-        # Use 1980-01-01 00:00:00 UTC (315532800) for deterministic mtime.
-        # Epoch 0 (1970) causes Python zipfile / wheel builders (e.g. flit_core)
-        # to fail with "ValueError: ZIP does not support timestamps before 1980".
-        DETERMINISTIC_MTIME = 315532800
+        # Use epoch 0 (1970-01-01 00:00:00 UTC) for deterministic mtime,
+        # consistent with standard fromager / SOURCE_DATE_EPOCH=0 behavior and
+        # existing published archives in Lightwell.
+        #
+        # Note for future platforms (e.g. Windows builds): Backends like flit_core
+        # do not clamp extracted file timestamps when packaging wheels, causing
+        # Python's zipfile to fail on timestamps < 1980 if local time shifts
+        # into 1979. Future Windows builders can resolve this by configuring UTC
+        # (Set-TimeZone -Id "UTC") and exporting SOURCE_DATE_EPOCH >= 315532800.
+        DETERMINISTIC_MTIME = 0
         buf = io.BytesIO()
         with gzip.GzipFile(filename="", mtime=DETERMINISTIC_MTIME, mode="wb", fileobj=buf) as gz:
             with tarfile.open(fileobj=gz, mode="w:", format=tarfile.GNU_FORMAT) as tf:
