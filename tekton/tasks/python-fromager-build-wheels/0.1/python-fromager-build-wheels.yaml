@@ -279,6 +279,27 @@ spec:
           --format yaml \
           "$PACKAGE" "$VERSION" \
           > "$OUT"
+
+        # Force Fromager to build the target package from local sdist rather than
+        # skipping it via wheel cache by injecting a changelog entry. Fromager
+        # checks whether the cached wheel's build_tag matches len(changelog[version]).
+        # Upstream/validated wheels have build tag 0. Adding a changelog entry makes
+        # expected build tag >= 1, causing Fromager to reject the cached wheel for the
+        # target package and build it from the pre-placed sdist, while dependencies
+        # (flit_core, etc.) without changelogs continue using the wheel cache.
+        python3 - << 'PY'
+        import yaml, os
+        from pathlib import Path
+        pkg = os.environ["PACKAGE"]
+        ver = os.environ["VERSION"]
+        out_path = Path(f"/var/workdir/fromager-settings/{pkg}.yaml")
+        cfg = yaml.safe_load(out_path.read_text()) or {}
+        cl = cfg.setdefault("changelog", {})
+        entries = cl.setdefault(ver, [])
+        entries.append(f"Lightwell build for {pkg}=={ver}")
+        out_path.write_text(yaml.dump(cfg))
+        PY
+
         echo "Rendered fromager settings for ${PACKAGE}==${VERSION}:"
         cat "$OUT"
       computeResources:
