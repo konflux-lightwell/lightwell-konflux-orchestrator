@@ -99,8 +99,7 @@ class TestBuildManifest:
 
     def test_wheel_server_url_override(self):
         params = {
-            p["name"]: p["value"]
-            for p in _manifest(wheel_server_url="https://custom.repo/simple/")["spec"]["params"]
+            p["name"]: p["value"] for p in _manifest(wheel_server_url="https://custom.repo/simple/")["spec"]["params"]
         }
         assert params["WHEEL_SERVER_URL"] == "https://custom.repo/simple/"
 
