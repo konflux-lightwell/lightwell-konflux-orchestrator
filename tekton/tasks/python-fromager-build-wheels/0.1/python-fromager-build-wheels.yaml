@@ -427,7 +427,10 @@ spec:
                 with open(summary_path) as f:
                     entries = json.load(f)
                 for entry in entries:
-                    dist = canonicalize_name(entry.get("dist_name", ""))
+                    raw_name = entry.get("name") or entry.get("dist") or entry.get("dist_name") or ""
+                    if not raw_name:
+                        continue
+                    dist = canonicalize_name(raw_name)
                     skipped = entry.get("skipped", False)
                     prebuilt = entry.get("prebuilt", False)
                     if not skipped and not prebuilt and dist not in allowed_packages:
