@@ -1,0 +1,321 @@
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: fromager-build-sdist
+  annotations:
+    tekton.dev/pipelines.minVersion: 0.12.1
+    tekton.dev/tags: python, sdist, fromager, ingestion, lightwell, konflux
+  labels:
+    app.kubernetes.io/version: "0.1"
+    build.appstudio.redhat.com/build_type: python-sdist-ingest
+spec:
+  description: >-
+    Normalize Python source distributions (sdists) using fromager subcommands.
+
+    Runs fromager step prepare-source and fromager step build-sdist to strip binaries,
+    vendor Rust crates where applicable, and normalize pyproject.toml build backends.
+    Produces a reproducible sdist OCI artifact Snapshot (application/vnd.python.sdist)
+    and carries the complete acquired Trusted Artifact tree byte-for-byte for
+    downstream release mirroring, including source-origin and any index/provenance
+    evidence files. Evidence is opaque to this task.
+
+  params:
+    - name: SDISTS_ARTIFACT
+      description: Trusted Artifact URI containing the downloaded sdist (from fetch-source).
+      type: string
+    - name: PACKAGE
+      description: Canonical Python package name (PEP 503 normalized).
+      type: string
+    - name: VERSION
+      description: Package version string.
+      type: string
+    - name: IMAGE
+      description: Destination reference of the OCI sdist artifact to produce.
+      type: string
+    - name: IMAGE_EXPIRES_AFTER
+      description: Delete image tag after specified time. Empty means keep.
+      type: string
+      default: ""
+    - name: caTrustConfigMapName
+      description: Name of the ConfigMap to read CA bundle data from.
+      type: string
+      default: trusted-ca
+    - name: caTrustConfigMapKey
+      description: Key in ConfigMap for CA bundle.
+      type: string
+      default: ca-bundle.crt
+    # These parameters identify the orchestrator/pipeline source for Snapshot and
+    # Chains attribution.
+    - name: git-url
+      description: Immutable source git repository URL for Konflux Snapshot attribution.
+      type: string
+    - name: revision
+      description: Full immutable source commit revision for Konflux Snapshot attribution.
+      type: string
+
+  results:
+    - name: IMAGE_DIGEST
+      description: Digest of the sdist OCI artifact.
+    - name: IMAGE_URL
+      description: OCI artifact repository and tag where the sdist was pushed.
+    - name: IMAGE_REF
+      description: Full OCI reference (repo@digest) of the sdist artifact.
+    - name: CHAINS-GIT_URL
+      description: Source git repository URL for Tekton Chains / Snapshot.
+    - name: CHAINS-GIT_COMMIT
+      description: Git commit SHA for Tekton Chains / Snapshot.
+
+  volumes:
+    - name: trusted-ca
+      configMap:
+        items:
+          - key: $(params.caTrustConfigMapKey)
+            path: ca-bundle.crt
+        name: $(params.caTrustConfigMapName)
+        optional: true
+    - name: workdir
+      emptyDir: {}
+
+  stepTemplate:
+    env:
+      - name: HOME
+        value: /tekton/home
+    securityContext:
+      runAsUser: 1001
+    volumeMounts:
+      - mountPath: /var/workdir
+        name: workdir
+    computeResources:
+      limits:
+        cpu: "2"
+        memory: 2Gi
+      requests:
+        cpu: "1"
+        memory: 1Gi
+
+  steps:
+    - name: use-sdists-artifact
+      image: quay.io/konflux-ci/build-trusted-artifacts:latest@sha256:2712c8a6453fc9db5fc4c2d9d952554a4eea46d2fdba47a272b79fa07f8c8c40
+      args:
+        - use
+        - $(params.SDISTS_ARTIFACT)=/var/workdir/sdists-repo
+      volumeMounts:
+        - mountPath: /etc/pki/tls/certs/ca-custom-bundle.crt
+          name: trusted-ca
+          readOnly: true
+          subPath: ca-bundle.crt
+
+    - name: verify-pre-placed-sdist
+      image: quay.io/konflux-ci/task-runner:2.0.0@sha256:4b01fbf98fa7155f5c21443c285f88853864ae7cc66981cf6b543fc6ba16b81b
+      env:
+        - name: PACKAGE
+          value: $(params.PACKAGE)
+        - name: VERSION
+          value: $(params.VERSION)
+      script: |
+        #!/bin/bash
+        set -euo pipefail
+
+        echo "[$(date --utc -Ins)] === python-fromager-build-sdist pre-flight check ==="
+        echo "  Package: ${PACKAGE}"
+        echo "  Version: ${VERSION}"
+
+        # PEP 503 normalize the package name (lowercase, collapse runs of [-_.] to '-')
+        # to match the sdist filename on disk (e.g. Authlib -> authlib-1.7.1.tar.gz).
+        NORM_PACKAGE=$(echo "${PACKAGE}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[-_.]+/-/g')
+
+        SDIST="${NORM_PACKAGE}-${VERSION}.tar.gz"
+        SDIST_PATH="/var/workdir/sdists-repo/downloads/${SDIST}"
+
+        if [[ ! -f "${SDIST_PATH}" ]]; then
+          if [[ -f "/var/workdir/sdists-repo/${SDIST}" ]]; then
+            mkdir -p /var/workdir/sdists-repo/downloads
+            cp "/var/workdir/sdists-repo/${SDIST}" "${SDIST_PATH}"
+          else
+            echo "ERROR: pre-placed sdist not found: ${SDIST_PATH}" >&2
+            echo "Contents of sdists-repo:" >&2
+            ls -laR /var/workdir/sdists-repo >&2 || true
+            exit 1
+          fi
+        fi
+
+        SDIST_SIZE=$(stat -c%s "${SDIST_PATH}" 2>/dev/null || stat -f%z "${SDIST_PATH}")
+        SDIST_SHA256=$(sha256sum "${SDIST_PATH}" | cut -d' ' -f1)
+        echo "  Verified sdist: ${SDIST_PATH}"
+        echo "  Size:           ${SDIST_SIZE} bytes"
+        echo "  SHA256:         ${SDIST_SHA256}"
+        echo ""
+      computeResources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          cpu: "1"
+          memory: 256Mi
+
+    - name: normalize-sdist
+      # The task name and this exact digest are the implementation identity recorded below.
+      image: quay.io/redhat-user-workloads/calunga-tenant/plumbing-builder@sha256:d8355de03d57adef033743da1f1a3bb2f0ff038192e3220b155e9dd7dba5d37c
+      workingDir: /var/workdir
+      volumeMounts:
+        - mountPath: /mnt/trusted-ca
+          name: trusted-ca
+          readOnly: true
+      env:
+        - name: PACKAGE
+          value: $(params.PACKAGE)
+        - name: VERSION
+          value: $(params.VERSION)
+        - name: IMPLEMENTATION_IMAGE_DIGEST
+          value: sha256:d8355de03d57adef033743da1f1a3bb2f0ff038192e3220b155e9dd7dba5d37c
+      script: |
+        #!/bin/bash
+        set -euo pipefail
+
+        ca_bundle=/mnt/trusted-ca/ca-bundle.crt
+        if [ -f "$ca_bundle" ]; then
+          echo "[$(date --utc -Ins)] Using custom CA bundle: ${ca_bundle}"
+          export SSL_CERT_FILE="$ca_bundle"
+        fi
+
+        SDIST_FILE="/var/workdir/sdists-repo/downloads/${PACKAGE}-${VERSION}.tar.gz"
+        if [ ! -f "${SDIST_FILE}" ]; then
+          echo "ERROR: Acquired sdist not found: ${SDIST_FILE}" >&2
+          ls -laR /var/workdir/sdists-repo >&2
+          exit 1
+        fi
+
+        # Keep the acquired tree opaque: Fromager may inspect it, but this task does
+        # not interpret or filter any source-origin, index, or provenance evidence.
+        rm -rf /var/workdir/output /var/workdir/artifact
+        mkdir -p /var/workdir/output/sdists-repo /var/workdir/artifact
+        cp -a /var/workdir/sdists-repo/. /var/workdir/output/sdists-repo/
+        cp -a /var/workdir/sdists-repo/. /var/workdir/artifact/
+
+        cd /var/workdir/output
+        echo "[$(date --utc -Ins)] Normalizing sdist: ${SDIST_FILE} for ${PACKAGE}==${VERSION}"
+
+        # Run Fromager source normalization steps
+        if ! fromager step prepare-source "${PACKAGE}" "${VERSION}"; then
+          echo "ERROR: 'fromager step prepare-source' failed for ${PACKAGE}==${VERSION}" >&2
+          exit 1
+        fi
+
+        if ! fromager step build-sdist "${PACKAGE}" "${VERSION}"; then
+          echo "ERROR: 'fromager step build-sdist' failed for ${PACKAGE}==${VERSION}" >&2
+          exit 1
+        fi
+
+        # Find the newly built normalized sdist and publish it at the artifact root.
+        BUILT_SDIST=$(find sdists-repo/builds -maxdepth 1 -name "*.tar.gz" -type f | head -n 1 || true)
+        if [ -n "${BUILT_SDIST}" ]; then
+          echo "[$(date --utc -Ins)] Successfully built normalized sdist: ${BUILT_SDIST}"
+          cp "${BUILT_SDIST}" /var/workdir/artifact/
+        else
+          echo "ERROR: Normalized sdist was not produced at sdists-repo/builds/*.tar.gz" >&2
+          exit 1
+        fi
+
+        # Record only byte-level bindings. Evidence and provenance remain opaque.
+        python3 - "${SDIST_FILE}" "${BUILT_SDIST}" <<'PY'
+        import hashlib
+        import json
+        import sys
+        from pathlib import Path
+
+        acquired_sdist, normalized_sdist = map(Path, sys.argv[1:])
+        source_origin = Path("/var/workdir/sdists-repo/source-origin.json")
+        artifact_sdist = Path("/var/workdir/artifact") / normalized_sdist.name
+
+        for path in (acquired_sdist, artifact_sdist, source_origin):
+            if not path.is_file():
+                raise FileNotFoundError(path)
+
+        digest = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
+        transformation = {
+            "schema": "lightwell.sdist-transformation",
+            "version": 1,
+            "transformation": "fromager-normalize-sdist",
+            "input": {"sha256": digest(acquired_sdist)},
+            "output": {
+                "path": artifact_sdist.name,
+                "sha256": digest(artifact_sdist),
+            },
+            "source_origin": {
+                "path": "source-origin.json",
+                "sha256": digest(source_origin),
+            },
+        }
+        Path("/var/workdir/artifact/sdist-transformation.json").write_text(
+            json.dumps(transformation, indent=2) + "\n"
+        )
+        PY
+
+        echo ""
+        echo "[$(date --utc -Ins)] Artifacts prepared for OCI Snapshot:"
+        ls -la /var/workdir/artifact/
+
+    - name: create-oci-artifact
+      image: quay.io/konflux-ci/oras:latest@sha256:1beeecce012c99794568f74265c065839f9703d28306a8430b667f639343a98b
+      workingDir: /var/workdir
+      volumeMounts:
+        - mountPath: /etc/pki/tls/certs/ca-custom-bundle.crt
+          name: trusted-ca
+          readOnly: true
+          subPath: ca-bundle.crt
+      env:
+        - name: IMAGE
+          value: $(params.IMAGE)
+        - name: IMAGE_EXPIRES_AFTER
+          value: $(params.IMAGE_EXPIRES_AFTER)
+        - name: PACKAGE
+          value: $(params.PACKAGE)
+        - name: VERSION
+          value: $(params.VERSION)
+      script: |
+        #!/bin/bash
+        set -euo pipefail
+
+        echo "[$(date --utc -Ins)] Pushing sdist OCI artifact: ${IMAGE}"
+
+        select-oci-auth "$IMAGE" > auth.json
+        AUTHFILE="$(realpath auth.json)"
+
+        EXPIRE_LABEL=()
+        [ -n "$IMAGE_EXPIRES_AFTER" ] && EXPIRE_LABEL=("--annotation" "quay.expires-after=$IMAGE_EXPIRES_AFTER")
+
+        cd artifact
+        shopt -s nullglob
+        FILES=( * )
+        if [ ${#FILES[@]} -eq 0 ]; then
+          echo "ERROR: artifact/ directory is empty, no sdist files to push" >&2
+          exit 1
+        fi
+
+        if ! retry oras push "$IMAGE" \
+          --registry-config "${AUTHFILE}" \
+          "${EXPIRE_LABEL[@]}" \
+          --annotation "dev.lightwell.package=${PACKAGE}" \
+          --annotation "dev.lightwell.version=${VERSION}" \
+          --annotation "dev.lightwell.pipeline=python-sdist-ingest" \
+          --artifact-type "application/vnd.python.sdist" \
+          "${FILES[@]}"
+        then
+          echo "ERROR: Failed to push OCI artifact ${IMAGE}" >&2
+          exit 1
+        fi
+
+        if ! RESULTING_DIGEST=$(retry oras resolve --registry-config "${AUTHFILE}" "${IMAGE}"); then
+          echo "ERROR: Failed to resolve digest for ${IMAGE}" >&2
+          exit 1
+        fi
+
+        echo -n "$IMAGE" | tee "$(results.IMAGE_URL.path)"
+        echo -n "$RESULTING_DIGEST" | tee "$(results.IMAGE_DIGEST.path)"
+        echo -n "${IMAGE}@${RESULTING_DIGEST}" | tee "$(results.IMAGE_REF.path)"
+        echo -n "$(params.git-url)" > "$(results.CHAINS-GIT_URL.path)"
+        echo -n "$(params.revision)" > "$(results.CHAINS-GIT_COMMIT.path)"
+
+        echo ""
+        echo "[$(date --utc -Ins)] Done — pushed ${IMAGE}@${RESULTING_DIGEST}"
