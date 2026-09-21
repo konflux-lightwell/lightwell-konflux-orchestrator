@@ -286,7 +286,10 @@ spec:
     - name: netrc
       optional: true
   taskRunTemplate:
-    serviceAccountName: build-pipeline-attach-build-index
+    # Shared tenant bot SA (konflux-builder-bot-actions + konflux-viewer-bot-actions),
+    # managed in konflux-release-data for lightwell-poc-tenant. Avoids provisioning a
+    # dedicated per-component build-pipeline-attach-build-index SA. See LWLP-1746.
+    serviceAccountName: konflux-bot-0
   workspaces:
   - name: git-auth
     secret:
