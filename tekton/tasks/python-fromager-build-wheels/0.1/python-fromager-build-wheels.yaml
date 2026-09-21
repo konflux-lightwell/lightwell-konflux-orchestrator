@@ -339,6 +339,62 @@ spec:
         - /var/workdir/output
         - /var/workdir/artifact
 
+    - name: verify-allowed-artifacts
+      image: quay.io/redhat-user-workloads/calunga-tenant/plumbing-builder@sha256:d8355de03d57adef033743da1f1a3bb2f0ff038192e3220b155e9dd7dba5d37c
+      env:
+        - name: PACKAGE
+          value: $(params.PACKAGE)
+        - name: VERSION
+          value: $(params.VERSION)
+      script: |
+        #!/bin/bash
+        set -euo pipefail
+
+        CONFIGS_DIR=/var/workdir/build-configs
+        ARTIFACT_DIR=/var/workdir/artifact
+
+        RESOLVER_SCRIPT="${CONFIGS_DIR}/scripts/get-allowed-artifacts.py"
+        if [ -f "$RESOLVER_SCRIPT" ]; then
+          ALLOWED_JSON=$(python3 "$RESOLVER_SCRIPT" \
+            --packages-dir "${CONFIGS_DIR}/packages" \
+            "$PACKAGE" "$VERSION")
+        else
+          CANONICAL_PKG=$(python3 -c "from packaging.utils import canonicalize_name; import sys; print(canonicalize_name(sys.argv[1]))" "$PACKAGE")
+          ALLOWED_JSON=$(printf '["%s"]' "$CANONICAL_PKG")
+        fi
+        echo "Allowed packages for this build: ${ALLOWED_JSON}"
+
+        DISALLOWED=0
+        for f in "${ARTIFACT_DIR}"/*.whl "${ARTIFACT_DIR}"/*.tar.gz; do
+          [ -e "$f" ] || continue
+          fname="$(basename "$f")"
+          raw_pkg="${fname%%-*}"
+          canonical_pkg=$(python3 -c "from packaging.utils import canonicalize_name; import sys; print(canonicalize_name(sys.argv[1]))" "$raw_pkg")
+
+          IS_ALLOWED=$(echo "$ALLOWED_JSON" | jq --arg p "$canonical_pkg" 'index($p) != null')
+          if [[ "$IS_ALLOWED" != "true" ]]; then
+            echo "ERROR: Disallowed artifact detected in build output: ${fname}" >&2
+            echo "       Package '${canonical_pkg}' is not in the allowed list: ${ALLOWED_JSON}." >&2
+            echo "       Dependencies must not be built from source during this pipeline." >&2
+            echo "       Ensure pre-built dependencies are available on the wheel cache server." >&2
+            DISALLOWED=1
+          else
+            echo "Verified artifact: ${fname} (matches allowed package '${canonical_pkg}')"
+          fi
+        done
+
+        if [[ $DISALLOWED -eq 1 ]]; then
+          echo "FATAL: Build produced unapproved artifacts. Failing task before OCI push." >&2
+          exit 1
+        fi
+      computeResources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          cpu: "1"
+          memory: 256Mi
+
     - name: create-oci-artifact
       image: quay.io/konflux-ci/oras:latest@sha256:1beeecce012c99794568f74265c065839f9703d28306a8430b667f639343a98b
       workingDir: /var/workdir
