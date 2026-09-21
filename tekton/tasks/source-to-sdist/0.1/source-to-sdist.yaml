@@ -1,0 +1,544 @@
+---
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: source-to-sdist
+  annotations:
+    tekton.dev/pipelines.minVersion: 0.12.1
+    tekton.dev/tags: python, sdist, lightwell, konflux
+  labels:
+    app.kubernetes.io/version: "0.1"
+spec:
+  description: >-
+    Compute B/N version components, rewrite package version metadata, and create
+    a deterministic Python sdist for fromager consumption.
+
+    This task combines version rewriting (ADR-0020) with sdist creation:
+      1. Compute B and N from git history (git rev-list --count)
+      2. Rewrite version to {upstream-version}+rhlw.{B}.n.{N} in package metadata
+      3. Create deterministic sdist tarball from modified source
+      4. Pre-place sdist for fromager consumption
+
+    Takes a Trusted Artifact containing the cloned lightwell-builds repository
+    (with source in the source/ subdirectory and full git history), rewrites
+    version metadata files (PKG-INFO, pyproject.toml, setup.py, __init__.py),
+    then uses Python tarfile to produce a deterministic sdist tarball.
+
+    The reconstruction command used is:
+      python3 tarfile (deterministic: mtime=0, uid=0, mode normalized, gzip mtime=0)
+
+    Python tarfile normalizes all metadata (mtime=0, uid/gid=0, sorted entries). The resulting
+    tarball is bit-for-bit reproducible from the same git tree regardless of
+    when this task runs.
+
+    fromager will detect the pre-placed tarball via its "already have" path and
+    skip any network download during bootstrap.
+
+    Referenced by LTWL-5594.
+  params:
+    - name: SOURCE_ARTIFACT
+      description: >-
+        The Trusted Artifact URI pointing to the cloned lightwell-builds repository.
+        Produced by git-clone-oci-ta with full git history (depth=0, fetchTags=true).
+        The repo must have source content in its source/ subdirectory.
+      type: string
+    - name: PACKAGE
+      description: >-
+        Canonical Python package name (PEP 503 normalized, hyphens only).
+        For example: ntplib, urllib3, pillow.
+      type: string
+    - name: VERSION
+      description: >-
+        Package version string. For example: 0.4.0, 2.5.0.
+      type: string
+    - name: LIGHTWELL_BUILDS_TAG
+      description: >-
+        The git tag used in lightwell-builds for this version. Used for logging
+        and provenance.
+      type: string
+    - name: FIX_TYPE
+      description: >-
+        Remediation type controlling commit-distance calculation. Must be
+        Backport or Novel.
+      type: string
+    - name: ociStorage
+      description: >-
+        OCI reference used as the store for Trusted Artifacts.
+        Typically $(params.IMAGE).src or a dedicated TA storage image.
+      type: string
+    - name: ociArtifactExpiresAfter
+      description: >-
+        Expiration for the TA OCI artifact. Empty means no expiry.
+        Time values: 1h, 2d, 3w.
+      type: string
+      default: ""
+    - name: caTrustConfigMapName
+      description: The name of the ConfigMap to read CA bundle data from.
+      type: string
+      default: trusted-ca
+    - name: caTrustConfigMapKey
+      description: The name of the key in the ConfigMap that contains the CA bundle data.
+      type: string
+      default: ca-bundle.crt
+  results:
+    - name: SDISTS_ARTIFACT
+      description: >-
+        Trusted Artifact URI pointing to the sdists-repo/ directory containing
+        the pre-placed sdist tarball at downloads/<PACKAGE>-<VERSION>.tar.gz.
+        Pass this to fromager-build-wheels as SDISTS_ARTIFACT.
+    - name: COMPUTED_VERSION
+      description: >-
+        The full computed version string: {upstream-version}+rhlw.{B}.n.{N}
+    - name: B_VALUE
+      description: >-
+        The computed B value (commits since baseline/{version}).
+    - name: N_VALUE
+      description: >-
+        The computed N value (commits from baseline/{version} to current).
+  volumes:
+    - name: trusted-ca
+      configMap:
+        items:
+          - key: $(params.caTrustConfigMapKey)
+            path: ca-bundle.crt
+        name: $(params.caTrustConfigMapName)
+        optional: true
+    - name: workdir
+      emptyDir: {}
+  stepTemplate:
+    volumeMounts:
+      - mountPath: /var/workdir
+        name: workdir
+    computeResources:
+      requests:
+        cpu: "1"
+        memory: 1Gi
+      limits:
+        cpu: "2"
+        memory: 2Gi
+  steps:
+    - name: use-trusted-artifact
+      image: quay.io/konflux-ci/build-trusted-artifacts:latest@sha256:2712c8a6453fc9db5fc4c2d9d952554a4eea46d2fdba47a272b79fa07f8c8c40
+      args:
+        - use
+        - $(params.SOURCE_ARTIFACT)=/var/workdir/source-repo-readonly
+      volumeMounts:
+        - mountPath: /etc/pki/tls/certs/ca-custom-bundle.crt
+          name: trusted-ca
+          readOnly: true
+          subPath: ca-bundle.crt
+
+    - name: copy-readonly-repo
+      image: quay.io/konflux-ci/task-runner:2.0.0@sha256:4b01fbf98fa7155f5c21443c285f88853864ae7cc66981cf6b543fc6ba16b81b
+      workingDir: /var/workdir
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        # Copy source-repo to writable location
+        rm -rf /var/workdir/source-repo
+        cp -r /var/workdir/source-repo-readonly /var/workdir/source-repo
+
+    - name: compute-b-and-n
+      image: quay.io/konflux-ci/task-runner:2.0.0@sha256:4b01fbf98fa7155f5c21443c285f88853864ae7cc66981cf6b543fc6ba16b81b
+      workingDir: /var/workdir
+      env:
+        - name: PACKAGE
+          value: $(params.PACKAGE)
+        - name: VERSION
+          value: $(params.VERSION)
+        - name: LIGHTWELL_BUILDS_TAG
+          value: $(params.LIGHTWELL_BUILDS_TAG)
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        echo "Computing B and N version components for ${PACKAGE} ${VERSION}"
+        echo "Git repository: /var/workdir/source-repo"
+        
+        pushd /var/workdir/source-repo
+
+        git config --global --add safe.directory /var/workdir/source-repo
+
+        case "${FIX_TYPE}" in
+          Backport|Novel)
+            BUILD_TYPE="${FIX_TYPE}"
+            ;;
+          *)
+            echo "ERROR: FIX_TYPE must be Backport or Novel (got: ${FIX_TYPE})" >&2
+            exit 1
+            ;;
+        esac
+        echo "Build type: ${BUILD_TYPE}"
+
+        # The canonical ingestion tag for this package-version
+        INGESTION_TAG="${PACKAGE}/${VERSION}"
+        BASELINE_TAG="baseline/${VERSION}"
+
+        echo "Ingestion tag: ${INGESTION_TAG}"
+        echo "Baseline tag: ${BASELINE_TAG}"
+        echo "Build type: ${BUILD_TYPE}"
+
+        # Compute B and N based on build type (ADR-0020)
+        if [ "${BUILD_TYPE}" = "Backport" ]; then
+          # Backport CT: B = commits from ingestion tag to HEAD, N = 0
+          # (Counting against baseline would erroneously attribute new backport commits to N)
+          echo "Computing B for Backport CT build..."
+
+          INGESTION_COMMIT=$(git rev-parse "${INGESTION_TAG}")
+          CURRENT_COMMIT=$(git rev-parse HEAD)
+
+          if [ "${INGESTION_COMMIT}" = "${CURRENT_COMMIT}" ]; then
+            B=0
+          else
+            B=$(git rev-list --count "${INGESTION_TAG}..HEAD")
+          fi
+
+          N=0
+          echo "Computed B = ${B} (commits from ingestion tag to HEAD)"
+          echo "Computed N = ${N} (always 0 for Backport CT)"
+
+        else
+          # Novel CT: B = commits from ingestion to baseline, N = commits from baseline to HEAD
+          # baseline/{version} is an authoritative lineage marker (ADR-0005) and must exist
+          echo "Computing B and N for Novel CT build..."
+
+          # Fail closed if baseline tag is missing (indicates repo initialization issue)
+          if ! git rev-parse "${BASELINE_TAG}" >/dev/null 2>&1; then
+            echo "ERROR: Baseline tag ${BASELINE_TAG} does not exist" >&2
+            echo "" >&2
+            echo "The baseline tag should have been created by taisce-cuan during source ingestion." >&2
+            echo "Missing baseline tag indicates a repository initialization issue." >&2
+            echo "" >&2
+            echo "Repository: ${LIGHTWELL_BUILDS_TAG}" >&2
+            echo "Expected baseline tag: ${BASELINE_TAG}" >&2
+            echo "" >&2
+            echo "Available tags:" >&2
+            git tag -l | head -20 >&2
+            exit 1
+          fi
+
+          echo "Baseline tag ${BASELINE_TAG} exists"
+
+          INGESTION_COMMIT=$(git rev-parse "${INGESTION_TAG}")
+          BASELINE_COMMIT=$(git rev-parse "${BASELINE_TAG}")
+          CURRENT_COMMIT=$(git rev-parse HEAD)
+
+          # Compute B: commits from ingestion to baseline
+          if [ "${INGESTION_COMMIT}" = "${BASELINE_COMMIT}" ]; then
+            B=0
+          else
+            B=$(git rev-list --count "${INGESTION_TAG}..${BASELINE_TAG}")
+          fi
+
+          # Compute N: commits from baseline to HEAD
+          if [ "${BASELINE_COMMIT}" = "${CURRENT_COMMIT}" ]; then
+            N=0
+          else
+            N=$(git rev-list --count "${BASELINE_TAG}..HEAD")
+          fi
+
+          echo "Computed B = ${B} (commits from ingestion to baseline)"
+          echo "Computed N = ${N} (commits from baseline to HEAD)"
+        fi
+
+        # Construct the full version string per ADR-0020 / PEP 440
+        # Format: {upstream-version}+rhlw.{B}[.n.{N}]
+        # - Backport-only builds (N=0): omit .n.{N} → version+rhlw.{B}
+        # - Novel builds (N>0): include .n.{N} → version+rhlw.{B}.n.{N}
+        if [ "${N}" -eq 0 ]; then
+          COMPUTED_VERSION="${VERSION}+rhlw.${B}"
+        else
+          COMPUTED_VERSION="${VERSION}+rhlw.${B}.n.${N}"
+        fi
+        echo "Computed version: ${COMPUTED_VERSION}"
+
+        # Save results
+        echo -n "${COMPUTED_VERSION}" > $(results.COMPUTED_VERSION.path)
+        echo -n "${B}" > $(results.B_VALUE.path)
+        echo -n "${N}" > $(results.N_VALUE.path)
+
+        # Save to environment file for next steps
+        cat > /var/workdir/version-env.sh <<EOF
+        export COMPUTED_VERSION="${COMPUTED_VERSION}"
+        export B_VALUE="${B}"
+        export N_VALUE="${N}"
+        export UPSTREAM_VERSION="${VERSION}"
+        EOF
+
+    - name: rewrite-version-metadata
+      image: quay.io/konflux-ci/task-runner:2.0.0@sha256:4b01fbf98fa7155f5c21443c285f88853864ae7cc66981cf6b543fc6ba16b81b
+      workingDir: /var/workdir/source-repo
+      env:
+        - name: PACKAGE
+          value: $(params.PACKAGE)
+        - name: VERSION
+          value: $(params.VERSION)
+      script: |
+        #!/usr/bin/env python3
+        """Dynamically rewrite Python package version metadata.
+
+        Strategy:
+        - Find all files that define the version
+        - Replace simple version strings (not in URLs)
+        - Be compatible with various version definition patterns
+        """
+        import os
+        import sys
+        import re
+        from pathlib import Path
+
+        # Load computed version from previous step
+        with open('/var/workdir/version-env.sh') as f:
+            for line in f:
+                if line.startswith('export COMPUTED_VERSION='):
+                    computed_version = line.split('=', 1)[1].strip().strip('"')
+                elif line.startswith('export UPSTREAM_VERSION='):
+                    upstream_version = line.split('=', 1)[1].strip().strip('"')
+
+        print(f"Rewriting version metadata: {upstream_version} → {computed_version}")
+
+        source_dir = Path("/var/workdir/source-repo/source")
+        if not source_dir.exists():
+            print(f"ERROR: source/ directory not found at {source_dir}", file=sys.stderr)
+            sys.exit(1)
+
+        changes_made = []
+
+        # Patterns for different file types to avoid over-aggressive matching
+        # that could rewrite dependency constraints or unrelated version constants
+        PYTHON_VERSION_PATTERNS = [
+            # Only match __version__ assignments (not generic version=)
+            (r'(__version__\s*=\s*["\'])' + re.escape(upstream_version) + r'(["\'])',
+             r'\g<1>' + computed_version + r'\g<2>'),
+        ]
+
+        METADATA_PATTERNS = [
+            # PKG-INFO/METADATA: RFC-822 style Version: header
+            (r'^(Version:\s*)' + re.escape(upstream_version) + r'(\s*)$',
+             r'\g<1>' + computed_version + r'\g<2>'),
+        ]
+
+        TOML_PATTERNS = [
+            # pyproject.toml: version = "x.y.z" (line-anchored to avoid matching in dependencies)
+            (r'^(version\s*=\s*["\'])' + re.escape(upstream_version) + r'(["\'])',
+             r'\g<1>' + computed_version + r'\g<2>'),
+        ]
+
+        CFG_PATTERNS = [
+            # setup.cfg: version = x.y.z (line-anchored)
+            (r'^(version\s*=\s*)' + re.escape(upstream_version) + r'(\s*)$',
+             r'\g<1>' + computed_version + r'\g<2>'),
+        ]
+
+        def replace_version_in_file(file_path, patterns):
+            """Replace version using file-type-specific patterns."""
+            try:
+                content = file_path.read_text(encoding='utf-8', errors='ignore')
+                if upstream_version not in content:
+                    return False
+
+                original = content
+                replacements = []
+
+                # Try each pattern
+                for pattern, replacement in patterns:
+                    matches = list(re.finditer(pattern, content, re.MULTILINE))
+                    if matches:
+                        # Apply replacement and track what changed
+                        new_content = re.sub(pattern, replacement, content, flags=re.MULTILINE)
+                        if new_content != content:
+                            for match in matches:
+                                line_num = content[:match.start()].count('\n') + 1
+                                old_line = content.split('\n')[line_num - 1].strip()
+                                new_line = new_content.split('\n')[line_num - 1].strip()
+                                replacements.append((line_num, old_line, new_line))
+                            content = new_content
+
+                if content != original:
+                    # Write the modified content
+                    file_path.write_text(content, encoding='utf-8')
+
+                    # Show what was replaced
+                    rel_path = file_path.relative_to(source_dir.parent)
+                    print(f"    {rel_path}:")
+                    for line_num, old, new in replacements:
+                        print(f"      [Line {line_num}] {old}")
+                        print(f"               → {new}")
+
+                    # Verify the replacement
+                    verify_content = file_path.read_text(encoding='utf-8', errors='ignore')
+                    if computed_version in verify_content:
+                        print(f"    ✓ Verified: {computed_version} found in file")
+                    else:
+                        print(f"    ✗ Warning: {computed_version} NOT found after replacement!")
+
+                    return True
+
+            except Exception as e:
+                print(f"  Warning: Could not process {file_path}: {e}")
+            return False
+
+        print(f"  Searching authoritative metadata files for version declarations...")
+
+        # Process PKG-INFO and METADATA files recursively (can be in *.egg-info subdirs)
+        for pkg_info_file in source_dir.rglob('PKG-INFO'):
+            if replace_version_in_file(pkg_info_file, METADATA_PATTERNS):
+                changes_made.append(str(pkg_info_file.relative_to(source_dir.parent)))
+
+        for metadata_file in source_dir.rglob('METADATA'):
+            if replace_version_in_file(metadata_file, METADATA_PATTERNS):
+                changes_made.append(str(metadata_file.relative_to(source_dir.parent)))
+
+        # Process root-level authoritative files only
+        root_pyproject = source_dir / 'pyproject.toml'
+        if root_pyproject.exists():
+            if replace_version_in_file(root_pyproject, TOML_PATTERNS):
+                changes_made.append(str(root_pyproject.relative_to(source_dir.parent)))
+
+        root_setup_cfg = source_dir / 'setup.cfg'
+        if root_setup_cfg.exists():
+            if replace_version_in_file(root_setup_cfg, CFG_PATTERNS):
+                changes_made.append(str(root_setup_cfg.relative_to(source_dir.parent)))
+
+        root_setup_py = source_dir / 'setup.py'
+        if root_setup_py.exists():
+            if replace_version_in_file(root_setup_py, PYTHON_VERSION_PATTERNS):
+                changes_made.append(str(root_setup_py.relative_to(source_dir.parent)))
+
+        # Process Python files with __version__ declarations (recursive for version modules)
+        for py_file in source_dir.rglob('*.py'):
+            # Skip if we already processed it (setup.py)
+            if py_file == root_setup_py:
+                continue
+            if replace_version_in_file(py_file, PYTHON_VERSION_PATTERNS):
+                changes_made.append(str(py_file.relative_to(source_dir.parent)))
+
+        if changes_made:
+            print(f"\n✓ Successfully rewrote version in {len(changes_made)} file(s)")
+        else:
+            print("\n⚠ WARNING: No version metadata files found to update")
+            print(f"  Searched in: {source_dir}")
+            print(f"  Looking for version: {upstream_version}")
+            print("  This package may use a different version specification method")
+            
+    - name: build-deterministic-sdist
+      image: quay.io/konflux-ci/task-runner:2.0.0@sha256:4b01fbf98fa7155f5c21443c285f88853864ae7cc66981cf6b543fc6ba16b81b
+      workingDir: /var/workdir/source-repo
+      env:
+        - name: PACKAGE
+          value: $(params.PACKAGE)
+        - name: VERSION
+          value: $(params.VERSION)
+      script: |
+        #!/usr/bin/env python3
+        """Build a deterministic sdist from lightwell-builds source/ tree.
+
+        Uses Python tarfile to normalize all metadata, making the output
+        bit-for-bit identical across git versions, OSes, and environments.
+
+        Normalization applied:
+          - mtime=0 for all entries
+          - uid=gid=0, uname=gname=''
+          - files: mode=0o644, dirs: mode=0o755
+          - entry order: sorted (os.walk + sorted())
+          - gzip: mtime=0, no embedded filename
+          - tar format: GNU_FORMAT
+        """
+        import tarfile, gzip, io, os, sys, hashlib
+
+        # Load computed version from version-env.sh
+        computed_version = None
+        with open('/var/workdir/version-env.sh') as f:
+            for line in f:
+                if line.startswith('export COMPUTED_VERSION='):
+                    computed_version = line.split('=', 1)[1].strip().strip('"')
+                    break
+
+        if not computed_version:
+            print("ERROR: Could not load COMPUTED_VERSION from version-env.sh", file=sys.stderr)
+            sys.exit(1)
+
+        pkg = os.environ["PACKAGE"]
+        # Deliberately use upstream VERSION for tarball filename (not COMPUTED_VERSION).
+        # Fromager's offline cache lookup searches for ${PACKAGE}-${VERSION}.tar.gz in
+        # downloads/ and logs "already have". The rewritten COMPUTED_VERSION lives inside
+        # the package metadata (PKG-INFO, pyproject.toml, etc.), which the build backend
+        # inspects when producing the wheel. Per ADR-0020.
+        ver = os.environ["VERSION"]
+        src_dir = "/var/workdir/source-repo/source"
+        prefix = f"{pkg}-{ver}/"
+        sdist_name = f"{pkg}-{ver}.tar.gz"
+        downloads = "/var/workdir/sdists-repo/downloads"
+        builds = "/var/workdir/sdists-repo/builds"
+
+        if not os.path.isdir(src_dir):
+            print(f"ERROR: source/ not found at {src_dir}", file=sys.stderr)
+            sys.exit(1)
+
+        print(f"Building deterministic sdist: {sdist_name}")
+        buf = io.BytesIO()
+        with gzip.GzipFile(filename="", mtime=0, mode="wb", fileobj=buf) as gz:
+            with tarfile.open(fileobj=gz, mode="w:", format=tarfile.GNU_FORMAT) as tf:
+                for root, dirs, files in os.walk(src_dir):
+                    dirs.sort()
+                    rel = os.path.relpath(root, src_dir)
+                    arcname = prefix.rstrip("/") if rel == "." else prefix + rel
+                    info = tarfile.TarInfo(arcname)
+                    info.type = tarfile.DIRTYPE
+                    info.mode = 0o755
+                    info.uid = info.gid = 0
+                    info.uname = info.gname = ""
+                    info.mtime = 0
+                    tf.addfile(info)
+                    for fname in sorted(files):
+                        fpath = os.path.join(root, fname)
+                        arcname_f = prefix + os.path.relpath(fpath, src_dir)
+                        info = tarfile.TarInfo(arcname_f)
+                        info.size = os.path.getsize(fpath)
+                        info.mode = 0o644
+                        info.uid = info.gid = 0
+                        info.uname = info.gname = ""
+                        info.mtime = 0
+                        with open(fpath, "rb") as f:
+                            tf.addfile(info, f)
+
+        data = buf.getvalue()
+        sha256 = hashlib.sha256(data).hexdigest()
+        size = len(data)
+        print(f"  SHA256: {sha256}")
+        print(f"  Size:   {size} bytes")
+
+        for dest_dir in [downloads, builds]:
+            os.makedirs(dest_dir, exist_ok=True)
+            dest = os.path.join(dest_dir, sdist_name)
+            with open(dest, "wb") as f:
+                f.write(data)
+            print(f"  Written: {dest}")
+
+        print("sdists-repo/downloads contents:")
+        for f in sorted(os.listdir(downloads)):
+            print(f"  {f}")
+
+    - name: create-sdists-artifact
+      image: quay.io/konflux-ci/build-trusted-artifacts:latest@sha256:2712c8a6453fc9db5fc4c2d9d952554a4eea46d2fdba47a272b79fa07f8c8c40
+      env:
+        - name: IMAGE_EXPIRES_AFTER
+          value: $(params.ociArtifactExpiresAfter)
+      args:
+        - create
+        - --store
+        - $(params.ociStorage)
+        - $(results.SDISTS_ARTIFACT.path)=/var/workdir/sdists-repo
+      volumeMounts:
+        - mountPath: /etc/pki/tls/certs/ca-custom-bundle.crt
+          name: trusted-ca
+          readOnly: true
+          subPath: ca-bundle.crt
+      computeResources:
+        requests:
+          cpu: "1"
+          memory: 1Gi
+        limits:
+          cpu: "2"
+          memory: 2Gi
