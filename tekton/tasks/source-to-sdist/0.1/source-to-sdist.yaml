@@ -149,6 +149,8 @@ spec:
           value: $(params.VERSION)
         - name: LIGHTWELL_BUILDS_TAG
           value: $(params.LIGHTWELL_BUILDS_TAG)
+        - name: FIX_TYPE
+          value: $(params.FIX_TYPE)
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
