@@ -164,7 +164,7 @@ spec:
         resolver: bundles
         params:
           - name: bundle
-            value: quay.io/konflux-ci/tekton-catalog/task-source-to-sdist:0.1@sha256:02974a697c58288e7cdfd621ef373b61fb78ec5c49a2d34b562fbed2f85673bc
+            value: quay.io/konflux-ci/tekton-catalog/task-source-to-sdist:0.1@sha256:a97d39f38187b37ac99098ec0064e0c32be3176ae781993ee64e4490a277e9fb
           - name: name
             value: source-to-sdist
           - name: kind
