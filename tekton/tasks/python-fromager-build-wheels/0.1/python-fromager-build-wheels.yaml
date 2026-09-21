@@ -331,6 +331,8 @@ spec:
           value: $(params.WHEEL_SERVER_URL)
         - name: FROMAGER_SDISTS_REPO
           value: /var/workdir/sdists-repo
+        - name: SOURCE_DATE_EPOCH
+          value: "0"
       script: |
         #!/bin/bash
         set -euo pipefail
