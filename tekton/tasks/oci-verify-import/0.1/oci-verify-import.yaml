@@ -145,10 +145,10 @@ spec:
       image: quay.io/konflux-ci/task-runner:2.0.0@sha256:4b01fbf98fa7155f5c21443c285f88853864ae7cc66981cf6b543fc6ba16b81b
       computeResources:
         limits:
-          memory: 512Mi
+          memory: 1Gi
         requests:
           cpu: 100m
-          memory: 512Mi
+          memory: 1Gi
       script: |
         #!/bin/bash
         set -euo pipefail
@@ -170,10 +170,10 @@ spec:
       image: quay.io/konflux-ci/task-runner:2.0.0@sha256:4b01fbf98fa7155f5c21443c285f88853864ae7cc66981cf6b543fc6ba16b81b
       computeResources:
         limits:
-          memory: 512Mi
+          memory: 2Gi
         requests:
-          cpu: 100m
-          memory: 512Mi
+          cpu: 200m
+          memory: 2Gi
       volumeMounts:
         - mountPath: /var/workdir
           name: workdir

@@ -75,6 +75,27 @@ def build_pipelinerun_manifest(
         },
         "spec": {
             "taskRunTemplate": {"serviceAccountName": service_account},
+            "taskRunSpecs": [
+                {
+                    "pipelineTaskName": "verify-and-mirror",
+                    "stepSpecs": [
+                        {
+                            "name": "mirror",
+                            "computeResources": {
+                                "requests": {"cpu": "100m", "memory": "1Gi"},
+                                "limits": {"memory": "1Gi"},
+                            },
+                        },
+                        {
+                            "name": "results",
+                            "computeResources": {
+                                "requests": {"cpu": "200m", "memory": "2Gi"},
+                                "limits": {"memory": "2Gi"},
+                            },
+                        },
+                    ],
+                }
+            ],
             "pipelineSpec": pipeline_spec,
             "params": [
                 {"name": "SOURCE_IMAGE", "value": source_image},
