@@ -89,6 +89,8 @@ def test_build_pipelinerun_applies_overrides(monkeypatch, tmp_path):
     manifest = PythonEcosystem().build_pipelinerun("ntplib==0.4.0", argparse.Namespace())
 
     assert manifest["spec"]["timeouts"] == {"pipeline": "1h"}
+
+
 def test_build_pipelinerun_rejects_malformed_ref(tmp_path, monkeypatch):
     monkeypatch.setenv("TEKTON_PIPELINE_DIR", str(tmp_path))
     with pytest.raises(TriggerError):
