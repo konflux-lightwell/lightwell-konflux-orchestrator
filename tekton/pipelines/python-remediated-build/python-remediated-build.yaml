@@ -260,23 +260,18 @@ spec:
     # generate-py-osv task (LWLP-1253) can discover it. Fails closed if no vuln
     # IDs resolve. See tekton/tasks/attach-build-index/0.1/attach-build-index.yaml.
     #
-    # TODO(LWLP-1746): the bundle digest below is a non-resolvable SENTINEL.
-    # Pin it to the real digest AFTER the attach-build-index bundle is first
-    # RELEASED to the external shared catalog. The flow: merge to main fires
-    # .tekton/attach-build-index-push.yaml (builds+pushes the bundle to the
-    # lightwell-poc-tenant namespace), then the auto-release ReleasePlan/RPA
-    # onboarded in konflux-release-data promotes it to
-    # quay.io/konflux-ci/tekton-catalog/task-attach-build-index (matching the
-    # source-to-sdist peer above). Pin to the released digest at :0.1. Until
-    # then this pipeline must not be run for production builds — the sentinel
-    # will fail to resolve by design, preventing a wrong digest from silently
-    # shipping.
+    # Pinned to the released bundle in the external shared catalog
+    # quay.io/konflux-ci/tekton-catalog/task-attach-build-index (promoted from
+    # the lightwell-poc-tenant namespace by the auto-release ReleasePlan/RPA
+    # onboarded in konflux-release-data), matching the source-to-sdist peer.
+    # To pick up a task change: merge it (fires .tekton/attach-build-index-push.yaml
+    # → build+push → auto-release), then re-pin the digest below at :0.1.
     - name: attach-build-index
       taskRef:
         resolver: bundles
         params:
           - name: bundle
-            value: quay.io/konflux-ci/tekton-catalog/task-attach-build-index:0.1@sha256:0000000000000000000000000000000000000000000000000000000000000000
+            value: quay.io/konflux-ci/tekton-catalog/task-attach-build-index:0.1@sha256:2ada3452361079dfaf73db550b80c1bd7b7e043f805025898c82e21d76e78361
           - name: name
             value: attach-build-index
           - name: kind
