@@ -1,5 +1,21 @@
 # Runtime overrides applied to PipelineRuns generated for pnc-import
 taskRunSpecs:
+  - pipelineTaskName: verify-and-mirror
+    stepSpecs:
+      - name: mirror
+        computeResources:
+          requests:
+            cpu: "100m"
+            memory: "1Gi"
+          limits:
+            memory: "1Gi"
+      - name: results
+        computeResources:
+          requests:
+            cpu: "200m"
+            memory: "2Gi"
+          limits:
+            memory: "2Gi"
   - pipelineTaskName: sast-shell-check
     stepSpecs:
       - name: sast-shell-check
