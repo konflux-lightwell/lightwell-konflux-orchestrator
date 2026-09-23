@@ -117,11 +117,6 @@ spec:
           exit 1
         fi
 
-        # Tekton injects the pipeline service account's registry credentials
-        # into $HOME/.docker/config.json; oras (via fath-cuan's OrasRegistry,
-        # which calls auth.load_configs) loads them from DOCKER_CONFIG.
-        export DOCKER_CONFIG="$HOME/.docker"
-
         SRC=/var/workdir/source
         if [ ! -d "$SRC/.git" ]; then
           echo "ERROR: restored source at $SRC has no .git directory;" >&2
@@ -132,6 +127,11 @@ spec:
         PURL="pkg:pypi/$(params.PACKAGE)@$(params.COMPUTED_VERSION)"
         echo "Generating build-index for ${PURL} (upstream $(params.VERSION))"
 
+        # Step 1 — generate build-index.json ONLY (no --attach-to). This is fully
+        # offline: fath-cuan reads the ADR-0005 Lightwell-Fix trailers from
+        # $SRC/.git and writes the document. It never touches the registry here, so
+        # it needs no credentials — all registry auth is confined to the attach below.
+        #
         # --require-vuln: fail closed if no vuln IDs resolve from the trailers.
         # b/n default to 0; a populated vulns list is itself the remediation
         # signal the BuildIndex schema and downstream OSV generation rely on.
@@ -142,12 +142,44 @@ spec:
           --version-local "$(params.COMPUTED_VERSION)" \
           --git-dir "$SRC" \
           --require-vuln \
-          --attach-to "$IMAGE_REF" \
           --output /var/workdir/build-index.json
 
         echo "--- build-index.json ---"
         cat /var/workdir/build-index.json
         echo
+
+        # Step 2 — attach build-index.json to IMAGE_REF as an OCI referrer via the
+        # oras CLI, NOT fath-cuan's --attach-to. fath-cuan attaches through oras-py
+        # 0.2.42 (shipped in this image), which reuses the *pull*-scoped bearer
+        # token it obtains while HEAD-resolving the subject for the subsequent
+        # referrer blob push; quay then rejects that push with UNAUTHORIZED. The
+        # oras CLI requests push scope per-operation and succeeds. This is the same
+        # select-oci-auth + `oras --registry-config` pattern that
+        # python-fromager-build-wheels uses to push to this very repo.
+        #
+        # The pipeline SA's quay secrets (imagerepository-*-image-push,
+        # components-namespace-pull) carry no `tekton.dev/docker-*` annotation, so
+        # creds-init never lands usable quay auth in $HOME/.docker/config.json —
+        # hence select-oci-auth to materialize a config.json scoped to IMAGE_REF.
+        #
+        # artifact-type and the attached file's basename form the downstream
+        # contract: generate-py-osv (release-service-catalog) finds this referrer
+        # with `oras discover --artifact-type <BUILD_INDEX_MEDIA_TYPE>` and extracts
+        # it with `oras pull -o <dir>`, which writes the layer to a file named by
+        # its title annotation (the basename oras derives from the arg). It then
+        # reads <dir>/build-index.json — so the attached file MUST be build-index.json.
+        BUILD_INDEX_MEDIA_TYPE="application/vnd.lightwell.build-index.v1+json"
+
+        select-oci-auth "$IMAGE_REF" > /var/workdir/oci-auth.json
+        AUTHFILE="$(realpath /var/workdir/oci-auth.json)"
+
+        cd /var/workdir
+        echo "Attaching build-index referrer to ${IMAGE_REF}"
+        oras attach "$IMAGE_REF" \
+          --registry-config "$AUTHFILE" \
+          --artifact-type "$BUILD_INDEX_MEDIA_TYPE" \
+          "build-index.json:${BUILD_INDEX_MEDIA_TYPE}"
+
         echo -n "$IMAGE_REF" | tee "$(results.BUILD_INDEX_ATTACHED_REF.path)"
   volumes:
     - configMap:
