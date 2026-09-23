@@ -117,10 +117,18 @@ spec:
           exit 1
         fi
 
-        # Tekton injects the pipeline service account's registry credentials
-        # into $HOME/.docker/config.json; oras (via fath-cuan's OrasRegistry,
-        # which calls auth.load_configs) loads them from DOCKER_CONFIG.
-        export DOCKER_CONFIG="$HOME/.docker"
+        # The pipeline service account's push credentials for IMAGE_REF are NOT
+        # auto-injected into $HOME/.docker/config.json: the SA-linked quay
+        # secrets (imagerepository-*-image-push, components-namespace-pull)
+        # carry no `tekton.dev/docker-*` annotation, so Tekton creds-init skips
+        # them and only the internal-registry token lands there — hence a 401
+        # resolving the quay subject. Materialize a config.json scoped to
+        # IMAGE_REF the way the standard Konflux build tasks do (buildah,
+        # build-image-index, ...), then point DOCKER_CONFIG at it; oras (via
+        # fath-cuan's OrasRegistry -> auth.load_configs) reads it from there.
+        mkdir -p /tmp/auth
+        select-oci-auth "$IMAGE_REF" > /tmp/auth/config.json
+        export DOCKER_CONFIG=/tmp/auth
 
         SRC=/var/workdir/source
         if [ ! -d "$SRC/.git" ]; then
