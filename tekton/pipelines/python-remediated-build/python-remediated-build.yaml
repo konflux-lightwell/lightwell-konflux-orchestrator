@@ -271,7 +271,7 @@ spec:
         resolver: bundles
         params:
           - name: bundle
-            value: quay.io/konflux-ci/tekton-catalog/task-attach-build-index:0.1@sha256:2ada3452361079dfaf73db550b80c1bd7b7e043f805025898c82e21d76e78361
+            value: quay.io/konflux-ci/tekton-catalog/task-attach-build-index:0.1@sha256:f8d368ed07f238bc9ebe4c5f7c7e8e95fe71af9691b05eafa342bdfa0b9471eb
           - name: name
             value: attach-build-index
           - name: kind
