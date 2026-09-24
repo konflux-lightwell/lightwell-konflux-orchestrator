@@ -92,7 +92,12 @@ spec:
         - $(params.SOURCE_ARTIFACT)=/var/workdir/source
     # ── Generate build-index.json from trailers and attach it as a referrer ───
     - name: create-and-attach
-      image: quay.io/light-castle/slan-cuan:latest
+      # Dedicated fath-cuan build-side image (LWLP-1844), digest-pinned. Replaces
+      # the release-side slan-cuan:latest this task used to borrow — build tasks no
+      # longer depend on the release toolchain's container lifecycle. Task-runner
+      # based, so it still provides select-oci-auth + the oras CLI used below, plus
+      # fath-cuan[oci]. Re-pin the digest when a new fath-cuan image is published.
+      image: quay.io/light-factory/fath-cuan@sha256:4d3cdf9fce09e28c095b34406215a383ca1cf50644d82107bc10288a522eea23
       computeResources:
         limits:
           memory: 512Mi
