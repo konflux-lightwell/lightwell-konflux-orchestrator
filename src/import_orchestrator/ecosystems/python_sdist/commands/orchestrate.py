@@ -61,6 +61,20 @@ def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> No
     )
 
     parser.add_argument(
+        "--print-resources",
+        action="store_true",
+        help="Preview the release chain (PipelineRun YAML + resolved ReleasePlan/RPA) "
+        "for each pending reference and exit, without contacting the cluster.",
+    )
+
+    parser.add_argument(
+        "--release-data-repo",
+        default=None,
+        help="Path to a konflux-release-data checkout for --print-resources "
+        "(default: reference/konflux-release-data, cloned on demand).",
+    )
+
+    parser.add_argument(
         "--source-registries",
         default="rhtl",
         help="Comma-separated list of registries to query in order (default: 'rhtl')",
