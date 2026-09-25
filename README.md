@@ -79,7 +79,7 @@ import-orchestrator java run 'quay.io/light-castle/rebuild-pnc:tag@sha256:abc123
 # Same, but persist state to a database and also write the result to a file
 import-orchestrator --db ./one-off.db java run \
   'quay.io/light-castle/rebuild-pnc:tag@sha256:abc123...' \
-  --artifact-type REBUILD --output-json ./result.json
+  --artifact-type VALIDATED --output-json ./result.json
 
 # Import only (populate database for inspection)
 import-orchestrator import-file refs.txt
@@ -204,7 +204,7 @@ import-orchestrator java orchestrate [OPTIONS]
 | `--max-parallel` | `1` | Maximum parallel PipelineRuns |
 | `--poll-interval` | `30` | Seconds between status checks |
 | `--max-retries` | `3` | Max retry attempts for failed imports |
-| `--artifact-type` | `STAGE` (or `LIGHTWELL_ARTIFACT_TYPE` env var) | Artifact type: STAGE, REBUILD, REMEDIATED, or NOVEL |
+| `--artifact-type` | `STAGE` (or `LIGHTWELL_ARTIFACT_TYPE` env var) | Artifact type: STAGE, VALIDATED, REMEDIATED, or NOVEL |
 
 #### `trigger` Subcommand
 
@@ -218,7 +218,7 @@ import-orchestrator java trigger <source_image> [tag] [OPTIONS]
 |-----------------|-------------|
 | `source_image` | OCI image reference to import (must be digest-pinned with @sha256:) |
 | `tag` | Optional destination tag override (default: derived from source image) |
-| `--artifact-type` | Artifact type: STAGE (default), REBUILD, REMEDIATED, or NOVEL |
+| `--artifact-type` | Artifact type: STAGE (default), VALIDATED, REMEDIATED, or NOVEL |
 | `--dry-run` | Print the PipelineRun YAML without submitting it |
 
 #### `run` Subcommand
@@ -245,7 +245,7 @@ import-orchestrator python run <ref> [OPTIONS]
 |-----------------|---------|-------------|
 | `source_image` | — | OCI image reference to import (must be digest-pinned with `@sha256:`) |
 | `tag` | derived from source image | Optional destination tag override |
-| `--artifact-type` | `STAGE` (or `LIGHTWELL_ARTIFACT_TYPE` env var) | Artifact type: STAGE, REBUILD, REMEDIATED, or NOVEL |
+| `--artifact-type` | `STAGE` (or `LIGHTWELL_ARTIFACT_TYPE` env var) | Artifact type: STAGE, VALIDATED, REMEDIATED, or NOVEL |
 | `--poll-interval` | `30` | Seconds between status checks |
 | `--max-retries` | `3` | Max retry attempts on transient failure |
 | `--output-json` | — | Also write the result JSON to this path |
@@ -382,7 +382,7 @@ retry. A terminally failed Release is *not* adopted, so a retry after `1` genuin
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `KONFLUX_TOKEN` or `KUBECONFIG` | Yes (for `orchestrate`, `trigger`, and `run`) | Cluster authentication |
-| `LIGHTWELL_ARTIFACT_TYPE` | No | `STAGE` (default), `REBUILD`, `REMEDIATED`, or `NOVEL` |
+| `LIGHTWELL_ARTIFACT_TYPE` | No | `STAGE` (default), `VALIDATED`, `REMEDIATED`, or `NOVEL` |
 | `LIGHTWELL_PYTHON_TARGET` | No | Build target for the `python` ecosystem: `REMEDIATED` (default) |
 | `TEKTON_PIPELINE_DIR` | No | Path to directory containing Tekton pipeline definitions (defaults to `tekton/` in repository root) |
 

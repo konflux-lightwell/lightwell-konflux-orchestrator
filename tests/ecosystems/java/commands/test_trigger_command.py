@@ -55,8 +55,8 @@ class TestTriggerArgParsing:
     def test_artifact_type_rebuild(self, monkeypatch):
         monkeypatch.delenv("LIGHTWELL_ARTIFACT_TYPE", raising=False)
         parser = make_parser()
-        args = parser.parse_args(["java", "trigger", "--artifact-type", "REBUILD", "quay.io/repo:tag@sha256:abc"])
-        assert args.artifact_type == "REBUILD"
+        args = parser.parse_args(["java", "trigger", "--artifact-type", "VALIDATED", "quay.io/repo:tag@sha256:abc"])
+        assert args.artifact_type == "VALIDATED"
 
     def test_artifact_type_default(self, monkeypatch):
         monkeypatch.delenv("LIGHTWELL_ARTIFACT_TYPE", raising=False)
@@ -124,7 +124,7 @@ def _args(**overrides):
     base = dict(
         source_image="quay.io/repo:tag@sha256:abc",
         tag=None,
-        artifact_type="REBUILD",
+        artifact_type="VALIDATED",
         ecosystem=MagicMock(),
     )
     base.update(overrides)
