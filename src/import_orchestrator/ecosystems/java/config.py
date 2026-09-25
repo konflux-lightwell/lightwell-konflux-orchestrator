@@ -25,7 +25,7 @@ VERIFICATION_PUBLIC_KEY_SECRET = "verification-public-key"
 PIPELINERUN_PREFIX = "pnc-import-"
 
 ARTIFACT_CONFIGS: dict[str, dict[str, str]] = {
-    "REBUILD": {
+    "VALIDATED": {
         "app": "pnc-import",
         "service_account": "build-pipeline-pnc-import",
         "source_repo": "quay.io/light-castle/rebuild-pnc",
