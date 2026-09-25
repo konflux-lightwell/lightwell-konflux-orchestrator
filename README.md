@@ -533,6 +533,12 @@ import-orchestrator/
 └── tests/                 # Pytest test suite
 ```
 
+## Design proposals
+
+- [Generic orchestration and reconciliation contract](docs/design/reconciliation-contract.md)
+  — target library/CLI design for repeated bounded calls, resource lineage, stable
+  fingerprints, and resumable checkpoints; not an implemented API or limited by current behavior.
+
 ## Development
 
 ### Running Tests
