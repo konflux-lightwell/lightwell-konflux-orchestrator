@@ -20,9 +20,53 @@ import argparse
 import sys
 
 from import_orchestrator.clients import KubeClient
-from import_orchestrator.constants import CLUSTER_API, KUBEARCHIVE_API
+from import_orchestrator.constants import (
+    CLUSTER_API,
+    DEFAULT_MAX_PARALLEL,
+    DEFAULT_MAX_RETRIES,
+    DEFAULT_POLL_INTERVAL,
+    KUBEARCHIVE_API,
+)
 from import_orchestrator.database import ImportDatabase
 from import_orchestrator.engine import ImportOrchestrator, ImportTrigger, PipelineMonitor, ReleaseMonitor
+
+
+def add_common_orchestrate_args(parser: argparse.ArgumentParser) -> None:
+    """Add the flags shared by every ecosystem's ``orchestrate`` subcommand.
+
+    Ecosystems add their own selectors (``--artifact-type``, ``--target``, ...)
+    on top of these.
+    """
+    parser.add_argument(
+        "--max-parallel",
+        type=int,
+        default=DEFAULT_MAX_PARALLEL,
+        help=f"Maximum parallel PipelineRuns (default: {DEFAULT_MAX_PARALLEL})",
+    )
+    parser.add_argument(
+        "--poll-interval",
+        type=int,
+        default=DEFAULT_POLL_INTERVAL,
+        help=f"Seconds between status checks (default: {DEFAULT_POLL_INTERVAL})",
+    )
+    parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=DEFAULT_MAX_RETRIES,
+        help=f"Max retry attempts for failed imports (default: {DEFAULT_MAX_RETRIES})",
+    )
+    parser.add_argument(
+        "--print-resources",
+        action="store_true",
+        help="Preview the release chain (PipelineRun YAML + resolved ReleasePlan/RPA) "
+        "for each pending reference and exit, without contacting the cluster.",
+    )
+    parser.add_argument(
+        "--release-data-repo",
+        default=None,
+        help="Path to a konflux-release-data checkout for --print-resources "
+        "(default: reference/konflux-release-data, cloned on demand).",
+    )
 
 
 def _is_database_empty(db: ImportDatabase) -> bool:
