@@ -24,6 +24,30 @@ class GitError(Exception):
     """The local ``git`` CLI failed or was unavailable."""
 
 
+def clone(url: str, dest: Path, *, depth: int = 1) -> GitClient:
+    """Shallow-clone ``url`` into ``dest`` and return a client for it.
+
+    The parent directory of ``dest`` is created if needed. Uses the local
+    ``git`` CLI so it inherits the user's existing SSH/credential setup.
+
+    Raises:
+        GitError: If git is unavailable or the clone fails.
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        subprocess.run(
+            ["git", "clone", "--depth", str(depth), url, str(dest)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except OSError as exc:
+        raise GitError(f"unable to run git clone: {exc}") from exc
+    except subprocess.CalledProcessError as exc:
+        raise GitError(f"git clone {url} failed: {exc.stderr.strip()}") from exc
+    return GitClient(dest)
+
+
 class GitClient:
     """Thin wrapper over the local ``git`` CLI for a single repository.
 
@@ -42,6 +66,20 @@ class GitClient:
     def remote_url(self, name: str = "origin") -> str:
         """Return the configured URL for a remote (``git remote get-url``)."""
         return self._run("remote", "get-url", name)
+
+    def update(self) -> None:
+        """Reset the checkout to the upstream tip, discarding all local state.
+
+        Fetches the latest upstream commit, hard-resets HEAD to it, and removes
+        untracked files and directories so the checkout is a pristine copy of
+        the remote tip.
+
+        Raises:
+            GitError: If git is unavailable or the fetch/reset/clean fails.
+        """
+        self._run("fetch", "--depth", "1", "origin")
+        self._run("reset", "--hard", "@{u}")
+        self._run("clean", "-fd")
 
     def _run(self, *args: str) -> str:
         """Run a git command against the repository and return stripped stdout.
