@@ -25,3 +25,12 @@ KUBEARCHIVE_API = "https://kubearchive-api-server-product-kubearchive.apps.stone
 DEFAULT_MAX_PARALLEL = 1
 DEFAULT_POLL_INTERVAL = 30  # seconds
 DEFAULT_MAX_RETRIES = 3
+
+# ---------------------------------------------------------------------------
+# konflux-release-data (GitOps source of truth for ReleasePlan / RPA).
+# Used by `orchestrate --show-yaml` to resolve the release chain offline.
+# ---------------------------------------------------------------------------
+
+# Cloned here (relative to the working directory) when not supplied explicitly.
+RELEASE_DATA_REPO_URL = "git@gitlab.cee.redhat.com:releng/konflux-release-data.git"
+RELEASE_DATA_DEFAULT_PATH = "reference/konflux-release-data"

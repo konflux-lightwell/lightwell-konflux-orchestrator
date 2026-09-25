@@ -18,10 +18,11 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
-from import_orchestrator.clients import GitClient, GitError
+from import_orchestrator.clients import GitClient, GitError, clone
 
 
 def _git(repo: Path, *args: str) -> None:
@@ -57,3 +58,25 @@ class TestGitClient:
     def test_non_repository_raises_git_error(self, tmp_path: Path):
         with pytest.raises(GitError):
             GitClient(tmp_path).head_revision()
+
+
+class TestClone:
+    def test_clone_creates_working_checkout(self, repo: Path, tmp_path: Path):
+        dest = tmp_path / "nested" / "checkout"
+        client = clone(str(repo), dest)
+        assert isinstance(client, GitClient)
+        assert client.repo_path == dest
+        # The clone carries the source commit and is a usable repository.
+        assert len(client.head_revision()) == 40
+        assert (dest / "file.txt").read_text() == "hello"
+
+    def test_clone_failure_raises_git_error(self, tmp_path: Path):
+        not_a_repo = tmp_path / "empty"
+        not_a_repo.mkdir()
+        with pytest.raises(GitError, match="git clone .* failed"):
+            clone(str(not_a_repo), tmp_path / "dest")
+
+    def test_clone_missing_git_binary_raises_git_error(self, tmp_path: Path):
+        with patch("import_orchestrator.clients.git.subprocess.run", side_effect=OSError("no git")):
+            with pytest.raises(GitError, match="unable to run git clone"):
+                clone("https://example.com/x.git", tmp_path / "dest")

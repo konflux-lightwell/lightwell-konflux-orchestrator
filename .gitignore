@@ -13,3 +13,9 @@ venv/
 *.db
 uv.lock
 .claude/skills/test-policy/lib/
+
+# Local konflux-release-data checkout cloned on demand by `orchestrate --show-yaml`.
+reference/
+
+# Local, ticket-named import input files (e.g. LWLP-1338.txt) fed to `import-file`.
+LWLP-*.txt
