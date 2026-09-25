@@ -18,10 +18,11 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
-from import_orchestrator.clients import GitClient, GitError
+from import_orchestrator.clients import GitClient, GitError, clone
 
 
 def _git(repo: Path, *args: str) -> None:
@@ -57,3 +58,60 @@ class TestGitClient:
     def test_non_repository_raises_git_error(self, tmp_path: Path):
         with pytest.raises(GitError):
             GitClient(tmp_path).head_revision()
+
+
+class TestUpdate:
+    def test_update_fast_forwards_to_remote_tip(self, repo: Path, tmp_path: Path):
+        dest = tmp_path / "checkout"
+        client = clone(str(repo), dest)
+        before = client.head_revision()
+
+        # Advance the upstream repository by one commit.
+        (repo / "file.txt").write_text("world")
+        _git(repo, "commit", "-aqm", "second")
+        upstream_head = GitClient(repo).head_revision()
+
+        client.update()
+
+        assert client.head_revision() == upstream_head
+        assert client.head_revision() != before
+        assert (dest / "file.txt").read_text() == "world"
+
+    def test_update_discards_local_and_untracked_changes(self, repo: Path, tmp_path: Path):
+        dest = tmp_path / "checkout"
+        client = clone(str(repo), dest)
+
+        # A tracked edit and an untracked file should both be wiped.
+        (dest / "file.txt").write_text("local edit")
+        (dest / "untracked.txt").write_text("stray")
+
+        client.update()
+
+        assert (dest / "file.txt").read_text() == "hello"
+        assert not (dest / "untracked.txt").exists()
+
+    def test_update_non_repository_raises_git_error(self, tmp_path: Path):
+        with pytest.raises(GitError):
+            GitClient(tmp_path).update()
+
+
+class TestClone:
+    def test_clone_creates_working_checkout(self, repo: Path, tmp_path: Path):
+        dest = tmp_path / "nested" / "checkout"
+        client = clone(str(repo), dest)
+        assert isinstance(client, GitClient)
+        assert client.repo_path == dest
+        # The clone carries the source commit and is a usable repository.
+        assert len(client.head_revision()) == 40
+        assert (dest / "file.txt").read_text() == "hello"
+
+    def test_clone_failure_raises_git_error(self, tmp_path: Path):
+        not_a_repo = tmp_path / "empty"
+        not_a_repo.mkdir()
+        with pytest.raises(GitError, match="git clone .* failed"):
+            clone(str(not_a_repo), tmp_path / "dest")
+
+    def test_clone_missing_git_binary_raises_git_error(self, tmp_path: Path):
+        with patch("import_orchestrator.clients.git.subprocess.run", side_effect=OSError("no git")):
+            with pytest.raises(GitError, match="unable to run git clone"):
+                clone("https://example.com/x.git", tmp_path / "dest")

@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
-from import_orchestrator.clients.git import GitClient, GitError
+from import_orchestrator.clients.git import GitClient, GitError, clone
 from import_orchestrator.clients.kube import KubeClient
 
-__all__ = ["GitClient", "GitError", "KubeClient"]
+__all__ = ["GitClient", "GitError", "KubeClient", "clone"]

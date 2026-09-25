@@ -13,3 +13,6 @@ venv/
 *.db
 uv.lock
 .claude/skills/test-policy/lib/
+
+# Local konflux-release-data checkout cloned on demand by `orchestrate --print-resources`.
+reference/
