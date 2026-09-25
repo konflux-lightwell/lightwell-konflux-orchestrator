@@ -19,12 +19,7 @@ from __future__ import annotations
 import argparse
 import os
 
-from import_orchestrator.commands.orchestrate import run_orchestrate
-from import_orchestrator.constants import (
-    DEFAULT_MAX_PARALLEL,
-    DEFAULT_MAX_RETRIES,
-    DEFAULT_POLL_INTERVAL,
-)
+from import_orchestrator.commands.orchestrate import add_common_orchestrate_args, run_orchestrate
 from import_orchestrator.ecosystems.base import Ecosystem
 from import_orchestrator.ecosystems.python import config
 
@@ -39,26 +34,7 @@ def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> No
         description="Orchestrate batch python-remediated-build PipelineRuns",
     )
 
-    parser.add_argument(
-        "--max-parallel",
-        type=int,
-        default=DEFAULT_MAX_PARALLEL,
-        help=f"Maximum parallel PipelineRuns (default: {DEFAULT_MAX_PARALLEL})",
-    )
-
-    parser.add_argument(
-        "--poll-interval",
-        type=int,
-        default=DEFAULT_POLL_INTERVAL,
-        help=f"Seconds between status checks (default: {DEFAULT_POLL_INTERVAL})",
-    )
-
-    parser.add_argument(
-        "--max-retries",
-        type=int,
-        default=DEFAULT_MAX_RETRIES,
-        help=f"Max retry attempts for failed imports (default: {DEFAULT_MAX_RETRIES})",
-    )
+    add_common_orchestrate_args(parser)
 
     parser.add_argument(
         "--target",
