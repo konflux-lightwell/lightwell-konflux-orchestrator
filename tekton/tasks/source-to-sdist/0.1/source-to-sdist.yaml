@@ -61,6 +61,14 @@ spec:
         Remediation type controlling commit-distance calculation. Must be
         Backport or Novel.
       type: string
+    - name: BUILD_CONFIGS_REPO_URL
+      description: URL of the calunga-python build-configs repository.
+      type: string
+      default: https://gitlab.cee.redhat.com/lightwell/lightwell-builds/build-configs/calunga-python
+    - name: BUILD_CONFIGS_REVISION
+      description: Revision of the calunga-python build-configs repository.
+      type: string
+      default: main
     - name: ociStorage
       description: >-
         OCI reference used as the store for Trusted Artifacts.
@@ -80,6 +88,10 @@ spec:
       description: The name of the key in the ConfigMap that contains the CA bundle data.
       type: string
       default: ca-bundle.crt
+  workspaces:
+    - name: git-auth
+      description: Basic-auth credentials for cloning build-configs.
+      optional: false
   results:
     - name: SDISTS_ARTIFACT
       description: >-
@@ -270,6 +282,61 @@ spec:
         export SHORT_COMMIT="${SHORT_COMMIT}"
         EOF
 
+    - name: resolve-version-overrides
+      image: quay.io/redhat-user-workloads/calunga-tenant/plumbing-builder@sha256:d8355de03d57adef033743da1f1a3bb2f0ff038192e3220b155e9dd7dba5d37c
+      volumeMounts:
+        - mountPath: /mnt/trusted-ca
+          name: trusted-ca
+          readOnly: true
+      env:
+        - name: PACKAGE
+          value: $(params.PACKAGE)
+        - name: VERSION
+          value: $(params.VERSION)
+        - name: BUILD_CONFIGS_REPO_URL
+          value: $(params.BUILD_CONFIGS_REPO_URL)
+        - name: BUILD_CONFIGS_REVISION
+          value: $(params.BUILD_CONFIGS_REVISION)
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        if [ -f /mnt/trusted-ca/ca-bundle.crt ]; then
+          export GIT_SSL_CAINFO=/mnt/trusted-ca/ca-bundle.crt
+          export SSL_CERT_FILE=/mnt/trusted-ca/ca-bundle.crt
+        fi
+        git_home=$(mktemp -d)
+        trap 'rm -rf "$git_home"' EXIT
+        chmod 700 "$git_home"
+        export GIT_AUTH_WORKSPACE="$(workspaces.git-auth.path)"
+        cat > "$git_home/git-credential-helper" <<'HELPER'
+        #!/bin/sh
+        if [ "$1" = get ]; then
+          printf 'username=%s\npassword=%s\n' \\
+            "$(cat "$GIT_AUTH_WORKSPACE/username")" \\
+            "$(cat "$GIT_AUTH_WORKSPACE/password")"
+        fi
+        HELPER
+        chmod 700 "$git_home/git-credential-helper"
+        export HOME="$git_home"
+        git config --global credential.helper "$git_home/git-credential-helper"
+        git config --global credential.useHttpPath true
+        mkdir -p /var/workdir/build-configs
+        git clone "$BUILD_CONFIGS_REPO_URL" /var/workdir/build-configs
+        git -C /var/workdir/build-configs checkout "$BUILD_CONFIGS_REVISION"
+        mkdir -p /var/workdir/sdists-repo
+        python3 /var/workdir/build-configs/scripts/get-version-overrides.py \\
+          --packages-dir /var/workdir/build-configs/packages \\
+          "$PACKAGE" "$VERSION" > /var/workdir/sdists-repo/version-overrides.json
+        echo "Resolved version overrides for ${PACKAGE}==${VERSION}"
+      computeResources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          cpu: "1"
+          memory: 256Mi
+
     - name: rewrite-version-metadata
       image: quay.io/konflux-ci/task-runner:2.0.0@sha256:4b01fbf98fa7155f5c21443c285f88853864ae7cc66981cf6b543fc6ba16b81b
       workingDir: /var/workdir/source-repo
@@ -290,6 +357,8 @@ spec:
         import os
         import sys
         import re
+        import json
+        import subprocess
         from pathlib import Path
 
         # Load computed version from previous step
@@ -303,6 +372,9 @@ spec:
         print(f"Rewriting version metadata: {upstream_version} → {computed_version}")
 
         source_dir = Path("/var/workdir/source-repo/source")
+        overrides_path = Path("/var/workdir/sdists-repo/version-overrides.json")
+        overrides = json.loads(overrides_path.read_text()) if overrides_path.exists() else {"env": {}, "version_rewrite": {"files": []}}
+        rewrite_files = overrides.get("version_rewrite", {}).get("files", [])
         if not source_dir.exists():
             print(f"ERROR: source/ directory not found at {source_dir}", file=sys.stderr)
             sys.exit(1)
@@ -385,38 +457,49 @@ spec:
 
         print(f"  Searching authoritative metadata files for version declarations...")
 
-        # Process PKG-INFO and METADATA files recursively (can be in *.egg-info subdirs)
-        for pkg_info_file in source_dir.rglob('PKG-INFO'):
-            if replace_version_in_file(pkg_info_file, METADATA_PATTERNS):
-                changes_made.append(str(pkg_info_file.relative_to(source_dir.parent)))
-
-        for metadata_file in source_dir.rglob('METADATA'):
-            if replace_version_in_file(metadata_file, METADATA_PATTERNS):
-                changes_made.append(str(metadata_file.relative_to(source_dir.parent)))
-
-        # Process root-level authoritative files only
-        root_pyproject = source_dir / 'pyproject.toml'
-        if root_pyproject.exists():
-            if replace_version_in_file(root_pyproject, TOML_PATTERNS):
-                changes_made.append(str(root_pyproject.relative_to(source_dir.parent)))
-
-        root_setup_cfg = source_dir / 'setup.cfg'
-        if root_setup_cfg.exists():
-            if replace_version_in_file(root_setup_cfg, CFG_PATTERNS):
-                changes_made.append(str(root_setup_cfg.relative_to(source_dir.parent)))
-
         root_setup_py = source_dir / 'setup.py'
-        if root_setup_py.exists():
-            if replace_version_in_file(root_setup_py, PYTHON_VERSION_PATTERNS):
-                changes_made.append(str(root_setup_py.relative_to(source_dir.parent)))
-
-        # Process Python files with __version__ declarations (recursive for version modules)
-        for py_file in source_dir.rglob('*.py'):
-            # Skip if we already processed it (setup.py)
-            if py_file == root_setup_py:
-                continue
-            if replace_version_in_file(py_file, PYTHON_VERSION_PATTERNS):
-                changes_made.append(str(py_file.relative_to(source_dir.parent)))
+        if rewrite_files:
+            # Explicit package/version config replaces the heuristic, so there is a
+            # single authoritative mechanism and no accidental partial double rewrite.
+            for rule in rewrite_files:
+                relative = Path(rule["path"])
+                target = (source_dir / relative).resolve()
+                if not target.is_relative_to(source_dir.resolve()):
+                    raise SystemExit(f"Configured rewrite path escapes source/: {relative}")
+                if not target.is_file():
+                    raise SystemExit(f"Configured rewrite file does not exist: {relative}")
+                replacement = rule["replacement"].format(
+                    COMPUTED_VERSION=computed_version, PACKAGE=os.environ["PACKAGE"], VERSION=upstream_version
+                )
+                original = target.read_text(encoding="utf-8")
+                updated, count = re.subn(rule["pattern"], replacement, original, flags=re.MULTILINE)
+                if count == 0:
+                    raise SystemExit(f"Configured rewrite pattern matched no content in {relative}")
+                target.write_text(updated, encoding="utf-8")
+                if computed_version not in updated:
+                    raise SystemExit(f"Configured rewrite did not write computed version into {relative}")
+                changes_made.append(str(relative))
+                print(f"  Applied configured version rewrite: {relative} ({count} match(es))")
+        else:
+            # Default package heuristic for builds without explicit config.
+            for pkg_info_file in source_dir.rglob('PKG-INFO'):
+                if replace_version_in_file(pkg_info_file, METADATA_PATTERNS):
+                    changes_made.append(str(pkg_info_file.relative_to(source_dir.parent)))
+            for metadata_file in source_dir.rglob('METADATA'):
+                if replace_version_in_file(metadata_file, METADATA_PATTERNS):
+                    changes_made.append(str(metadata_file.relative_to(source_dir.parent)))
+            for candidate, patterns in (
+                (source_dir / 'pyproject.toml', TOML_PATTERNS),
+                (source_dir / 'setup.cfg', CFG_PATTERNS),
+                (root_setup_py, PYTHON_VERSION_PATTERNS),
+            ):
+                if candidate.exists() and replace_version_in_file(candidate, patterns):
+                    changes_made.append(str(candidate.relative_to(source_dir.parent)))
+            for py_file in source_dir.rglob('*.py'):
+                if py_file == root_setup_py:
+                    continue
+                if replace_version_in_file(py_file, PYTHON_VERSION_PATTERNS):
+                    changes_made.append(str(py_file.relative_to(source_dir.parent)))
 
         if changes_made:
             print(f"\n✓ Successfully rewrote version in {len(changes_made)} file(s)")
@@ -572,6 +655,9 @@ spec:
       env:
         - name: IMAGE_EXPIRES_AFTER
           value: $(params.ociArtifactExpiresAfter)
+      volumeMounts:
+        - mountPath: /var/workdir
+          name: workdir
       args:
         - create
         - --store

@@ -259,6 +259,8 @@ spec:
           value: $(params.PACKAGE)
         - name: VERSION
           value: $(params.VERSION)
+        - name: COMPUTED_VERSION
+          value: $(params.COMPUTED_VERSION)
       script: |
         #!/bin/bash
         set -euo pipefail
@@ -327,6 +329,8 @@ spec:
           value: $(params.VERSION)
         - name: COMPUTED_VERSION
           value: $(params.COMPUTED_VERSION)
+        - name: VERSION_OVERRIDES
+          value: /var/workdir/sdists-repo/version-overrides.json
         - name: WHEEL_SERVER_URL
           value: $(params.WHEEL_SERVER_URL)
         - name: FROMAGER_SDISTS_REPO
@@ -357,6 +361,24 @@ spec:
         fi
         ARGS+=(--package-settings-dir /var/workdir/fromager-settings)
 
+        if [[ -f "${VERSION_OVERRIDES}" ]]; then
+          python3 - "${VERSION_OVERRIDES}" > /var/workdir/backend-env.sh <<'PY'
+        import json, os, shlex, sys
+        from pathlib import Path
+        overrides = json.loads(Path(sys.argv[1]).read_text())
+        for key, value in overrides.get("env", {}).items():
+            if not key.replace("_", "a").isalnum() or key[0].isdigit():
+                raise SystemExit(f"Invalid backend environment variable name: {key!r}")
+            resolved = value.format(
+                COMPUTED_VERSION=os.environ["COMPUTED_VERSION"],
+                PACKAGE=os.environ["PACKAGE"],
+                VERSION=os.environ["VERSION"],
+            )
+            print(f"export {key}={shlex.quote(resolved)}")
+            print(f"# Applying configured backend environment override: {key}", file=sys.stderr)
+        PY
+          source /var/workdir/backend-env.sh
+        fi
         build-wheels "${ARGS[@]}" "${PACKAGE}==${VERSION}"
 
         # Fromager (via FROMAGER_SDISTS_REPO) writes built sdists to
@@ -394,12 +416,15 @@ spec:
           value: $(params.PACKAGE)
         - name: VERSION
           value: $(params.VERSION)
+        - name: COMPUTED_VERSION
+          value: $(params.COMPUTED_VERSION)
       script: |
         #!/usr/bin/env python3
         import json
         import os
         import sys
         import subprocess
+        import zipfile
         from pathlib import Path
         from packaging.utils import canonicalize_name
 
@@ -447,6 +472,29 @@ spec:
             sys.exit(1)
 
         # 3. Clean artifact/ directory: remove any cached dependency artifacts not in allowed_packages
+        # Require the primary wheel's embedded metadata to match the computed
+        # remediation version; upstream-version fallback hid the NLTK failure.
+        package_norm = canonicalize_name(package).replace("-", "_")
+        primary_wheels = [p for p in artifact_dir.glob("*.whl") if p.name.lower().startswith(package_norm.lower() + "-")]
+        if not primary_wheels:
+            print(f"FATAL: expected a primary wheel for {package}, found none", file=sys.stderr)
+            sys.exit(1)
+        computed_version = os.environ["COMPUTED_VERSION"]
+        from email.parser import BytesParser
+        for primary_wheel in primary_wheels:
+            with zipfile.ZipFile(primary_wheel) as wheel:
+                metadata_paths = [n for n in wheel.namelist() if n.endswith(".dist-info/METADATA")]
+                if len(metadata_paths) != 1:
+                    print(f"FATAL: expected one METADATA file in {primary_wheel.name}", file=sys.stderr)
+                    sys.exit(1)
+                actual_version = BytesParser().parsebytes(wheel.read(metadata_paths[0])).get("Version")
+            if actual_version != computed_version:
+                print(f"FATAL: primary wheel {primary_wheel.name} metadata version {actual_version!r} != computed remediated version {computed_version!r}", file=sys.stderr)
+                sys.exit(1)
+            print(f"Verified primary wheel version: {primary_wheel.name} -> {computed_version}")
+
+        # 4. Clean artifact/ directory: remove cached dependency artifacts not allowed.
+
         for fpath in list(artifact_dir.glob("*.whl")) + list(artifact_dir.glob("*.tar.gz")):
             fname = fpath.name
             raw_pkg = fname.split("-")[0]

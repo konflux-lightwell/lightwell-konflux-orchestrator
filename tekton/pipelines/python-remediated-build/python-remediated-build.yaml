@@ -50,6 +50,15 @@ spec:
         Backport or Novel.
       type: string
 
+    - name: BUILD_CONFIGS_REPO_URL
+      description: URL of the calunga-python build-configs repository.
+      type: string
+      default: https://gitlab.cee.redhat.com/lightwell/lightwell-builds/build-configs/calunga-python
+    - name: BUILD_CONFIGS_REVISION
+      description: Revision of calunga-python build-configs to use for version overrides.
+      type: string
+      default: main
+
     - name: LIGHTWELL_BUILDS_REPO_URL
       description: >-
         URL of the lightwell-builds git repository for this package.
@@ -186,6 +195,10 @@ spec:
           value: $(params.VERSION)
         - name: FIX_TYPE
           value: $(params.FIX_TYPE)
+        - name: BUILD_CONFIGS_REPO_URL
+          value: $(params.BUILD_CONFIGS_REPO_URL)
+        - name: BUILD_CONFIGS_REVISION
+          value: $(params.BUILD_CONFIGS_REVISION)
         - name: LIGHTWELL_BUILDS_TAG
           value: $(params.LIGHTWELL_BUILDS_TAG)
         - name: ociStorage
@@ -196,6 +209,9 @@ spec:
           value: $(params.caTrustConfigMapName)
         - name: caTrustConfigMapKey
           value: $(params.caTrustConfigMapKey)
+      workspaces:
+        - name: git-auth
+          workspace: git-auth
 
     # ── Step 3: fromager bootstrap from pre-placed sdist → wheels OCI artifact ─
     - name: fromager-build-wheels
@@ -225,6 +241,10 @@ spec:
           value: $(params.IMAGE_EXPIRES_AFTER)
         - name: WHEEL_SERVER_URL
           value: $(params.WHEEL_SERVER_URL)
+        - name: BUILD_CONFIGS_REPO_URL
+          value: $(params.BUILD_CONFIGS_REPO_URL)
+        - name: BUILD_CONFIGS_REVISION
+          value: $(params.BUILD_CONFIGS_REVISION)
         - name: caTrustConfigMapName
           value: $(params.caTrustConfigMapName)
         - name: caTrustConfigMapKey
