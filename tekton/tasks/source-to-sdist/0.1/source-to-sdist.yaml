@@ -381,7 +381,6 @@ spec:
             lines.append(f"export {key}={shlex.quote(resolved)}")
         target = workdir / "sdists-repo/backend-env.sh"
         target.write_text("\n".join(lines) + "\n")
-        target.chmod(0o644)
         PY
         # Steps can run under different UIDs across task images. Make the
         # shared Trusted Artifact staging tree traversable and writable for the
