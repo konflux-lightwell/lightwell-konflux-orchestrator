@@ -14,6 +14,7 @@ from hack.sync_wheel_sbom import SyncWheelSbomError, sync_wheel_sbom, update_red
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TASK_PATH = REPO_ROOT / "tekton/tasks/python-fromager-build-wheels/0.1/python-fromager-build-wheels.yaml"
 HELPER_PATH = REPO_ROOT / "hack/sync_wheel_sbom.py"
+PRUNE_HELPER_PATH = REPO_ROOT / "hack/prune_wheel_sboms.py"
 
 
 def _digest(data: bytes) -> str:
@@ -118,6 +119,20 @@ def test_task_embeds_checked_in_helper_and_invokes_it():
         "subprocess.run([sys.executable, str(sync_script), str(primary_wheel), computed_version], check=True)"
     )
     assert expected_invocation in verify_script
+
+
+def test_task_embeds_optional_sbom_allowlist_and_runs_before_oci_packaging():
+    task = yaml.safe_load(TASK_PATH.read_text())
+    clone_script = next(step["script"] for step in task["spec"]["steps"] if step["name"] == "clone-build-configs")
+    verify_script = next(step["script"] for step in task["spec"]["steps"] if step["name"] == "verify-allowed-artifacts")
+    lines = clone_script.splitlines()
+    start = lines.index("cat > \"$DEST/scripts/prune_wheel_sboms.py\" <<'PY'") + 1
+    end = lines.index("PY", start)
+    embedded = "\n".join(lines[start:end]) + "\n"
+    assert embedded == PRUNE_HELPER_PATH.read_text()
+    assert "subprocess.run([sys.executable, str(prune_script), str(primary_wheel)], check=True)" in verify_script
+    task_names = [step["name"] for step in task["spec"]["steps"]]
+    assert task_names.index("verify-allowed-artifacts") < task_names.index("create-oci-artifact")
 
 
 def test_rewrites_wheel_version_and_pypi_purl_with_encoded_plus(tmp_path):
