@@ -381,8 +381,13 @@ spec:
             lines.append(f"export {key}={shlex.quote(resolved)}")
         target = workdir / "sdists-repo/backend-env.sh"
         target.write_text("\n".join(lines) + "\n")
-        target.chmod(0o600)
+        target.chmod(0o644)
         PY
+        # Steps can run under different UIDs across task images. Make the
+        # shared Trusted Artifact staging tree traversable and writable for the
+        # deterministic-sdist step while keeping its data readable.
+        find /var/workdir/sdists-repo -type d -exec chmod 0777 {} +
+        find /var/workdir/sdists-repo -type f -exec chmod 0644 {} +
         echo "Resolved package overrides from $(git -C "$DEST" rev-parse HEAD)"
       computeResources:
         requests:

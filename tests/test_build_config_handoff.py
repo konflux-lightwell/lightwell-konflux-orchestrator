@@ -55,6 +55,8 @@ def test_source_task_carries_resolved_build_inputs_in_trusted_artifact():
     assert "get-fromager-settings.py" in resolve
     assert "get-allowed-artifacts.py" in resolve
     assert "All build-config helper scripts used by these" in resolve
+    assert "find /var/workdir/sdists-repo -type d -exec chmod 0777" in resolve
+    assert "find /var/workdir/sdists-repo -type f -exec chmod 0644" in resolve
     assert "version-env.sh" in create
     assert "sdists-repo" in task["spec"]["steps"][-1]["args"][-1]
     _script_syntax_check(scripts["resolve-version-overrides"])
