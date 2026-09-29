@@ -49,7 +49,6 @@ spec:
         Remediation type controlling commit-distance calculation. Must be
         Backport or Novel.
       type: string
-
     - name: LIGHTWELL_BUILDS_REPO_URL
       description: >-
         URL of the lightwell-builds git repository for this package.
@@ -196,6 +195,9 @@ spec:
           value: $(params.caTrustConfigMapName)
         - name: caTrustConfigMapKey
           value: $(params.caTrustConfigMapKey)
+      workspaces:
+        - name: git-auth
+          workspace: git-auth
 
     # ── Step 3: fromager bootstrap from pre-placed sdist → wheels OCI artifact ─
     - name: fromager-build-wheels
