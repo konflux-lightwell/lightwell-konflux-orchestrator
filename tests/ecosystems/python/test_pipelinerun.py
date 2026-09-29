@@ -17,6 +17,7 @@ limitations under the License.
 from __future__ import annotations
 
 import pytest
+
 from import_orchestrator.ecosystems.python.pipelinerun import (
     TriggerError,
     build_pipelinerun_manifest,
