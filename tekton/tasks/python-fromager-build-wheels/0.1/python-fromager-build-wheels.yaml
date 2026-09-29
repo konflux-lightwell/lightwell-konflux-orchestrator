@@ -125,8 +125,8 @@ spec:
         CONFIG_DIR=/var/workdir/sdists-repo/build-configs
         SETTINGS_DIR=/var/workdir/fromager-settings
         mkdir -p "$SETTINGS_DIR"
-        python3 "$CONFIG_DIR/scripts/get-fromager-settings.py" \\
-          --packages-dir "$CONFIG_DIR/packages" --format yaml \\
+        python3 "$CONFIG_DIR/scripts/get-fromager-settings.py" \
+          --packages-dir "$CONFIG_DIR/packages" --format yaml \
           "$PACKAGE" "$VERSION" > "$SETTINGS_DIR/$PACKAGE.yaml"
         python3 - <<'PY'
         import os

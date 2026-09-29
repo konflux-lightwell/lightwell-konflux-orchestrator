@@ -8,7 +8,14 @@ from urllib.parse import urlsplit
 from import_orchestrator.engine.errors import TriggerError
 
 DEFAULT_BUILD_CONFIGS_REVISION = "main"
-BUILD_CONFIGS_REVISION = os.environ.get("BUILD_CONFIGS_REVISION", DEFAULT_BUILD_CONFIGS_REVISION)
+
+
+def get_build_config_revision() -> str:
+    """Return a valid build-config Git revision supplied by deployment config."""
+    revision = os.environ.get("BUILD_CONFIGS_REVISION", DEFAULT_BUILD_CONFIGS_REVISION).strip()
+    if not revision or revision.startswith("-"):
+        raise TriggerError("BUILD_CONFIGS_REVISION must be a non-empty Git revision")
+    return revision
 
 
 def get_build_config_source() -> str:

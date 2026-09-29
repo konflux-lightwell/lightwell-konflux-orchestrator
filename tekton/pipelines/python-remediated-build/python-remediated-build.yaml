@@ -52,6 +52,9 @@ spec:
     - name: BUILD_CONFIGS_REPO_URL
       description: Build-config registry URL, supplied by the orchestrator.
       type: string
+    - name: BUILD_CONFIGS_REVISION
+      description: Build-config Git revision, supplied by the orchestrator.
+      type: string
 
     - name: LIGHTWELL_BUILDS_REPO_URL
       description: >-
@@ -191,6 +194,8 @@ spec:
           value: $(params.FIX_TYPE)
         - name: BUILD_CONFIGS_REPO_URL
           value: $(params.BUILD_CONFIGS_REPO_URL)
+        - name: BUILD_CONFIGS_REVISION
+          value: $(params.BUILD_CONFIGS_REVISION)
         - name: LIGHTWELL_BUILDS_TAG
           value: $(params.LIGHTWELL_BUILDS_TAG)
         - name: ociStorage
