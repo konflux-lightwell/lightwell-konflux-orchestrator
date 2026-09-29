@@ -16,7 +16,11 @@ limitations under the License.
 
 from __future__ import annotations
 
+import os
+
 import pytest
+
+os.environ.setdefault("BUILD_CONFIGS_REPO_URL", "https://example.test/build-configs.git")
 
 from import_orchestrator.ecosystems.python.pipelinerun import (
     TriggerError,
@@ -96,6 +100,18 @@ class TestBuildManifest:
         assert params["FIX_TYPE"] == "Backport"
         assert params["LIGHTWELL_BUILDS_TAG"] == "foolib/0.4.0"
         assert params["WHEEL_SERVER_URL"] == "https://packages.redhat.com/lightwell/python/validated/simple/"
+        assert params["BUILD_CONFIGS_REPO_URL"] == "https://example.test/build-configs.git"
+        assert params["BUILD_CONFIGS_REVISION"] == "main"
+
+    def test_build_config_revision_is_configurable(self, monkeypatch):
+        monkeypatch.setenv("BUILD_CONFIGS_REVISION", "review-ref")
+        params = {p["name"]: p["value"] for p in _manifest()["spec"]["params"]}
+        assert params["BUILD_CONFIGS_REVISION"] == "review-ref"
+
+    def test_rejects_invalid_build_config_revision(self, monkeypatch):
+        monkeypatch.setenv("BUILD_CONFIGS_REVISION", "--option")
+        with pytest.raises(TriggerError, match="BUILD_CONFIGS_REVISION"):
+            _manifest()
 
     def test_wheel_server_url_override(self):
         params = {

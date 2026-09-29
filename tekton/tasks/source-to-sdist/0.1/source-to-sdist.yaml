@@ -311,8 +311,8 @@ spec:
         cat > "$git_home/git-credential-helper" <<'HELPER'
         #!/bin/sh
         if [ "$1" = get ]; then
-          printf 'username=%s\\npassword=%s\\n' \\
-            "$(cat "$GIT_AUTH_WORKSPACE/username")" \\
+          printf 'username=%s\npassword=%s\n' \
+            "$(cat "$GIT_AUTH_WORKSPACE/username")" \
             "$(cat "$GIT_AUTH_WORKSPACE/password")"
         fi
         HELPER
@@ -331,8 +331,8 @@ spec:
           exit 1
         fi
         python3 "$DEST/scripts/validate-build-config.py" "$CONFIG"
-        python3 "$DEST/scripts/get-version-overrides.py" \\
-          --packages-dir "$DEST/packages" "$PACKAGE" "$VERSION" \\
+        python3 "$DEST/scripts/get-version-overrides.py" \
+          --packages-dir "$DEST/packages" "$PACKAGE" "$VERSION" \
           > /var/workdir/sdists-repo/version-overrides.json
 
         # Interim handoff: copy the selected package config and resolver helpers
@@ -340,9 +340,9 @@ spec:
         # build-config snapshot. All build-config helper scripts used by these
         # tasks should ultimately live in the plumbing-builder image.
         cp "$CONFIG" /var/workdir/sdists-repo/build-configs/packages/
-        cp "$DEST/scripts/validate-build-config.py" \\
-          "$DEST/scripts/get-fromager-settings.py" \\
-          "$DEST/scripts/get-allowed-artifacts.py" \\
+        cp "$DEST/scripts/validate-build-config.py" \
+          "$DEST/scripts/get-fromager-settings.py" \
+          "$DEST/scripts/get-allowed-artifacts.py" \
           /var/workdir/sdists-repo/build-configs/scripts/
         git -C "$DEST" rev-parse HEAD > /var/workdir/sdists-repo/build-configs/.commit
 
@@ -710,9 +710,6 @@ spec:
       env:
         - name: IMAGE_EXPIRES_AFTER
           value: $(params.ociArtifactExpiresAfter)
-      volumeMounts:
-        - mountPath: /var/workdir
-          name: workdir
       args:
         - create
         - --store
