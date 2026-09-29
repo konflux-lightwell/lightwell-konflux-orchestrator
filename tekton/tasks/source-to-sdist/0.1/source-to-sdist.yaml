@@ -324,11 +324,66 @@ spec:
         rm -rf "$DEST"
         git clone "$BUILD_CONFIGS_REPO_URL" "$DEST"
         git -C "$DEST" checkout "$BUILD_CONFIGS_REVISION"
-        mkdir -p /var/workdir/sdists-repo
+        mkdir -p /var/workdir/sdists-repo/build-configs/packages /var/workdir/sdists-repo/build-configs/scripts
+        CONFIG="$DEST/packages/${PACKAGE}.json"
+        if [ ! -f "$CONFIG" ]; then
+          echo "ERROR: Mandatory build config missing for $PACKAGE: $CONFIG" >&2
+          exit 1
+        fi
+        python3 "$DEST/scripts/validate-build-config.py" "$CONFIG"
         python3 "$DEST/scripts/get-version-overrides.py" \\
           --packages-dir "$DEST/packages" "$PACKAGE" "$VERSION" \\
           > /var/workdir/sdists-repo/version-overrides.json
-        echo "Resolved package version overrides from $(git -C "$DEST" rev-parse HEAD)"
+
+        # Interim handoff: copy the selected package config and resolver helpers
+        # into the Trusted Artifact so all later task steps consume this exact
+        # build-config snapshot. All build-config helper scripts used by these
+        # tasks should ultimately live in the plumbing-builder image.
+        cp "$CONFIG" /var/workdir/sdists-repo/build-configs/packages/
+        cp "$DEST/scripts/validate-build-config.py" \\
+          "$DEST/scripts/get-fromager-settings.py" \\
+          "$DEST/scripts/get-allowed-artifacts.py" \\
+          /var/workdir/sdists-repo/build-configs/scripts/
+        git -C "$DEST" rev-parse HEAD > /var/workdir/sdists-repo/build-configs/.commit
+
+        python3 - <<'PY'
+        import json
+        import os
+        import re
+        import shlex
+        from pathlib import Path
+
+        workdir = Path("/var/workdir")
+        overrides = json.loads((workdir / "sdists-repo/version-overrides.json").read_text())
+        version_env = {}
+        for line in (workdir / "version-env.sh").read_text().splitlines():
+            if line.startswith("export ") and "=" in line:
+                key, value = line.removeprefix("export ").split("=", 1)
+                version_env[key] = value.strip().strip('"')
+        tokens = {
+            "COMPUTED_VERSION": version_env["COMPUTED_VERSION"],
+            "PACKAGE": os.environ["PACKAGE"],
+            "VERSION": os.environ["VERSION"],
+        }
+        env = overrides.get("env", {})
+        if not isinstance(env, dict):
+            raise SystemExit("build-config env override must be an object")
+        lines = ["# Generated from the build-config snapshot for this build."]
+        for key, value in env.items():
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+                raise SystemExit(f"Invalid backend environment variable name: {key!r}")
+            if not isinstance(value, str):
+                raise SystemExit(f"Backend environment value for {key} must be a string")
+            try:
+                resolved = value.format(**tokens)
+            except KeyError as exc:
+                raise SystemExit(f"Unsupported backend environment token: {exc.args[0]}") from exc
+            lines.append(f"export {key}={shlex.quote(resolved)}")
+        target = workdir / "sdists-repo/backend-env.sh"
+        target.write_text("\n".join(lines) + "\n")
+        target.chmod(0o600)
+        PY
+        echo "Resolved package overrides from $(git -C "$DEST" rev-parse HEAD)"
       computeResources:
         requests:
           cpu: 100m
