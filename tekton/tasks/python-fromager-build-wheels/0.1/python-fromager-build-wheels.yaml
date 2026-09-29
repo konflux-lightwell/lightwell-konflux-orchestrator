@@ -244,7 +244,7 @@ spec:
         import zipfile
         from io import StringIO
         from pathlib import Path
-        from urllib.parse import quote, urlsplit, urlunsplit
+        from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
         WHEEL_SPDX_ID = "SPDXRef-wheel"
         UPSTREAM_SPDX_ID = "SPDXRef-upstream"
@@ -301,7 +301,8 @@ spec:
             return matches[0]
 
 
-        def _replace_purl_version_preserving_qualifiers(purl: str, computed_version: str) -> str:
+        def _replace_wheel_purl_identity(purl: str, computed_version: str, wheel_filename: str) -> str:
+            """Set the wheel version and filename, dropping any stale source download URL."""
             parts = urlsplit(purl)
             if parts.scheme != "pkg" or not parts.path.startswith("pypi/"):
                 raise SyncWheelSbomError(f"not a PyPI package URL: {purl}")
@@ -310,10 +311,28 @@ spec:
 
             name, _old_version = parts.path.rsplit("@", 1)
             encoded_version = quote(computed_version, safe="")
-            return urlunsplit((parts.scheme, parts.netloc, f"{name}@{encoded_version}", parts.query, parts.fragment))
+            # PURL qualifiers are artifact-specific. Keep non-locating qualifiers, but
+            # replace the old wheel filename and remove download_url because the output
+            # image has no stable public wheel URL at build time. Source download
+            # provenance remains on SPDXRef-upstream.
+            qualifiers = []
+            seen_filename = False
+            for key, value in parse_qsl(parts.query, keep_blank_values=True):
+                if key == "file_name":
+                    if not seen_filename:
+                        qualifiers.append((key, wheel_filename))
+                        seen_filename = True
+                    continue
+                if key == "download_url":
+                    continue
+                qualifiers.append((key, value))
+            if not seen_filename:
+                qualifiers.append(("file_name", wheel_filename))
+            query = urlencode(qualifiers, doseq=True, quote_via=quote, safe="")
+            return urlunsplit((parts.scheme, parts.netloc, f"{name}@{encoded_version}", query, parts.fragment))
 
 
-        def update_redhat_spdx_sbom(sbom_bytes: bytes, computed_version: str) -> bytes:
+        def update_redhat_spdx_sbom(sbom_bytes: bytes, computed_version: str, wheel_filename: str) -> bytes:
             """Return SBOM JSON bytes with only SPDXRef-wheel rewritten."""
             try:
                 sbom = json.loads(sbom_bytes)
@@ -331,8 +350,8 @@ spec:
 
             wheel["versionInfo"] = computed_version
             purl_ref = _pypi_purl_ref(wheel)
-            purl_ref["referenceLocator"] = _replace_purl_version_preserving_qualifiers(
-                purl_ref["referenceLocator"], computed_version
+            purl_ref["referenceLocator"] = _replace_wheel_purl_identity(
+                purl_ref["referenceLocator"], computed_version, wheel_filename
             )
 
             return (json.dumps(sbom, indent=2) + "\n").encode()
@@ -378,7 +397,12 @@ spec:
                 names = [info.filename for info in infos]
                 sbom_member = _single_member(names, SBOM_SUFFIX, "Red Hat SPDX SBOM")
                 record_member = _single_member(names, RECORD_SUFFIX, "RECORD file")
-                updated_sbom = update_redhat_spdx_sbom(src.read(sbom_member), computed_version)
+                signatures = [name for name in names if name.endswith((".dist-info/RECORD.jws", ".dist-info/RECORD.p7s"))]
+                if signatures:
+                    raise SyncWheelSbomError(
+                        "cannot update RECORD in a signed wheel without regenerating its signature: " + ", ".join(signatures)
+                    )
+                updated_sbom = update_redhat_spdx_sbom(src.read(sbom_member), computed_version, wheel_path.name)
                 updated_record = update_record(src.read(record_member), sbom_member, updated_sbom)
 
                 with tempfile.NamedTemporaryFile(dir=wheel_path.parent, delete=False) as tmp_file:

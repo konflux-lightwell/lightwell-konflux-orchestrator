@@ -138,10 +138,14 @@ def test_percent_encodes_root_package_purl_version_without_reencoding_name_or_qu
     wheel_pkg = next(pkg for pkg in sbom["packages"] if pkg["SPDXID"] == "SPDXRef-wheel")
     wheel_pkg["externalRefs"][0]["referenceLocator"] = "pkg:pypi/demo%2Fpkg@1.0?download_url=https%3A%2F%2Fx"
 
-    updated = update_redhat_spdx_sbom(json.dumps(sbom).encode(), "1!2.0+local/dev")
+    updated = update_redhat_spdx_sbom(
+        json.dumps(sbom).encode(), "1!2.0+local/dev", "demo_pkg-1!2.0+local/dev-py3-none-any.whl"
+    )
 
     packages = {pkg["SPDXID"]: pkg for pkg in json.loads(updated)["packages"]}
-    assert _purl(packages["SPDXRef-wheel"]) == "pkg:pypi/demo%2Fpkg@1%212.0%2Blocal%2Fdev?download_url=https%3A%2F%2Fx"
+    assert _purl(packages["SPDXRef-wheel"]) == (
+        "pkg:pypi/demo%2Fpkg@1%212.0%2Blocal%2Fdev?file_name=demo_pkg-1%212.0%2Blocal%2Fdev-py3-none-any.whl"
+    )
 
 
 def test_preserves_upstream_version_and_purl(tmp_path):
@@ -155,7 +159,7 @@ def test_preserves_upstream_version_and_purl(tmp_path):
     assert upstream == before
 
 
-def test_preserves_file_name_qualifier_and_other_qualifiers(tmp_path):
+def test_rewrites_wheel_file_name_and_drops_stale_download_url(tmp_path):
     wheel = tmp_path / "demo_pkg-1.0+rhlw.1-py3-none-any.whl"
     sbom_member, _, _, _ = _make_wheel(wheel)
 
@@ -163,8 +167,9 @@ def test_preserves_file_name_qualifier_and_other_qualifiers(tmp_path):
 
     wheel_pkg = {pkg["SPDXID"]: pkg for pkg in _read_json_member(wheel, sbom_member)["packages"]}["SPDXRef-wheel"]
     purl = _purl(wheel_pkg)
-    assert "?file_name=demo_pkg-1.0-py3-none-any.whl&download_url=" in purl
-    assert purl.endswith("%2Fwheel.whl")
+    assert "?file_name=demo_pkg-1.0%2Brhlw.1-py3-none-any.whl" in purl
+    assert "download_url=" not in purl
+    assert "pkg:pypi/demo-pkg@1.0%2Brhlw.1" in purl
 
 
 def test_updates_only_sbom_record_digest_and_size_for_changed_sbom(tmp_path):
@@ -196,7 +201,7 @@ def test_errors_when_wheel_package_missing():
     sbom["packages"] = [pkg for pkg in sbom["packages"] if pkg["SPDXID"] != "SPDXRef-wheel"]
 
     with pytest.raises(SyncWheelSbomError, match="SPDXRef-wheel"):
-        update_redhat_spdx_sbom(json.dumps(sbom).encode(), "1.0+rhlw.1")
+        update_redhat_spdx_sbom(json.dumps(sbom).encode(), "1.0+rhlw.1", "demo_pkg-1.0+rhlw.1-py3-none-any.whl")
 
 
 def test_errors_when_upstream_package_missing():
@@ -204,7 +209,17 @@ def test_errors_when_upstream_package_missing():
     sbom["packages"] = [pkg for pkg in sbom["packages"] if pkg["SPDXID"] != "SPDXRef-upstream"]
 
     with pytest.raises(SyncWheelSbomError, match="SPDXRef-upstream"):
-        update_redhat_spdx_sbom(json.dumps(sbom).encode(), "1.0+rhlw.1")
+        update_redhat_spdx_sbom(json.dumps(sbom).encode(), "1.0+rhlw.1", "demo_pkg-1.0+rhlw.1-py3-none-any.whl")
+
+
+def test_errors_when_record_signature_present(tmp_path):
+    wheel = tmp_path / "demo_pkg-1.0+rhlw.1-py3-none-any.whl"
+    _make_wheel(wheel)
+    with zipfile.ZipFile(wheel, "a") as whl:
+        whl.writestr("demo_pkg-1.0.dist-info/RECORD.jws", b"signature")
+
+    with pytest.raises(SyncWheelSbomError, match="signed wheel"):
+        sync_wheel_sbom(wheel, "1.0+rhlw.1")
 
 
 def test_errors_when_record_missing_sbom_entry(tmp_path):
