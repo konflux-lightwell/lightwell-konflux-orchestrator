@@ -176,7 +176,7 @@ spec:
         resolver: bundles
         params:
           - name: bundle
-            value: quay.io/konflux-ci/tekton-catalog/task-source-to-sdist:0.1@sha256:4535b41e8bdd7edf59e90cbbcc055145b3326ad59da047e6f04e54218df9edbe
+            value: quay.io/redhat-user-workloads/lightwell-poc-tenant/tekton-bundles/source-to-sdist@sha256:a4b011de27dae8a269b4941558b070a7a33f27629767793104195a7419c4db2b
           - name: name
             value: source-to-sdist
           - name: kind
@@ -216,7 +216,7 @@ spec:
         resolver: bundles
         params:
           - name: bundle
-            value: quay.io/konflux-ci/tekton-catalog/task-fromager-build-wheels:0.1@sha256:02b0ceec3bf3de8f5474f60f4663688517d9a767233dc01fdfaa5f19d2d6cf04
+            value: quay.io/redhat-user-workloads/lightwell-poc-tenant/tekton-bundles/fromager-build-wheels@sha256:6c50164261e9b7df815232e4330a7382c37dd1a07d4474b66cf7aceb06b84a17
           - name: name
             value: python-fromager-build-wheels
           - name: kind
