@@ -13,7 +13,7 @@ spec:
   description: >-
     Build Python wheels using fromager from a pre-placed sdist in lightwell-builds.
 
-    Clones build-configs/calunga-python to validate package configuration (MANDATORY),
+    Consumes the resolved package config and helper scripts carried in the input Trusted Artifact,
     renders per-package fromager settings, runs build-wheels, performs auditwheel repair,
     injects system library dependencies into the SPDX SBOM, and attaches the SBOM
     to the OCI wheels artifact.
@@ -50,12 +50,6 @@ spec:
       description: Optional Secret name containing Pulp credentials (basic-auth username/password or SERVICE_ACCOUNT_USERNAME/SERVICE_ACCOUNT_PASSWORD).
       type: string
       default: lightwell-pulp-read-secret
-    - name: BUILD_CONFIGS_REPO_URL
-      description: Build-config registry URL, supplied by the orchestrator.
-      type: string
-    - name: BUILD_CONFIGS_REVISION
-      description: Build-config Git ref, supplied by the orchestrator.
-      type: string
     - name: caTrustConfigMapName
       description: Name of the ConfigMap to read CA bundle data from.
       type: string
@@ -64,11 +58,6 @@ spec:
       description: Key in ConfigMap for CA bundle.
       type: string
       default: ca-bundle.crt
-
-  workspaces:
-    - name: git-auth
-      description: >-
-        Basic-auth credentials for cloning private lightwell-builds repositories.
 
   results:
     - name: IMAGE_DIGEST
@@ -119,6 +108,41 @@ spec:
           readOnly: true
           subPath: ca-bundle.crt
 
+    - name: render-build-config-settings
+      image: quay.io/redhat-user-workloads/calunga-tenant/plumbing-builder@sha256:d8355de03d57adef033743da1f1a3bb2f0ff038192e3220b155e9dd7dba5d37c
+      volumeMounts:
+        - mountPath: /var/workdir
+          name: workdir
+      env:
+        - name: PACKAGE
+          value: $(params.PACKAGE)
+        - name: VERSION
+          value: $(params.VERSION)
+      script: |
+        #!/bin/bash
+        set -euo pipefail
+        python3 -m pip install --user --no-cache-dir --disable-pip-version-check 'PyYAML==6.0.2'
+        CONFIG_DIR=/var/workdir/sdists-repo/build-configs
+        SETTINGS_DIR=/var/workdir/fromager-settings
+        mkdir -p "$SETTINGS_DIR"
+        python3 "$CONFIG_DIR/scripts/get-fromager-settings.py" \\
+          --packages-dir "$CONFIG_DIR/packages" --format yaml \\
+          "$PACKAGE" "$VERSION" > "$SETTINGS_DIR/$PACKAGE.yaml"
+        python3 - <<'PY'
+        import os
+        from pathlib import Path
+        import yaml
+        package = os.environ["PACKAGE"]
+        version = os.environ["VERSION"]
+        settings = Path(f"/var/workdir/fromager-settings/{package}.yaml")
+        cfg = yaml.safe_load(settings.read_text()) or {}
+        cfg.setdefault("changelog", {}).setdefault(version, []).append(
+            f"Lightwell build for {package}=={version}"
+        )
+        settings.write_text(yaml.safe_dump(cfg, sort_keys=False))
+        PY
+        echo "Rendered Fromager settings and mandatory rebuild changelog for $PACKAGE==$VERSION"
+
     - name: verify-pre-placed-sdist
       image: quay.io/konflux-ci/task-runner:2.0.0@sha256:4b01fbf98fa7155f5c21443c285f88853864ae7cc66981cf6b543fc6ba16b81b
       env:
@@ -161,155 +185,6 @@ spec:
         if [[ ! -f "/var/workdir/sdists-repo/downloads/${PACKAGE}-${VERSION}.tar.gz" ]]; then
           cp "$FOUND" "/var/workdir/sdists-repo/downloads/${PACKAGE}-${VERSION}.tar.gz"
         fi
-      computeResources:
-        requests:
-          cpu: 100m
-          memory: 128Mi
-        limits:
-          cpu: "1"
-          memory: 256Mi
-
-    - name: clone-build-configs
-      image: quay.io/redhat-user-workloads/calunga-tenant/plumbing-builder@sha256:d8355de03d57adef033743da1f1a3bb2f0ff038192e3220b155e9dd7dba5d37c
-      volumeMounts:
-        - mountPath: /var/workdir
-          name: workdir
-        - mountPath: /mnt/trusted-ca
-          name: trusted-ca
-          readOnly: true
-      env:
-        - name: BUILD_CONFIGS_REPO_URL
-          value: $(params.BUILD_CONFIGS_REPO_URL)
-        - name: BUILD_CONFIGS_REVISION
-          value: $(params.BUILD_CONFIGS_REVISION)
-      script: |
-        #!/bin/bash
-        set -euo pipefail
-
-        ca_bundle=/mnt/trusted-ca/ca-bundle.crt
-        if [ -f "$ca_bundle" ]; then
-          export GIT_SSL_CAINFO="$ca_bundle"
-          export SSL_CERT_FILE="$ca_bundle"
-        fi
-
-        DEST=/var/workdir/build-configs
-        rm -rf "$DEST"
-
-        # The PipelineRun binds this workspace from the Kubernetes basic-auth
-        # Secret. Configure Git explicitly because this is a custom clone step.
-        git_home=$(mktemp -d)
-        trap 'rm -rf "$git_home"' EXIT
-        chmod 700 "$git_home"
-        export GIT_AUTH_WORKSPACE="$(workspaces.git-auth.path)"
-        cat > "$git_home/git-credential-helper" <<'HELPER'
-        #!/bin/sh
-        if [ "$1" = get ]; then
-          printf 'username=%s\npassword=%s\n' \
-            "$(cat "$GIT_AUTH_WORKSPACE/username")" \
-            "$(cat "$GIT_AUTH_WORKSPACE/password")"
-        fi
-        HELPER
-        chmod 700 "$git_home/git-credential-helper"
-        export HOME="$git_home"
-        git config --global credential.helper "$git_home/git-credential-helper"
-        git config --global credential.useHttpPath true
-
-        git clone "$BUILD_CONFIGS_REPO_URL" "$DEST"
-        git -C "$DEST" checkout "$BUILD_CONFIGS_REVISION"
-        cp "$DEST/scripts/get-version-overrides.py" /var/workdir/get-version-overrides.py
-        cp -r "$DEST/packages" /var/workdir/build-config-packages
-        echo "Checked out build-configs @ $(git -C "$DEST" rev-parse HEAD)"
-      computeResources:
-        requests:
-          cpu: 100m
-          memory: 128Mi
-        limits:
-          cpu: "1"
-          memory: 256Mi
-
-    - name: validate-build-config
-      image: quay.io/redhat-user-workloads/calunga-tenant/plumbing-builder@sha256:d8355de03d57adef033743da1f1a3bb2f0ff038192e3220b155e9dd7dba5d37c
-      volumeMounts:
-        - mountPath: /var/workdir
-          name: workdir
-      env:
-        - name: PACKAGE
-          value: $(params.PACKAGE)
-      script: |
-        #!/bin/bash
-        set -euo pipefail
-
-        CONFIGS_DIR=/var/workdir/build-configs
-        CONFIG="${CONFIGS_DIR}/packages/${PACKAGE}.json"
-
-        if [ ! -f "${CONFIG}" ]; then
-          echo "ERROR: Mandatory build config missing for wheel build: ${CONFIG}" >&2
-          exit 1
-        fi
-
-        echo "[$(date --utc -Ins)] Validating ${CONFIG}"
-        python3 "${CONFIGS_DIR}/scripts/validate-build-config.py" "${CONFIG}"
-      computeResources:
-        requests:
-          cpu: 100m
-          memory: 128Mi
-        limits:
-          cpu: "1"
-          memory: 256Mi
-
-    - name: render-fromager-settings
-      image: quay.io/redhat-user-workloads/calunga-tenant/plumbing-builder@sha256:d8355de03d57adef033743da1f1a3bb2f0ff038192e3220b155e9dd7dba5d37c
-      volumeMounts:
-        - mountPath: /var/workdir
-          name: workdir
-      env:
-        - name: PACKAGE
-          value: $(params.PACKAGE)
-        - name: VERSION
-          value: $(params.VERSION)
-      script: |
-        #!/bin/bash
-        set -euo pipefail
-
-        python3 -m pip install \
-          --user \
-          --no-cache-dir \
-          --disable-pip-version-check \
-          'PyYAML==6.0.2'
-
-        CONFIGS_DIR=/var/workdir/build-configs
-        SETTINGS_DIR=/var/workdir/fromager-settings
-        mkdir -p "$SETTINGS_DIR"
-        OUT="${SETTINGS_DIR}/${PACKAGE}.yaml"
-
-        python3 "${CONFIGS_DIR}/scripts/get-fromager-settings.py" \
-          --packages-dir "${CONFIGS_DIR}/packages" \
-          --format yaml \
-          "$PACKAGE" "$VERSION" \
-          > "$OUT"
-
-        # Force Fromager to build the target package from local sdist rather than
-        # skipping it via wheel cache by injecting a changelog entry. Fromager
-        # checks whether the cached wheel's build_tag matches len(changelog[version]).
-        # Upstream/validated wheels have build tag 0. Adding a changelog entry makes
-        # expected build tag >= 1, causing Fromager to reject the cached wheel for the
-        # target package and build it from the pre-placed sdist, while dependencies
-        # (flit_core, etc.) without changelogs continue using the wheel cache.
-        python3 - << 'PY'
-        import yaml, os
-        from pathlib import Path
-        pkg = os.environ["PACKAGE"]
-        ver = os.environ["VERSION"]
-        out_path = Path(f"/var/workdir/fromager-settings/{pkg}.yaml")
-        cfg = yaml.safe_load(out_path.read_text()) or {}
-        cl = cfg.setdefault("changelog", {})
-        entries = cl.setdefault(ver, [])
-        entries.append(f"Lightwell build for {pkg}=={ver}")
-        out_path.write_text(yaml.dump(cfg))
-        PY
-
-        echo "Rendered fromager settings for ${PACKAGE}==${VERSION}:"
-        cat "$OUT"
       computeResources:
         requests:
           cpu: 100m
@@ -367,25 +242,14 @@ spec:
         fi
         ARGS+=(--package-settings-dir /var/workdir/fromager-settings)
 
-        VERSION_OVERRIDES="/var/workdir/sdists-repo/version-overrides.json"
-        if [[ -f "${VERSION_OVERRIDES}" ]]; then
-          python3 - "${VERSION_OVERRIDES}" > /var/workdir/backend-env.sh <<'PY'
-        import json, os, shlex, sys
-        from pathlib import Path
-        overrides = json.loads(Path(sys.argv[1]).read_text())
-        for key, value in overrides.get("env", {}).items():
-            if not key.replace("_", "a").isalnum() or key[0].isdigit():
-                raise SystemExit(f"Invalid backend environment variable name: {key!r}")
-            resolved = value.format(
-                COMPUTED_VERSION=os.environ["COMPUTED_VERSION"],
-                PACKAGE=os.environ["PACKAGE"],
-                VERSION=os.environ["VERSION"],
-            )
-            print(f"export {key}={shlex.quote(resolved)}")
-            print(f"# Applying configured backend environment override: {key}", file=sys.stderr)
-        PY
-          source /var/workdir/backend-env.sh
+        BACKEND_ENV=/var/workdir/sdists-repo/backend-env.sh
+        if [[ ! -f "$BACKEND_ENV" ]]; then
+          echo "ERROR: backend environment handoff missing from Trusted Artifact: $BACKEND_ENV" >&2
+          exit 1
         fi
+        # The source task resolved and safely quoted this environment from the
+        # same config snapshot used to rewrite and create the sdist.
+        source "$BACKEND_ENV"
         build-wheels "${ARGS[@]}" "${PACKAGE}==${VERSION}"
 
         # Fromager (via FROMAGER_SDISTS_REPO) writes built sdists to
@@ -438,7 +302,7 @@ spec:
         from pathlib import Path
         from packaging.utils import canonicalize_name
 
-        configs_dir = Path("/var/workdir/build-configs")
+        configs_dir = Path("/var/workdir/sdists-repo/build-configs")
         artifact_dir = Path("/var/workdir/artifact")
         output_dir = Path("/var/workdir/output")
         package = os.environ["PACKAGE"]
@@ -446,14 +310,14 @@ spec:
 
         # 1. Resolve allowed artifacts
         resolver_script = configs_dir / "scripts" / "get-allowed-artifacts.py"
-        if resolver_script.is_file():
-            res = subprocess.run(
-                [sys.executable, str(resolver_script), "--packages-dir", str(configs_dir / "packages"), package, version],
-                capture_output=True, text=True, check=True
-            )
-            allowed_packages = json.loads(res.stdout)
-        else:
-            allowed_packages = [canonicalize_name(package)]
+        if not resolver_script.is_file():
+            print(f"FATAL: allowed-artifact resolver missing from Trusted Artifact: {resolver_script}", file=sys.stderr)
+            sys.exit(1)
+        res = subprocess.run(
+            [sys.executable, str(resolver_script), "--packages-dir", str(configs_dir / "packages"), package, version],
+            capture_output=True, text=True, check=True,
+        )
+        allowed_packages = json.loads(res.stdout)
 
         print(f"Allowed packages for this build: {allowed_packages}")
 

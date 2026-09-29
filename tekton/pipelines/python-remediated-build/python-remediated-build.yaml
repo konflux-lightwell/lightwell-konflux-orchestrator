@@ -49,6 +49,10 @@ spec:
         Remediation type controlling commit-distance calculation. Must be
         Backport or Novel.
       type: string
+    - name: BUILD_CONFIGS_REPO_URL
+      description: Build-config registry URL, supplied by the orchestrator.
+      type: string
+
     - name: LIGHTWELL_BUILDS_REPO_URL
       description: >-
         URL of the lightwell-builds git repository for this package.
@@ -185,6 +189,8 @@ spec:
           value: $(params.VERSION)
         - name: FIX_TYPE
           value: $(params.FIX_TYPE)
+        - name: BUILD_CONFIGS_REPO_URL
+          value: $(params.BUILD_CONFIGS_REPO_URL)
         - name: LIGHTWELL_BUILDS_TAG
           value: $(params.LIGHTWELL_BUILDS_TAG)
         - name: ociStorage
@@ -231,9 +237,6 @@ spec:
           value: $(params.caTrustConfigMapName)
         - name: caTrustConfigMapKey
           value: $(params.caTrustConfigMapKey)
-      workspaces:
-        - name: git-auth
-          workspace: git-auth
 
     # ── Step 4: ClamAV scan ─
     - name: clamav-scan
