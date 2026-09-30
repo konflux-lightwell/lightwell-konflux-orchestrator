@@ -247,13 +247,28 @@ def test_task_uses_settings_instead_of_post_build_sync():
     assert "PRUNE_WHEEL_SBOMS" not in {e["name"] for e in builder["env"]}
 
 
-@pytest.mark.parametrize("purl", [None, {}, {"repository_url": "https://example.test", "type": "pypi",
-                                           "name": "custom-name", "version": "old", "upstream": "old"}])
+@pytest.mark.parametrize(
+    "purl",
+    [
+        None,
+        {},
+        {
+            "repository_url": "https://example.test",
+            "type": "pypi",
+            "name": "custom-name",
+            "version": "old",
+            "upstream": "old",
+        },
+    ],
+)
 @pytest.mark.parametrize("upstream_version", ["1.0", "1.0+source.1"])
 def test_runtime_purl_settings_overlay(tmp_path, monkeypatch, purl, upstream_version):
     # Execute the exact renderer transform, not a duplicate implementation.
-    step = next(step for step in yaml.safe_load(TASK_PATH.read_text())["spec"]["steps"]
-                if step["name"] == "render-build-config-settings")
+    step = next(
+        step
+        for step in yaml.safe_load(TASK_PATH.read_text())["spec"]["steps"]
+        if step["name"] == "render-build-config-settings"
+    )
     assert {e["name"]: e["value"] for e in step["env"]}["COMPUTED_VERSION"] == "$(params.COMPUTED_VERSION)"
     script = step["script"].split("python3 - <<'PY'\n", 1)[1].split("\nPY", 1)[0]
     settings_dir = tmp_path / "fromager-settings"
@@ -299,8 +314,21 @@ def _run_verification(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "corruption", [None, "digest", "size", "extra-sbom", "version", "purl-version", "file_name", "download_url",
-                   "upstream-version", "upstream-purl-version", "upstream-purl-name", "upstream-purl-type"]
+    "corruption",
+    [
+        None,
+        "digest",
+        "size",
+        "extra-sbom",
+        "version",
+        "purl-version",
+        "file_name",
+        "download_url",
+        "upstream-version",
+        "upstream-purl-version",
+        "upstream-purl-name",
+        "upstream-purl-type",
+    ],
 )
 def test_task_verification_is_read_only_and_checks_identity_record_and_allowlist(tmp_path, monkeypatch, corruption):
     artifact = tmp_path / "artifact"
