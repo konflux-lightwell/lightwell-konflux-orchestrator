@@ -603,5 +603,5 @@ and `COMPUTED_VERSION` are rewritten, retaining `redhat.spdx.json` and updating
 RECORD atomically. Dependencies, nested vendor files, and the OCI build-index
 referrer remain unchanged; filtering is not delegated to plumbing. A scratch Konflux build is required
 to validate the full published-builder path before use.
-Unit tests for the old post-build sync helper remain separate; they do not execute
-as part of the Task.
+Tests in `tests/test_fromager_purl_settings.py` exercise the runtime settings overlay,
+Task wiring, and read-only verifier directly from the Task scripts.
