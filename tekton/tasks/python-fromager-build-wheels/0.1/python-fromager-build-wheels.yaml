@@ -118,6 +118,8 @@ spec:
           value: $(params.PACKAGE)
         - name: VERSION
           value: $(params.VERSION)
+        - name: COMPUTED_VERSION
+          value: $(params.COMPUTED_VERSION)
       script: |
         #!/bin/bash
         set -euo pipefail
@@ -131,11 +133,26 @@ spec:
         python3 - <<'PY'
         import os
         from pathlib import Path
+        from urllib.parse import quote
         import yaml
+        from packaging.utils import canonicalize_name
+
         package = os.environ["PACKAGE"]
         version = os.environ["VERSION"]
+        computed_version = os.environ.get("COMPUTED_VERSION") or version
+
         settings = Path(f"/var/workdir/fromager-settings/{package}.yaml")
         cfg = yaml.safe_load(settings.read_text()) or {}
+
+        # Configure Fromager purl settings for SBOM generation
+        purl = cfg.setdefault("purl", {})
+        if not isinstance(purl, dict):
+            raise ValueError("resolved Fromager purl settings must be a mapping")
+        purl["version"] = computed_version
+        upstream_name = canonicalize_name(package)
+        upstream_version = quote(version, safe="")
+        purl["upstream"] = f"pkg:pypi/{upstream_name}@{upstream_version}"
+
         cfg.setdefault("changelog", {}).setdefault(version, []).append(
             f"Lightwell build for {package}=={version}"
         )
@@ -366,6 +383,17 @@ spec:
                 print(f"FATAL: primary wheel {primary_wheel.name} metadata version {actual_version!r} != computed remediated version {computed_version!r}", file=sys.stderr)
                 sys.exit(1)
             print(f"Verified primary wheel version: {primary_wheel.name} -> {computed_version}")
+
+            with zipfile.ZipFile(primary_wheel) as wheel:
+                sbom_paths = [n for n in wheel.namelist() if n.endswith(".dist-info/sboms/redhat.spdx.json")]
+                if sbom_paths:
+                    sbom = json.loads(wheel.read(sbom_paths[0]))
+                    packages = {p.get("SPDXID"): p for p in sbom.get("packages", []) if isinstance(p, dict)}
+                    wheel_pkg = packages.get("SPDXRef-wheel", {})
+                    if wheel_pkg.get("versionInfo") != computed_version:
+                        print(f"FATAL: primary wheel {primary_wheel.name} SBOM versionInfo {wheel_pkg.get('versionInfo')!r} != computed remediated version {computed_version!r}", file=sys.stderr)
+                        sys.exit(1)
+                    print(f"Verified primary wheel SBOM version: {primary_wheel.name} -> {computed_version}")
 
         # 4. Clean artifact/ directory: remove cached dependency artifacts not allowed.
 
