@@ -581,3 +581,27 @@ This runs all test and linting environments.
 ## License
 
 Apache License 2.0
+
+### Runtime wheel SPDX identity experiment
+
+The build task uses the published standard builder (`d8355de…`) and overlays
+resolved Fromager package settings at runtime: `purl.version` is the computed
+version and `purl.upstream` is the canonical upstream PyPI package/version PURL.
+Other settings (including PURL type and repository URL) are preserved. Fromager
+0.81.0 consumes these settings for `SPDXRef-wheel` and `SPDXRef-upstream`; no
+post-build synchronization step rewrites the wheel. Source metadata, the upstream
+build input, version computation, and build-index remain unchanged.
+
+Fromager's `generate_sbom` still derives the top-level document `name` and
+`documentNamespace` from the upstream build-input version, **not** `purl.version`.
+The read-only verifier therefore checks package identities, the wheel filename
+qualifier supplied by plumbing's `patch-sbom-purl`, the single Red Hat SBOM
+allowlist, and its RECORD hash/size, without asserting remediated document identity.
+The Task applies the embedded-SBOM allowlist after `collect-build-files` and before
+read-only verification and OCI packaging. Only primary wheels matching `PACKAGE`
+and `COMPUTED_VERSION` are rewritten, retaining `redhat.spdx.json` and updating
+RECORD atomically. Dependencies, nested vendor files, and the OCI build-index
+referrer remain unchanged; filtering is not delegated to plumbing. A scratch Konflux build is required
+to validate the full published-builder path before use.
+Unit tests for the old post-build sync helper remain separate; they do not execute
+as part of the Task.

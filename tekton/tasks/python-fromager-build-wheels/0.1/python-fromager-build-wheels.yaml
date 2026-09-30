@@ -14,7 +14,10 @@ spec:
     Build Python wheels using fromager from a pre-placed sdist in lightwell-builds.
 
     Consumes the resolved package config and helper scripts carried in the input Trusted Artifact,
-    renders per-package fromager settings, runs build-wheels, performs auditwheel repair,
+    renders per-package fromager settings, runs build-wheels from the pinned plumbing-builder image,
+    configures the primary wheel's SPDX PURL from the computed remediated and upstream versions,
+    performs auditwheel repair, applies the Task-side embedded-SBOM allowlist only to primary wheels,
+    verifies curated SBOMs and RECORD before OCI packaging,
     injects system library dependencies into the SPDX SBOM, and attaches the SBOM
     to the OCI wheels artifact.
 
@@ -32,8 +35,7 @@ spec:
     - name: COMPUTED_VERSION
       description: >-
         The computed version string with +rhlw.{B}[.n{N}] local version suffix.
-        Produced by source-to-sdist. Used for wheel metadata verification and SBOM
-        synchronization. Examples: 7.6.12+rhlw.1 (backport), 7.6.12+rhlw.1.n2 (novel).
+        Produced by source-to-sdist. Used for wheel metadata verification and runtime Fromager SPDX PURL configuration. Examples: 7.6.12+rhlw.1 (backport), 7.6.12+rhlw.1.n2 (novel).
       type: string
     - name: IMAGE
       description: Reference of the OCI artifact to produce (wheels image).
@@ -118,6 +120,8 @@ spec:
           value: $(params.PACKAGE)
         - name: VERSION
           value: $(params.VERSION)
+        - name: COMPUTED_VERSION
+          value: $(params.COMPUTED_VERSION)
       script: |
         #!/bin/bash
         set -euo pipefail
@@ -132,10 +136,25 @@ spec:
         import os
         from pathlib import Path
         import yaml
+        from packaging.utils import canonicalize_name, parse_wheel_filename
+        from packaging.version import Version
+        from urllib.parse import quote
         package = os.environ["PACKAGE"]
         version = os.environ["VERSION"]
         settings = Path(f"/var/workdir/fromager-settings/{package}.yaml")
         cfg = yaml.safe_load(settings.read_text()) or {}
+        # Fromager 0.81.0 consumes these for wheel/upstream SPDX packages.
+        # Preserve repository_url, type, and all other resolved package settings.
+        purl = cfg.get("purl")
+        if purl is None:
+            purl = cfg["purl"] = {}
+        if not isinstance(purl, dict):
+            raise ValueError("resolved Fromager purl settings must be a mapping")
+        purl["version"] = os.environ["COMPUTED_VERSION"]
+        # PackageURL's canonical string form percent-encodes local version '+'.
+        upstream_name = canonicalize_name(package)
+        upstream_version = quote(version, safe="")
+        purl["upstream"] = f"pkg:pypi/{upstream_name}@{upstream_version}"
         cfg.setdefault("changelog", {}).setdefault(version, []).append(
             f"Lightwell build for {package}=={version}"
         )
@@ -280,22 +299,21 @@ spec:
         - /var/workdir/output
         - /var/workdir/artifact
 
-    - name: prepare-sbom-helpers
-      image: quay.io/konflux-ci/task-runner:2.0.0@sha256:4b01fbf98fa7155f5c21443c285f88853864ae7cc66981cf6b543fc6ba16b81b
+    - name: prune-wheel-sboms
+      image: quay.io/redhat-user-workloads/calunga-tenant/plumbing-builder@sha256:d8355de03d57adef033743da1f1a3bb2f0ff038192e3220b155e9dd7dba5d37c
+      volumeMounts:
+        - mountPath: /var/workdir
+          name: workdir
+      env:
+        - name: PACKAGE
+          value: $(params.PACKAGE)
+        - name: VERSION
+          value: $(params.VERSION)
+        - name: COMPUTED_VERSION
+          value: $(params.COMPUTED_VERSION)
       script: |
-        #!/bin/bash
-        set -euo pipefail
-        mkdir -p /var/workdir/sbom-helpers
-        cat > "/var/workdir/sbom-helpers/sync_wheel_sbom.py" <<'PY'
         #!/usr/bin/env python3
-        """Synchronize a built wheel's embedded Red Hat SPDX SBOM with its remediated version.
-
-        Fromager can rewrite the primary wheel metadata/filename to a Lightwell computed
-        version (for example ``1.0+rhlw.1``) while the embedded Red Hat SBOM still
-        contains the upstream PyPI package version/PURL.  This utility updates only the
-        built wheel package entry (``SPDXRef-wheel``), rewrites the wheel in-place, and
-        updates the wheel ``RECORD`` entry for the changed SBOM.
-        """
+        """Apply the Task's embedded-SBOM policy to primary wheels only."""
 
         from __future__ import annotations
 
@@ -303,227 +321,17 @@ spec:
         import base64
         import csv
         import hashlib
-        import json
+        import os
+        import stat
         import sys
         import tempfile
         import zipfile
-        from io import StringIO
-        from pathlib import Path
-        from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
-
-        WHEEL_SPDX_ID = "SPDXRef-wheel"
-        UPSTREAM_SPDX_ID = "SPDXRef-upstream"
-        SBOM_SUFFIX = ".dist-info/sboms/redhat.spdx.json"
-        RECORD_SUFFIX = ".dist-info/RECORD"
-
-
-        class SyncWheelSbomError(ValueError):
-            """Raised when the wheel or SBOM cannot be safely synchronized."""
-
-
-        def _single_member(names: list[str], suffix: str, label: str) -> str:
-            matches = [name for name in names if name.endswith(suffix)]
-            if len(matches) != 1:
-                raise SyncWheelSbomError(f"expected exactly one {label} in wheel, found {len(matches)}")
-            return matches[0]
-
-
-        def _spdx_packages(sbom: dict) -> dict[str, dict]:
-            packages = sbom.get("packages")
-            if not isinstance(packages, list):
-                raise SyncWheelSbomError("SPDX SBOM is missing a packages list")
-            by_id: dict[str, dict] = {}
-            for package in packages:
-                if isinstance(package, dict) and isinstance(package.get("SPDXID"), str):
-                    by_id[package["SPDXID"]] = package
-            return by_id
-
-
-        def _external_refs(package: dict) -> list[dict]:
-            refs = package.get("externalRefs")
-            if refs is None:
-                refs = []
-                package["externalRefs"] = refs
-            if not isinstance(refs, list):
-                raise SyncWheelSbomError(f"{package.get('SPDXID', '<unknown>')} externalRefs is not a list")
-            return refs
-
-
-        def _pypi_purl_ref(package: dict) -> dict:
-            matches = [
-                ref
-                for ref in _external_refs(package)
-                if isinstance(ref, dict)
-                and ref.get("referenceCategory") == "PACKAGE-MANAGER"
-                and ref.get("referenceType") == "purl"
-                and isinstance(ref.get("referenceLocator"), str)
-                and ref["referenceLocator"].startswith("pkg:pypi/")
-            ]
-            if len(matches) != 1:
-                raise SyncWheelSbomError(
-                    f"expected exactly one PyPI purl externalRef for {package.get('SPDXID', '<unknown>')}, found {len(matches)}"
-                )
-            return matches[0]
-
-
-        def _replace_wheel_purl_identity(purl: str, computed_version: str, wheel_filename: str) -> str:
-            """Set the wheel version and filename, dropping any stale source download URL."""
-            parts = urlsplit(purl)
-            if parts.scheme != "pkg" or not parts.path.startswith("pypi/"):
-                raise SyncWheelSbomError(f"not a PyPI package URL: {purl}")
-            if "@" not in parts.path:
-                raise SyncWheelSbomError(f"PyPI package URL has no version: {purl}")
-
-            name, _old_version = parts.path.rsplit("@", 1)
-            encoded_version = quote(computed_version, safe="")
-            # PURL qualifiers are artifact-specific. Keep non-locating qualifiers, but
-            # replace the old wheel filename and remove download_url because the output
-            # image has no stable public wheel URL at build time. Source download
-            # provenance remains on SPDXRef-upstream.
-            qualifiers = []
-            seen_filename = False
-            for key, value in parse_qsl(parts.query, keep_blank_values=True):
-                if key == "file_name":
-                    if not seen_filename:
-                        qualifiers.append((key, wheel_filename))
-                        seen_filename = True
-                    continue
-                if key == "download_url":
-                    continue
-                qualifiers.append((key, value))
-            if not seen_filename:
-                qualifiers.append(("file_name", wheel_filename))
-            query = urlencode(qualifiers, doseq=True, quote_via=quote, safe="")
-            return urlunsplit((parts.scheme, parts.netloc, f"{name}@{encoded_version}", query, parts.fragment))
-
-
-        def update_redhat_spdx_sbom(sbom_bytes: bytes, computed_version: str, wheel_filename: str) -> bytes:
-            """Return SBOM JSON bytes with only SPDXRef-wheel rewritten."""
-            try:
-                sbom = json.loads(sbom_bytes)
-            except json.JSONDecodeError as exc:
-                raise SyncWheelSbomError(f"invalid SPDX JSON: {exc}") from exc
-            if not isinstance(sbom, dict):
-                raise SyncWheelSbomError("SPDX SBOM root must be a JSON object")
-
-            packages = _spdx_packages(sbom)
-            wheel = packages.get(WHEEL_SPDX_ID)
-            if wheel is None:
-                raise SyncWheelSbomError(f"SPDX SBOM is missing {WHEEL_SPDX_ID}")
-            if UPSTREAM_SPDX_ID not in packages:
-                raise SyncWheelSbomError(f"SPDX SBOM is missing {UPSTREAM_SPDX_ID}")
-
-            wheel["versionInfo"] = computed_version
-            purl_ref = _pypi_purl_ref(wheel)
-            purl_ref["referenceLocator"] = _replace_wheel_purl_identity(
-                purl_ref["referenceLocator"], computed_version, wheel_filename
-            )
-
-            return (json.dumps(sbom, indent=2) + "\n").encode()
-
-
-        def _record_digest_and_size(data: bytes) -> tuple[str, str]:
-            digest = base64.urlsafe_b64encode(hashlib.sha256(data).digest()).decode().rstrip("=")
-            return f"sha256={digest}", str(len(data))
-
-
-        def update_record(record_bytes: bytes, member: str, member_bytes: bytes) -> bytes:
-            text = record_bytes.decode()
-            input_io = StringIO(text, newline="")
-            rows = list(csv.reader(input_io))
-            digest, size = _record_digest_and_size(member_bytes)
-            updated = False
-            for row in rows:
-                if len(row) != 3:
-                    raise SyncWheelSbomError("wheel RECORD contains a row with an unexpected number of fields")
-                if row[0] == member:
-                    row[1] = digest
-                    row[2] = size
-                    updated = True
-                    break
-            if not updated:
-                raise SyncWheelSbomError(f"wheel RECORD has no entry for {member}")
-
-            output = StringIO(newline="")
-            writer = csv.writer(output, lineterminator="\n")
-            writer.writerows(rows)
-            return output.getvalue().encode()
-
-
-        def sync_wheel_sbom(wheel_path: Path, computed_version: str) -> str:
-            """Rewrite ``wheel_path`` in-place and return the SBOM member path."""
-            if not computed_version:
-                raise SyncWheelSbomError("computed version must be non-empty")
-            if not wheel_path.is_file():
-                raise SyncWheelSbomError(f"wheel does not exist: {wheel_path}")
-
-            with zipfile.ZipFile(wheel_path, "r") as src:
-                infos = src.infolist()
-                names = [info.filename for info in infos]
-                sbom_member = _single_member(names, SBOM_SUFFIX, "Red Hat SPDX SBOM")
-                record_member = _single_member(names, RECORD_SUFFIX, "RECORD file")
-                signatures = [name for name in names if name.endswith((".dist-info/RECORD.jws", ".dist-info/RECORD.p7s"))]
-                if signatures:
-                    raise SyncWheelSbomError(
-                        "cannot update RECORD in a signed wheel without regenerating its signature: " + ", ".join(signatures)
-                    )
-                updated_sbom = update_redhat_spdx_sbom(src.read(sbom_member), computed_version, wheel_path.name)
-                updated_record = update_record(src.read(record_member), sbom_member, updated_sbom)
-
-                with tempfile.NamedTemporaryFile(dir=wheel_path.parent, delete=False) as tmp_file:
-                    tmp_path = Path(tmp_file.name)
-                try:
-                    with zipfile.ZipFile(tmp_path, "w") as dst:
-                        for info in infos:
-                            data = src.read(info.filename)
-                            if info.filename == sbom_member:
-                                data = updated_sbom
-                            elif info.filename == record_member:
-                                data = updated_record
-                            dst.writestr(info, data)
-                    tmp_path.replace(wheel_path)
-                except Exception:
-                    tmp_path.unlink(missing_ok=True)
-                    raise
-            return sbom_member
-
-
-        def main(argv: list[str] | None = None) -> int:
-            parser = argparse.ArgumentParser(description=__doc__)
-            parser.add_argument("wheel", type=Path, help="Wheel file to rewrite in-place")
-            parser.add_argument("computed_version", help="Computed Lightwell version to set on SPDXRef-wheel")
-            args = parser.parse_args(argv)
-            try:
-                member = sync_wheel_sbom(args.wheel, args.computed_version)
-            except (OSError, zipfile.BadZipFile, SyncWheelSbomError) as exc:
-                print(f"ERROR: {exc}", file=sys.stderr)
-                return 1
-            print(f"Updated {member} in {args.wheel}")
-            return 0
-
-
-        if __name__ == "__main__":
-            raise SystemExit(main())
-        PY
-        chmod +x "/var/workdir/sbom-helpers/sync_wheel_sbom.py"
-        # Optional artifact-hardening policy, separate from SPDX identity synchronization.
-        cat > "/var/workdir/sbom-helpers/prune_wheel_sboms.py" <<'PY'
-        #!/usr/bin/env python3
-        """Remove non-Red-Hat SBOMs from a wheel and keep RECORD consistent."""
-
-        from __future__ import annotations
-
-        import argparse
-        import csv
-        import sys
-        import tempfile
-        import zipfile
+        from email.parser import BytesParser
         from io import StringIO
         from pathlib import Path
 
-        SBOM_DIR_MARKER = ".dist-info/sboms/"
-        ALLOWED_SBOM_SUFFIX = ".dist-info/sboms/redhat.spdx.json"
-        RECORD_SUFFIX = ".dist-info/RECORD"
+        from packaging.utils import canonicalize_name, parse_wheel_filename
+        from packaging.version import Version
 
 
         class PruneWheelSbomError(ValueError):
@@ -531,104 +339,139 @@ spec:
 
 
         def _single(names: list[str], suffix: str, label: str) -> str:
-            matches = [name for name in names if name.endswith(suffix)]
+            matches = [name for name in names if name.endswith(suffix) and name.count("/") == 1]
             if len(matches) != 1:
                 raise PruneWheelSbomError(f"expected exactly one {label} in wheel, found {len(matches)}")
             return matches[0]
 
 
-        def _record_bytes(rows: list[list[str]]) -> bytes:
-            output = StringIO(newline="")
-            csv.writer(output, lineterminator="\n").writerows(rows)
-            return output.getvalue().encode()
-
-
-        def _update_record(record_data: bytes, removed: set[str]) -> bytes:
+        def validate_record(wheel: zipfile.ZipFile, record: str, sboms: list[str]) -> list[list[str]]:
+            """Reject ambiguous/stale rows and verify recorded hashes for present files."""
+            names = wheel.namelist()
+            if len(names) != len(set(names)):
+                raise PruneWheelSbomError("duplicate archive paths")
+            if any(name in names for name in (record + ".jws", record + ".p7s")):
+                raise PruneWheelSbomError("cannot update RECORD in a signed wheel")
             try:
-                rows = list(csv.reader(StringIO(record_data.decode(), newline="")))
+                rows = list(csv.reader(StringIO(wheel.read(record).decode(), newline=""), strict=True))
             except (UnicodeDecodeError, csv.Error) as exc:
                 raise PruneWheelSbomError(f"wheel RECORD is invalid: {exc}") from exc
-
-            present = set()
-            kept = []
+            entries = {}
             for row in rows:
-                if len(row) != 3:
-                    raise PruneWheelSbomError("wheel RECORD contains a row with an unexpected number of fields")
-                name = row[0]
-                if name in removed:
-                    present.add(name)
-                else:
-                    kept.append(row)
-            missing = removed - present
+                if len(row) != 3 or not row[0] or row[0] in entries:
+                    raise PruneWheelSbomError("malformed or duplicate RECORD row")
+                entries[row[0]] = row
+            missing = set(sboms) - entries.keys()
             if missing:
-                raise PruneWheelSbomError("wheel RECORD has no entries for removed SBOM(s): " + ", ".join(sorted(missing)))
-            return _record_bytes(kept)
+                raise PruneWheelSbomError(
+                    "RECORD has no entries for removed SBOM or curated SBOM: " + ", ".join(sorted(missing))
+                )
+            files = {name for name in names if not name.endswith("/")}
+            if set(entries) != files or entries.get(record) != [record, "", ""]:
+                raise PruneWheelSbomError("RECORD must cover present wheel files and keep its empty self row")
+            for name, digest, size in rows:
+                if name == record:
+                    continue
+                if not digest and not size and name not in sboms:
+                    continue  # Wheel format permits unrecorded hashes for non-SBOM files.
+                data = wheel.read(name)
+                try:
+                    algorithm, encoded = digest.split("=", 1)
+                    if algorithm in {"md5", "sha1"}:
+                        raise ValueError("weak hash")
+                    actual = base64.urlsafe_b64encode(hashlib.new(algorithm, data).digest()).decode().rstrip("=")
+                except ValueError as exc:
+                    raise PruneWheelSbomError(f"invalid RECORD digest for {name}") from exc
+                if encoded != actual or size != str(len(data)):
+                    raise PruneWheelSbomError(f"RECORD hash/size mismatch for {name}")
+            return rows
 
 
-        def prune_wheel_sboms(wheel_path: Path) -> list[str]:
-            """Remove SBOMs under dist-info/sboms except redhat.spdx.json, in place."""
-            if not wheel_path.is_file():
-                raise PruneWheelSbomError(f"wheel does not exist: {wheel_path}")
-
-            with zipfile.ZipFile(wheel_path, "r") as src:
-                infos = src.infolist()
-                names = [info.filename for info in infos]
-                sboms = [name for name in names if SBOM_DIR_MARKER in name and not name.endswith("/")]
-                removed = {name for name in sboms if not name.endswith(ALLOWED_SBOM_SUFFIX)}
+        def prune_wheel_sboms(wheel_path: Path, package: str | None = None, version: str | None = None) -> list[str]:
+            """Atomically prune only the wheel's own dist-info, preserving content and mode."""
+            with zipfile.ZipFile(wheel_path) as src:
+                names = src.namelist()
+                if len(names) != len(set(names)):
+                    raise PruneWheelSbomError("duplicate archive paths")
+                metadata_member = _single(names, ".dist-info/METADATA", "METADATA file")
+                metadata = BytesParser().parsebytes(src.read(metadata_member))
+                if len(metadata.get_all("Name", [])) != 1 or len(metadata.get_all("Version", [])) != 1:
+                    raise PruneWheelSbomError("missing or ambiguous METADATA identity")
+                filename_name, filename_version, _, _ = parse_wheel_filename(wheel_path.name)
+                expected_name = canonicalize_name(package) if package is not None else filename_name
+                expected_version = Version(version) if version is not None else filename_version
+                if (
+                    canonicalize_name(metadata["Name"]) != expected_name
+                    or Version(metadata["Version"]) != expected_version
+                    or filename_name != expected_name
+                    or filename_version != expected_version
+                ):
+                    raise PruneWheelSbomError("wheel METADATA/filename does not match PACKAGE and COMPUTED_VERSION")
+                prefix = metadata_member.rsplit("/", 1)[0] + "/"
+                record = _single(names, ".dist-info/RECORD", "RECORD file")
+                if record != prefix + "RECORD":
+                    raise PruneWheelSbomError("METADATA and RECORD disagree on dist-info directory")
+                sboms = [name for name in names if name.startswith(prefix + "sboms/") and not name.endswith("/")]
+                allowed = prefix + "sboms/redhat.spdx.json"
+                if allowed not in sboms:
+                    raise PruneWheelSbomError("expected exactly one curated Red Hat SBOM")
+                rows = validate_record(src, record, sboms)
+                removed = set(sboms) - {allowed}
                 if not removed:
                     return []
-
-                record_member = _single(names, RECORD_SUFFIX, "RECORD file")
-                signatures = [name for name in names if name.endswith((".dist-info/RECORD.jws", ".dist-info/RECORD.p7s"))]
-                if signatures:
-                    raise PruneWheelSbomError(
-                        "cannot update RECORD in a signed wheel without regenerating its signature: " + ", ".join(signatures)
-                    )
-                updated_record = _update_record(src.read(record_member), removed)
-
+                output = StringIO(newline="")
+                csv.writer(output, lineterminator="\n").writerows(row for row in rows if row[0] not in removed)
+                mode = stat.S_IMODE(wheel_path.stat().st_mode)
                 with tempfile.NamedTemporaryFile(dir=wheel_path.parent, delete=False) as tmp_file:
                     tmp_path = Path(tmp_file.name)
                 try:
                     with zipfile.ZipFile(tmp_path, "w") as dst:
-                        for info in infos:
-                            if info.filename in removed:
-                                continue
-                            data = updated_record if info.filename == record_member else src.read(info.filename)
-                            dst.writestr(info, data)
+                        dst.comment = src.comment
+                        for info in src.infolist():
+                            if info.filename not in removed:
+                                dst.writestr(info, output.getvalue().encode() if info.filename == record else src.read(info))
+                    tmp_path.chmod(mode)
                     tmp_path.replace(wheel_path)
-                except Exception:
+                finally:
                     tmp_path.unlink(missing_ok=True)
-                    raise
             return sorted(removed)
+
+
+        def primary_wheels(directory: Path, package: str, version: str) -> list[Path]:
+            """Select by parsed filename before opening any archive (dependencies untouched)."""
+            candidates = []
+            for path in sorted(directory.glob("*.whl")):
+                name, wheel_version, _, _ = parse_wheel_filename(path.name)
+                if name == canonicalize_name(package):
+                    if wheel_version != Version(version):
+                        raise PruneWheelSbomError(
+                            f"primary wheel filename version does not match COMPUTED_VERSION: {path.name}"
+                        )
+                    candidates.append(path)
+            if not candidates:
+                raise PruneWheelSbomError(f"expected a primary wheel for {package}, found none")
+            return candidates
 
 
         def main(argv: list[str] | None = None) -> int:
             parser = argparse.ArgumentParser(description=__doc__)
-            parser.add_argument("wheel", type=Path, help="Wheel file to prune in-place")
+            parser.add_argument("wheel", type=Path, nargs="?", help="Wheel file to prune in-place")
             args = parser.parse_args(argv)
             try:
-                removed = prune_wheel_sboms(args.wheel)
-            except (OSError, zipfile.BadZipFile, PruneWheelSbomError) as exc:
+                if args.wheel:
+                    print(prune_wheel_sboms(args.wheel))
+                else:
+                    package, version = os.environ["PACKAGE"], os.environ["COMPUTED_VERSION"]
+                    for wheel in primary_wheels(Path("/var/workdir/artifact"), package, version):
+                        print(f"{wheel.name}: removed {prune_wheel_sboms(wheel, package, version)}")
+            except (OSError, ValueError, zipfile.BadZipFile) as exc:
                 print(f"ERROR: {exc}", file=sys.stderr)
                 return 1
-            if removed:
-                print("Removed non-Red-Hat SBOM(s): " + ", ".join(removed))
-            else:
-                print("No non-Red-Hat SBOMs to remove")
             return 0
 
 
         if __name__ == "__main__":
             raise SystemExit(main())
-        PY
-        chmod +x "/var/workdir/sbom-helpers/prune_wheel_sboms.py"
-      computeResources:
-        requests:
-          cpu: 100m
-          memory: 128Mi
-        limits:
-          cpu: "1"
-          memory: 256Mi
 
     - name: verify-allowed-artifacts
       image: quay.io/redhat-user-workloads/calunga-tenant/plumbing-builder@sha256:d8355de03d57adef033743da1f1a3bb2f0ff038192e3220b155e9dd7dba5d37c
@@ -644,13 +487,20 @@ spec:
           value: $(params.COMPUTED_VERSION)
       script: |
         #!/usr/bin/env python3
+        import base64
+        import csv
+        import hashlib
         import json
         import os
-        import sys
         import subprocess
+        import sys
         import zipfile
+        from io import StringIO
         from pathlib import Path
-        from packaging.utils import canonicalize_name
+        from urllib.parse import parse_qs, unquote, urlsplit
+
+        from packaging.utils import canonicalize_name, parse_wheel_filename
+        from packaging.version import Version
 
         configs_dir = Path("/var/workdir/sdists-repo/build-configs")
         artifact_dir = Path("/var/workdir/artifact")
@@ -695,11 +545,11 @@ spec:
             print("       All dependencies must be pre-built in the validated wheel cache.", file=sys.stderr)
             sys.exit(1)
 
-        # 3. Clean artifact/ directory: remove any cached dependency artifacts not in allowed_packages
+        # 3. Verify primary wheel metadata and Fromager-generated SPDX identity (read-only).
         # Require the primary wheel's embedded metadata to match the computed
         # remediation version; upstream-version fallback hid the NLTK failure.
-        package_norm = canonicalize_name(package).replace("-", "_")
-        primary_wheels = [p for p in artifact_dir.glob("*.whl") if p.name.lower().startswith(package_norm.lower() + "-")]
+        primary_wheels = [p for p in artifact_dir.glob("*.whl")
+                          if parse_wheel_filename(p.name)[0] == canonicalize_name(package)]
         if not primary_wheels:
             print(f"FATAL: expected a primary wheel for {package}, found none", file=sys.stderr)
             sys.exit(1)
@@ -707,32 +557,128 @@ spec:
         from email.parser import BytesParser
         for primary_wheel in primary_wheels:
             with zipfile.ZipFile(primary_wheel) as wheel:
-                metadata_paths = [n for n in wheel.namelist() if n.endswith(".dist-info/METADATA")]
+                metadata_paths = [n for n in wheel.namelist() if n.endswith(".dist-info/METADATA") and n.count("/") == 1]
                 if len(metadata_paths) != 1:
                     print(f"FATAL: expected one METADATA file in {primary_wheel.name}", file=sys.stderr)
                     sys.exit(1)
-                actual_version = BytesParser().parsebytes(wheel.read(metadata_paths[0])).get("Version")
+                metadata = BytesParser().parsebytes(wheel.read(metadata_paths[0]))
+                if (len(metadata.get_all("Name", [])) != 1 or len(metadata.get_all("Version", [])) != 1
+                        or canonicalize_name(metadata.get("Name", "")) != canonicalize_name(package)
+                        or parse_wheel_filename(primary_wheel.name)[1] != Version(computed_version)):
+                    sys.exit("FATAL: primary wheel METADATA/filename identity mismatch")
+                actual_version = metadata.get("Version")
             if actual_version != computed_version:
                 print(f"FATAL: primary wheel {primary_wheel.name} metadata version {actual_version!r} != computed remediated version {computed_version!r}", file=sys.stderr)
                 sys.exit(1)
             print(f"Verified primary wheel version: {primary_wheel.name} -> {computed_version}")
 
-        # Keep the remediated SPDX identity synchronized before OCI packaging.
-        sync_script = Path("/var/workdir/sbom-helpers/sync_wheel_sbom.py")
-        if not sync_script.is_file():
-            print(f"FATAL: missing wheel SBOM synchronization helper: {sync_script}", file=sys.stderr)
-            sys.exit(1)
+        # Verify Fromager-generated identity and the Task-side SBOM allowlist.
+        # Fromager 0.81.0 uses the upstream build-input version for document name
+        # and documentNamespace, not purl.version; do not require remediation there.
         for primary_wheel in primary_wheels:
-            subprocess.run([sys.executable, str(sync_script), str(primary_wheel), computed_version], check=True)
+            with zipfile.ZipFile(primary_wheel) as wheel:
+                names = wheel.namelist()
+                if len(names) != len(set(names)):
+                    sys.exit("FATAL: duplicate archive paths")
+                own_metadata = [n for n in names if n.endswith(".dist-info/METADATA") and n.count("/") == 1]
+                sbom_prefix = own_metadata[0].rsplit("/", 1)[0] + "/sboms/"
+                sbom_members = [n for n in names if n.startswith(sbom_prefix) and not n.endswith("/")]
+                expected_member = next((n for n in sbom_members if n.endswith(".dist-info/sboms/redhat.spdx.json")), "")
+                if sbom_members != [expected_member]:
+                    print(f"FATAL: expected only the curated Red Hat SPDX SBOM in {primary_wheel.name}; found {sbom_members}", file=sys.stderr)
+                    sys.exit(1)
+                sbom_bytes = wheel.read(expected_member)
+                sbom = json.loads(sbom_bytes)
+                packages = {p.get("SPDXID"): p for p in sbom.get("packages", []) if isinstance(p, dict)}
+                wheel_package = packages.get("SPDXRef-wheel", {})
+                if wheel_package.get("versionInfo") != computed_version:
+                    print(f"FATAL: SPDXRef-wheel version is not {computed_version} in {primary_wheel.name}", file=sys.stderr)
+                    sys.exit(1)
+                purls = [ref.get("referenceLocator", "") for ref in wheel_package.get("externalRefs", []) if isinstance(ref, dict) and ref.get("referenceType") == "purl" and str(ref.get("referenceLocator", "")).startswith("pkg:pypi/")]
+                if len(purls) != 1:
+                    print(f"FATAL: expected one PyPI PURL in {primary_wheel.name}", file=sys.stderr)
+                    sys.exit(1)
+                purl = urlsplit(purls[0])
+                qualifiers = parse_qs(purl.query, keep_blank_values=True)
+                purl_version = unquote(purl.path.rsplit("@", 1)[-1]) if "@" in purl.path else ""
+                purl_filenames = qualifiers.get("file_name", [])
+                if purl_version != computed_version or purl_filenames != [primary_wheel.name] or "download_url" in qualifiers:
+                    print(f"FATAL: remediated wheel PURL is missing the computed version/filename or retains a stale download_url in {primary_wheel.name}", file=sys.stderr)
+                    sys.exit(1)
+                upstream_package = packages.get("SPDXRef-upstream", {})
+                upstream_purls = [ref.get("referenceLocator", "") for ref in upstream_package.get("externalRefs", []) if isinstance(ref, dict) and ref.get("referenceType") == "purl"]
+                if upstream_package.get("versionInfo") != version or len(upstream_purls) != 1:
+                    print(f"FATAL: SPDXRef-upstream version/PURL is not the upstream identity in {primary_wheel.name}", file=sys.stderr)
+                    sys.exit(1)
+                upstream_purl = urlsplit(upstream_purls[0])
+                expected_upstream_path = f"pypi/{canonicalize_name(package)}@{version}"
+                if upstream_purl.scheme != "pkg" or unquote(upstream_purl.path) != expected_upstream_path:
+                    print(f"FATAL: SPDXRef-upstream PURL is not the upstream PyPI identity in {primary_wheel.name}", file=sys.stderr)
+                    sys.exit(1)
+                record_members = [n for n in names if n.endswith(".dist-info/RECORD") and n.count("/") == 1]
+                if len(record_members) != 1:
+                    print(f"FATAL: expected one wheel RECORD in {primary_wheel.name}", file=sys.stderr)
+                    sys.exit(1)
+                record_rows = list(csv.reader(StringIO(wheel.read(record_members[0]).decode()), strict=True))
+                record = record_members[0]
+                if (any(len(row) != 3 for row in record_rows)
+                        or len({row[0] for row in record_rows}) != len(record_rows)
+                        or {row[0] for row in record_rows} != {n for n in names if not n.endswith("/")}
+                        or [record, "", ""] not in record_rows
+                        or any(record + suffix in names for suffix in (".jws", ".p7s"))):
+                    sys.exit("FATAL: malformed wheel RECORD")
+                for name, recorded_digest, recorded_size in record_rows:
+                    if name == record or (not recorded_digest and not recorded_size):
+                        continue
+                    data = wheel.read(name)
+                    algorithm, encoded = recorded_digest.split("=", 1)
+                    actual_digest = base64.urlsafe_b64encode(hashlib.new(algorithm, data).digest()).decode().rstrip("=")
+                    if algorithm in {"md5", "sha1"} or encoded != actual_digest or recorded_size != str(len(data)):
+                        sys.exit(f"FATAL: RECORD hash/size mismatch for {name}")
+                sbom_rows = [row for row in record_rows if row and row[0] == expected_member]
+                digest = base64.urlsafe_b64encode(hashlib.sha256(sbom_bytes).digest()).decode().rstrip("=")
+                if len(sbom_rows) != 1 or sbom_rows[0] != [expected_member, f"sha256={digest}", str(len(sbom_bytes))]:
+                    print(f"FATAL: wheel RECORD is inconsistent with curated SPDX in {primary_wheel.name}", file=sys.stderr)
+                    sys.exit(1)
 
-        # Independently enforce the build-time wheel SBOM allowlist before OCI packaging.
-        prune_script = Path("/var/workdir/sbom-helpers/prune_wheel_sboms.py")
-        if not prune_script.is_file():
-            print(f"FATAL: missing wheel SBOM allowlist helper: {prune_script}", file=sys.stderr)
-            sys.exit(1)
-        for primary_wheel in primary_wheels:
-            subprocess.run([sys.executable, str(prune_script), str(primary_wheel)], check=True)
+        print("Artifact verification complete.")
+      computeResources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          cpu: "1"
+          memory: 256Mi
 
+    - name: prune-cached-artifacts
+      image: quay.io/redhat-user-workloads/calunga-tenant/plumbing-builder@sha256:d8355de03d57adef033743da1f1a3bb2f0ff038192e3220b155e9dd7dba5d37c
+      volumeMounts:
+        - mountPath: /var/workdir
+          name: workdir
+      env:
+        - name: PACKAGE
+          value: $(params.PACKAGE)
+        - name: VERSION
+          value: $(params.VERSION)
+      script: |
+        #!/usr/bin/env python3
+        import json
+        import os
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        from packaging.utils import canonicalize_name, parse_wheel_filename
+        from packaging.version import Version
+
+        configs_dir = Path("/var/workdir/sdists-repo/build-configs")
+        artifact_dir = Path("/var/workdir/artifact")
+        res = subprocess.run(
+            [sys.executable, str(configs_dir / "scripts/get-allowed-artifacts.py"),
+             "--packages-dir", str(configs_dir / "packages"), os.environ["PACKAGE"], os.environ["VERSION"]],
+            capture_output=True, text=True, check=True,
+        )
+        allowed_packages = json.loads(res.stdout)
         # 4. Clean artifact/ directory: remove cached dependency artifacts not allowed.
 
         for fpath in list(artifact_dir.glob("*.whl")) + list(artifact_dir.glob("*.tar.gz")):
@@ -745,14 +691,7 @@ spec:
             else:
                 print(f"Verified allowed artifact in release bundle: {fname}")
 
-        print("Artifact verification and pruning complete.")
-      computeResources:
-        requests:
-          cpu: 100m
-          memory: 128Mi
-        limits:
-          cpu: "1"
-          memory: 256Mi
+        print("Cached dependency artifact pruning complete.")
 
     - name: create-oci-artifact
       image: quay.io/konflux-ci/oras:latest@sha256:1beeecce012c99794568f74265c065839f9703d28306a8430b667f639343a98b
