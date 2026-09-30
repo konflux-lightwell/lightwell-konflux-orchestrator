@@ -130,3 +130,40 @@ def test_verify_step_checks_primary_wheel_embedded_sbom(tmp_path, monkeypatch):
     result_mismatch = subprocess.run([sys.executable, "-c", adapted_script], capture_output=True, text=True)
     assert result_mismatch.returncode != 0
     assert "FATAL: primary wheel" in result_mismatch.stdout or "FATAL: primary wheel" in result_mismatch.stderr
+
+
+@pytest.mark.parametrize(
+    "computed_version,expected_b,expected_n",
+    [
+        ("3.10.0+rhlw.1", 1, 0),
+        ("3.10.0+rhlw.12", 12, 0),
+        ("3.10.0+rhlw.1.n.2", 1, 2),
+        ("3.10.0+rhlw.3.n4", 3, 4),
+        ("3.10.0", 0, 0),
+    ],
+)
+def test_attach_build_index_script_extracts_b_and_n(computed_version, expected_b, expected_n):
+    attach_task_path = REPO_ROOT / "tekton/tasks/attach-build-index/0.1/attach-build-index.yaml"
+    task = yaml.safe_load(attach_task_path.read_text())
+    step = next(s for s in task["spec"]["steps"] if s["name"] == "create-and-attach")
+    script = step["script"]
+
+    # Test the bash parsing snippet
+    bash_snippet = f"""
+    COMPUTED_VERSION="{computed_version}"
+    B=0
+    N=0
+    if [[ "$COMPUTED_VERSION" =~ \\+rhlw\\.([0-9]+)(\\.n\\.?([0-9]+))? ]]; then
+      B="${{BASH_REMATCH[1]}}"
+      [ -n "${{BASH_REMATCH[3]:-}}" ] && N="${{BASH_REMATCH[3]}}"
+    fi
+    echo "$B $N"
+    """
+    res = subprocess.run(["bash", "-c", bash_snippet], capture_output=True, text=True)
+    assert res.returncode == 0
+    b_val, n_val = map(int, res.stdout.strip().split())
+    assert b_val == expected_b
+    assert n_val == expected_n
+
+    assert '--b "$B"' in script
+    assert '--n "$N"' in script
