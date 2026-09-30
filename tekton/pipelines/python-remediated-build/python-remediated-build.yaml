@@ -216,7 +216,7 @@ spec:
         resolver: bundles
         params:
           - name: bundle
-            value: quay.io/konflux-ci/tekton-catalog/task-fromager-build-wheels:0.1@sha256:d91789f1d906fb2028e0aaa05b6f150a03b05ee5a4af9db47c02fab39bcd218b
+            value: quay.io/konflux-ci/tekton-catalog/task-fromager-build-wheels:0.1@sha256:6c50164261e9b7df815232e4330a7382c37dd1a07d4474b66cf7aceb06b84a17
           - name: name
             value: python-fromager-build-wheels
           - name: kind
@@ -281,7 +281,7 @@ spec:
         resolver: bundles
         params:
           - name: bundle
-            value: quay.io/konflux-ci/tekton-catalog/task-attach-build-index:0.1@sha256:b0e9f66ca97f76adad133ca6a498b0a09ff9d13eb3f97941733f7b729f79fabc
+            value: quay.io/konflux-ci/tekton-catalog/task-attach-build-index:0.1@sha256:cacd02bf31c6a994b593ff3397bca6cda7a5f32428cb96ea87cacb32a1ca2ef1
           - name: name
             value: attach-build-index
           - name: kind
