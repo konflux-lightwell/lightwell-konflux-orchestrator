@@ -132,19 +132,27 @@ spec:
         PURL="pkg:pypi/$(params.PACKAGE)@$(params.COMPUTED_VERSION)"
         echo "Generating build-index for ${PURL} (upstream $(params.VERSION))"
 
+        # Extract backport (b) and novel (n) counts from COMPUTED_VERSION (+rhlw.<B>[.n.<N>])
+        B=0
+        N=0
+        if [[ "$(params.COMPUTED_VERSION)" =~ \+rhlw\.([0-9]+)(\.n\.?([0-9]+))? ]]; then
+          B="${BASH_REMATCH[1]}"
+          [ -n "${BASH_REMATCH[3]:-}" ] && N="${BASH_REMATCH[3]}"
+        fi
+
         # Step 1 — generate build-index.json ONLY (no --attach-to). This is fully
         # offline: fath-cuan reads the ADR-0005 Lightwell-Fix trailers from
         # $SRC/.git and writes the document. It never touches the registry here, so
         # it needs no credentials — all registry auth is confined to the attach below.
         #
         # --require-vuln: fail closed if no vuln IDs resolve from the trailers.
-        # b/n default to 0; a populated vulns list is itself the remediation
-        # signal the BuildIndex schema and downstream OSV generation rely on.
         fath-cuan index create \
           --ecosystem pypi \
           --purl "$PURL" \
           --version-upstream "$(params.VERSION)" \
           --version-local "$(params.COMPUTED_VERSION)" \
+          --b "$B" \
+          --n "$N" \
           --git-dir "$SRC" \
           --require-vuln \
           --output /var/workdir/build-index.json
