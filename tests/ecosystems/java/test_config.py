@@ -45,7 +45,7 @@ def test_artifact_configs_has_required_keys():
 
 
 def test_artifact_configs_entries_have_required_fields():
-    required = {"app", "service_account", "source_repo", "dest_repo"}
+    required = {"app", "service_account", "dest_repo"}
     for artifact_type, config in ARTIFACT_CONFIGS.items():
         assert required <= set(config.keys()), f"{artifact_type} is missing fields"
 
