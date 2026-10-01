@@ -186,9 +186,45 @@ def test_tracked_failure_respects_capacity_before_retry(db: ImportDatabase):
     db.update_status(ref.id, ImportStatus.FAILED, release_name="release-1")
     db.update_status(other.id, ImportStatus.AWAITING_RELEASE, release_name="release-2")
     kube = MagicMock(spec=KubeClient)
-    kube.get_release_status.return_value = "False"
+    kube.get_release_status.side_effect = ["Unknown", "False"]
     assert ReleaseOnly(db, kube, "import-", 1, "plan-1").run() == 1
     assert db.get_by_status(ImportStatus.FAILED)[0].release_name == "release-1"
+    assert db.get_by_status(ImportStatus.AWAITING_RELEASE)[0].release_name == "release-2"
+
+
+def test_release_only_marks_failed_attempt_and_advances_to_next_snapshot(db: ImportDatabase):
+    first, _ = db.add_item("quay.io/repo:first@sha256:" + "a" * 64)
+    second, _ = db.add_item("quay.io/repo:second@sha256:" + "b" * 64)
+    db.update_status(
+        first.id,
+        ImportStatus.AWAITING_RELEASE,
+        pipelinerun_name="plr-first",
+        snapshot_name="snapshot-first",
+        release_name="release-first",
+        release_plan="plan-1",
+    )
+    second.snapshot_name = "snapshot-second"
+    db.update_status(second.id, ImportStatus.PENDING)
+
+    kube = MagicMock(spec=KubeClient)
+    kube.get_release_status.side_effect = ["False", "Unknown"]
+    kube.find_snapshot_by_component_digest.return_value = SnapshotLookup(SnapshotLookupState.FOUND, "snapshot-second")
+    kube.get_snapshot_component_digests.return_value = {"sha256:" + "b" * 64}
+    kube.lookup_release_for_snapshot.return_value = ReleaseLookup(ReleaseLookupState.CONFIRMED_EMPTY)
+    kube.find_release_plan_for_snapshot.return_value = "plan-1"
+    kube.create_release.return_value = "release-second"
+
+    assert ReleaseOnly(db, kube, "import-", 1, "plan-1", "app").run() == 1
+    first_after = db.get_by_ref(first.ref)
+    second_after = db.get_by_ref(second.ref)
+    assert first_after.status is ImportStatus.FAILED
+    assert first_after.release_name == "release-first"
+    assert "no automatic retry" in first_after.error_message
+    assert second_after.status is ImportStatus.AWAITING_RELEASE
+    assert second_after.release_name == "release-second"
+    assert kube.create_release.call_count == 1
+    assert kube.create_release.call_args.args[0] == "snapshot-second"
+    kube.create_pipelinerun.assert_not_called()
 
 
 def test_release_only_defer_branches(db: ImportDatabase):

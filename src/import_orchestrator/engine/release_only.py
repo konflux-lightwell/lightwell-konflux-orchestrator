@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import sys
 import time
+from datetime import datetime
 
 from import_orchestrator.clients import KubeClient
 from import_orchestrator.database import ImportDatabase
@@ -47,20 +48,50 @@ class ReleaseOnly:
         polling behavior for work that is expected to converge.
         """
         iteration = 0
+        # A previously failed row is eligible for one release retry this run.
+        # Already-progressing Releases count as the attempt for this run; if one
+        # fails, record it and continue to other rows rather than retrying it.
+        attempted_item_ids = {
+            item.id
+            for item in self.db.get_by_status(ImportStatus.AWAITING_RELEASE)
+            if item.id is not None and item.release_name
+        }
         while True:
             iteration += 1
             print(f"\n=== Iteration {iteration} (release-only) ===", file=sys.stderr)
             # Release-only owns no import trigger, but it must converge stale
             # running rows before attempting Snapshot/Release reconciliation.
             PipelineMonitor(self.db, self.kube).update_statuses()
-            # Pending rows are eligible only when the import already produced a
-            # completed, content-matching Snapshot.  They are not admission work
-            # until a Release actually needs to be created.
-            for item in self.db.get_by_status(ImportStatus.PENDING):
+            # Snapshot candidate sets before processing so a row that fails a
+            # Release during this pass cannot be picked up again as FAILED in
+            # the same pass. Only failures present when the command started get
+            # one explicit replacement attempt.
+            pending_items = self.db.get_by_status(ImportStatus.PENDING)
+            awaiting_items = self.db.get_by_status(ImportStatus.AWAITING_RELEASE)
+            failed_items = [
+                item
+                for item in self.db.get_by_status(ImportStatus.FAILED)
+                if item.id is not None and item.id not in attempted_item_ids
+            ]
+            reconcile_items = awaiting_items + failed_items + self.db.get_by_status(ImportStatus.SUCCESS)
+            # Drain/poll existing releases before admitting a new snapshot so
+            # a terminal failure frees the single slot for the next queued item.
+            attempted_this_iteration = False
+            for item in reconcile_items + pending_items:
+                if item.id in attempted_item_ids and item.status is ImportStatus.AWAITING_RELEASE and item.release_name:
+                    self._poll_single_attempt(item)
+                    continue
+                if item.status is ImportStatus.PENDING and (
+                    attempted_this_iteration or self.db.count_in_flight() >= self.primitive.max_parallel
+                ):
+                    continue
+                previous_release = item.release_name
                 self._process(item, dry_run)
-            for status in (ImportStatus.SUCCESS, ImportStatus.AWAITING_RELEASE, ImportStatus.FAILED):
-                for item in self.db.get_by_status(status):
-                    self._process(item, dry_run)
+                if item.id is not None and item.release_name and item.release_name != previous_release:
+                    attempted_item_ids.add(item.id)
+                    attempted_this_iteration = True
+            # A failed release discovered in this iteration remains FAILED,
+            # while the loop proceeds to the next queued Snapshot.
             stats = self.db.get_statistics()
             self._print_statistics(stats)
             if poll_interval is None:
@@ -73,6 +104,42 @@ class ReleaseOnly:
                 return self._exit_status()
             print(f"Sleeping {poll_interval}s...", file=sys.stderr)
             time.sleep(poll_interval)
+
+    def _poll_single_attempt(self, item: ImportItem) -> None:
+        """Poll an already-attempted Release without creating its replacement again."""
+        if item.id is None or not item.release_name:
+            return
+        release = item.release_name
+        status = self.kube.get_release_status(release)
+        attempts = self.db.get_release_attempts(item.id)
+        current_attempt = next((attempt for attempt in reversed(attempts) if attempt["release_name"] == release), None)
+        if status == "True":
+            if current_attempt and current_attempt["status"] in ("created", "progressing", "adopted"):
+                self.db.finish_release_attempt(current_attempt["id"], "success", release=release)
+            self.db.update_status(
+                item.id,
+                ImportStatus.SUCCESS,
+                release_name=release,
+                completed_at=datetime.now(),
+                clear_error_message=True,
+            )
+            item.status = ImportStatus.SUCCESS
+            return
+        if status == "False":
+            if current_attempt and current_attempt["status"] in ("created", "progressing", "adopted"):
+                self.db.finish_release_attempt(
+                    current_attempt["id"], "failed", release=release, error=f"Release {release} failed"
+                )
+            self.db.update_status(
+                item.id,
+                ImportStatus.FAILED,
+                error_message=f"Release {release} failed; no automatic retry in this run",
+                completed_at=datetime.now(),
+            )
+            item.status = ImportStatus.FAILED
+            print(f"Release failed: {item.ref} (release/{release}); will proceed to next item", file=sys.stderr)
+            return
+        print(f"Waiting for release/{release} ({item.ref})...", file=sys.stderr)
 
     def _print_statistics(self, stats: dict[str, int]) -> None:
         """Use the same per-status progress line as full orchestration."""
