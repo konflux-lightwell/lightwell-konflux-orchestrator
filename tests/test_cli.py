@@ -125,10 +125,10 @@ class TestParserRelease:
         assert args.poll_interval is None
 
     def test_artifact_type_flag_and_env(self, monkeypatch):
-        monkeypatch.setenv("LIGHTWELL_ARTIFACT_TYPE", "REBUILD")
+        monkeypatch.setenv("LIGHTWELL_ARTIFACT_TYPE", "VALIDATED")
         parser = make_parser()
         args = parser.parse_args(["java", "release"])
-        assert args.artifact_type == "REBUILD"
+        assert args.artifact_type == "VALIDATED"
         assert parser.parse_args(["java", "release", "--artifact-type", "STAGE"]).artifact_type == "STAGE"
 
     def test_explicit_plan_and_runtime_options(self):

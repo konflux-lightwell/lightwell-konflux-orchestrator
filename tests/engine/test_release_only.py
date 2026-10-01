@@ -91,7 +91,7 @@ def test_java_source_miss_never_falls_back_to_shared_component(db: ImportDatabas
 
 @pytest.mark.parametrize(
     ("artifact_type", "expected_snapshot"),
-    [("STAGE", None), ("REBUILD", "pnc-import-snapshot")],
+    [("STAGE", None), ("VALIDATED", "pnc-import-snapshot")],
 )
 def test_java_release_uses_artifact_application_for_source_lookup(
     db: ImportDatabase, artifact_type: str, expected_snapshot: str | None
@@ -118,7 +118,7 @@ def test_java_release_uses_artifact_application_for_source_lookup(
     result = ReleaseOnly(db, kube, "import-", 1, "plan-1", application, import_snapshot_resolver=True).run()
 
     assert kube.find_snapshot_for_import.call_args.args[1] == (
-        "pnc-import" if artifact_type == "REBUILD" else "pnc-import-stage"
+        "pnc-import" if artifact_type == "VALIDATED" else "pnc-import-stage"
     )
     if expected_snapshot:
         assert result == 1
