@@ -246,6 +246,19 @@ _mock_no_referrers(_) := []
 
 _mock_gav_manifest(_) := {"layers": [{"digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]}
 
+# The predisclosure annotation gate reads the distribution-target annotation from
+# the same ec.oci.image_manifest mock that parsed_blob_from_image uses to deref the
+# GAV blob, so these variants must carry both annotations and layers.
+_mock_gav_manifest_predisclosed(_) := {
+	"annotations": {"dev.lightwell.distribution-target": "predisclosed"},
+	"layers": [{"digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}],
+}
+
+_mock_gav_manifest_remediated(_) := {
+	"annotations": {"dev.lightwell.distribution-target": "remediated"},
+	"layers": [{"digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}],
+}
+
 # gav-index blob variants (returned by the mocked ec.oci.blob)
 _blob_cve(_) := "{\"gavs\": [\"g:a:1\"], \"vulns\": [\"CVE-2021-37533\"]}"
 
@@ -337,38 +350,71 @@ test_backport_rejects_no_cve if {
 	_has_code(deny, "pnc_import.backport_requires_cve")
 }
 
-# ---- predisclosure: >=1 LTWL (CVEs allowed) ----
+# ---- predisclosure: two gates — predisclosed distribution-target AND >=1 vuln id ----
+# With the predisclosed annotation the routing gate is satisfied; the stream then
+# accepts any vuln content that carries at least one vuln id (LTWL-only, mixed, or
+# CVE-only). Empty vulns is rejected by the vuln-id gate (see rejects_empty_vulns).
 test_predisclosure_accepts_ltwl if {
 	deny := pnc_import.deny with input.image.ref as _image_ref
 		with ec.oci.image_referrers as _mock_gav_referrers
-		with ec.oci.image_manifest as _mock_gav_manifest
+		with ec.oci.image_manifest as _mock_gav_manifest_predisclosed
 		with ec.oci.blob as _blob_ltwl
 		with data.rule_data_custom.oci_verify_import_stream as "predisclosure"
 		with data.rule_data_custom.oci_verify_import_novel_vuln_id_prefixes as _novel_prefixes
 		with data.rule_data_custom.oci_verify_import_cve_vuln_id_prefixes as _cve_prefixes
-	not _has_code(deny, "pnc_import.predisclosure_requires_ltwl")
+	not _has_code(deny, "pnc_import.predisclosure_requires_predisclosed_target")
+	not _has_code(deny, "pnc_import.predisclosure_requires_vuln")
 }
 
 test_predisclosure_accepts_mixed if {
 	deny := pnc_import.deny with input.image.ref as _image_ref
 		with ec.oci.image_referrers as _mock_gav_referrers
-		with ec.oci.image_manifest as _mock_gav_manifest
+		with ec.oci.image_manifest as _mock_gav_manifest_predisclosed
 		with ec.oci.blob as _blob_mixed
 		with data.rule_data_custom.oci_verify_import_stream as "predisclosure"
 		with data.rule_data_custom.oci_verify_import_novel_vuln_id_prefixes as _novel_prefixes
 		with data.rule_data_custom.oci_verify_import_cve_vuln_id_prefixes as _cve_prefixes
-	not _has_code(deny, "pnc_import.predisclosure_requires_ltwl")
+	not _has_code(deny, "pnc_import.predisclosure_requires_predisclosed_target")
+	not _has_code(deny, "pnc_import.predisclosure_requires_vuln")
 }
 
-test_predisclosure_rejects_cve_only if {
+# CVE-only content satisfies the vuln-id gate — a CVE is a valid vuln id.
+test_predisclosure_accepts_cve_only if {
 	deny := pnc_import.deny with input.image.ref as _image_ref
 		with ec.oci.image_referrers as _mock_gav_referrers
-		with ec.oci.image_manifest as _mock_gav_manifest
+		with ec.oci.image_manifest as _mock_gav_manifest_predisclosed
 		with ec.oci.blob as _blob_cve
 		with data.rule_data_custom.oci_verify_import_stream as "predisclosure"
 		with data.rule_data_custom.oci_verify_import_novel_vuln_id_prefixes as _novel_prefixes
 		with data.rule_data_custom.oci_verify_import_cve_vuln_id_prefixes as _cve_prefixes
-	_has_code(deny, "pnc_import.predisclosure_requires_ltwl")
+	not _has_code(deny, "pnc_import.predisclosure_requires_predisclosed_target")
+	not _has_code(deny, "pnc_import.predisclosure_requires_vuln")
+}
+
+# Empty vulns is rejected by the vuln-id gate even when the annotation is predisclosed.
+test_predisclosure_rejects_empty_vulns if {
+	deny := pnc_import.deny with input.image.ref as _image_ref
+		with ec.oci.image_referrers as _mock_gav_referrers
+		with ec.oci.image_manifest as _mock_gav_manifest_predisclosed
+		with ec.oci.blob as _blob_clean
+		with data.rule_data_custom.oci_verify_import_stream as "predisclosure"
+		with data.rule_data_custom.oci_verify_import_novel_vuln_id_prefixes as _novel_prefixes
+		with data.rule_data_custom.oci_verify_import_cve_vuln_id_prefixes as _cve_prefixes
+	not _has_code(deny, "pnc_import.predisclosure_requires_predisclosed_target")
+	_has_code(deny, "pnc_import.predisclosure_requires_vuln")
+}
+
+# A non-predisclosed annotation (e.g. remediated) on the predisclosure stream is
+# rejected regardless of vuln content.
+test_predisclosure_rejects_non_predisclosed_target if {
+	deny := pnc_import.deny with input.image.ref as _image_ref
+		with ec.oci.image_referrers as _mock_gav_referrers
+		with ec.oci.image_manifest as _mock_gav_manifest_remediated
+		with ec.oci.blob as _blob_ltwl
+		with data.rule_data_custom.oci_verify_import_stream as "predisclosure"
+		with data.rule_data_custom.oci_verify_import_novel_vuln_id_prefixes as _novel_prefixes
+		with data.rule_data_custom.oci_verify_import_cve_vuln_id_prefixes as _cve_prefixes
+	_has_code(deny, "pnc_import.predisclosure_requires_predisclosed_target")
 }
 
 # ---- GAV present + missing referrer ----
@@ -398,7 +444,7 @@ test_gate_inert_without_stream if {
 		with ec.oci.image_referrers as _mock_gav_referrers
 		with ec.oci.image_manifest as _mock_gav_manifest
 		with ec.oci.blob as _blob_ltwl
-	not _has_code(deny, "pnc_import.predisclosure_requires_ltwl")
+	not _has_code(deny, "pnc_import.predisclosure_requires_predisclosed_target")
 	not _has_code(deny, "pnc_import.gav_index_referrer_present")
 	not _has_code(deny, "pnc_import.gav_present")
 }
@@ -433,10 +479,37 @@ _real_denies(blob, stream) := codes if {
 	codes := {r.code | some r in deny; startswith(r.code, "pnc_import.")}
 }
 
+# predisclosure is routed by the distribution-target annotation, so the real
+# predisclosure tests pin the stream to "predisclosure" and vary the manifest
+# (annotation) instead of the vuln blob. The manifest is passed as a plain
+# object value (Rego cannot pass a mock function as an argument), and mocking a
+# builtin `with <object>` makes every ec.oci.image_manifest call return it —
+# carrying BOTH the annotation and the layers parsed_blob_from_image needs.
+_manifest_predisclosed := {
+	"annotations": {"dev.lightwell.distribution-target": "predisclosed"},
+	"layers": [{"digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}],
+}
+
+_manifest_remediated := {
+	"annotations": {"dev.lightwell.distribution-target": "remediated"},
+	"layers": [{"digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}],
+}
+
+_real_denies_target(blob, manifest) := codes if {
+	deny := pnc_import.deny with input.image.ref as _image_ref
+		with ec.oci.image_referrers as _mock_gav_referrers
+		with ec.oci.image_manifest as manifest
+		with ec.oci.blob as blob
+		with data.rule_data_custom.oci_verify_import_stream as "predisclosure"
+		with data.rule_data_custom.oci_verify_import_novel_vuln_id_prefixes as _novel_prefixes
+		with data.rule_data_custom.oci_verify_import_cve_vuln_id_prefixes as _cve_prefixes
+	codes := {r.code | some r in deny; startswith(r.code, "pnc_import.")}
+}
+
 # --- novel_pure (snakeyaml, LW- only) ---
 test_real_novel_pure_accepted_on_predisclosure if {
-	c := _real_denies(_real_novel_pure, "predisclosure")
-	not "pnc_import.predisclosure_requires_ltwl" in c
+	c := _real_denies_target(_real_novel_pure, _manifest_predisclosed)
+	not "pnc_import.predisclosure_requires_predisclosed_target" in c
 	not "pnc_import.gav_present" in c
 	not "pnc_import.gav_index_referrer_present" in c
 }
@@ -451,7 +524,7 @@ test_real_novel_pure_rejected_on_validated if {
 
 # --- novel_mixed (commons-lang3, CVE + 3x LW-) ---
 test_real_novel_mixed_accepted_on_predisclosure if {
-	not "pnc_import.predisclosure_requires_ltwl" in _real_denies(_real_novel_mixed, "predisclosure")
+	not "pnc_import.predisclosure_requires_predisclosed_target" in _real_denies_target(_real_novel_mixed, _manifest_predisclosed)
 }
 
 test_real_novel_mixed_rejected_on_backport if {
@@ -476,8 +549,10 @@ test_real_backport_rejected_on_validated if {
 	"pnc_import.validated_excludes_cve" in _real_denies(_real_backport_cve, "validated")
 }
 
+# A remediated-annotated image (real backport content) on the predisclosure
+# stream is rejected by the annotation gate.
 test_real_backport_rejected_on_predisclosure if {
-	"pnc_import.predisclosure_requires_ltwl" in _real_denies(_real_backport_cve, "predisclosure")
+	"pnc_import.predisclosure_requires_predisclosed_target" in _real_denies_target(_real_backport_cve, _manifest_remediated)
 }
 
 # --- validated_clean (ognl, no vulns) ---
@@ -493,7 +568,7 @@ test_real_validated_rejected_on_backport if {
 }
 
 test_real_validated_rejected_on_predisclosure if {
-	"pnc_import.predisclosure_requires_ltwl" in _real_denies(_real_validated_clean, "predisclosure")
+	"pnc_import.predisclosure_requires_predisclosed_target" in _real_denies_target(_real_validated_clean, _manifest_remediated)
 }
 
 # ---------------------------------------------------------------------------
@@ -519,12 +594,12 @@ test_multiple_referrers_deduplicate if {
 
 	deny := pnc_import.deny with input.image.ref as _image_ref
 		with ec.oci.image_referrers as _two_gav_referrers
-		with ec.oci.image_manifest as _mock_gav_manifest
+		with ec.oci.image_manifest as _mock_gav_manifest_predisclosed
 		with ec.oci.blob as _blob_ltwl
 		with data.rule_data_custom.oci_verify_import_stream as "predisclosure"
 		with data.rule_data_custom.oci_verify_import_novel_vuln_id_prefixes as _novel_prefixes
 		with data.rule_data_custom.oci_verify_import_cve_vuln_id_prefixes as _cve_prefixes
-	not _has_code(deny, "pnc_import.predisclosure_requires_ltwl")
+	not _has_code(deny, "pnc_import.predisclosure_requires_predisclosed_target")
 }
 
 # Invalid stream value is rejected by stream_rule_data_valid.
