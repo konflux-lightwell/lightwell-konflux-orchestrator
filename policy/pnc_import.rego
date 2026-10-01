@@ -275,11 +275,15 @@ _distribution_target_rule_data_errors contains error if {
 # ---------------------------------------------------------------------------
 # Vulnerability-class gate (per release stream)
 #
-# Implements the per-stream content policy (Andrew McNamara, 2026-08-26),
-# derived from the GAV index attached to the released image as an OCI referrer:
-#   predisclosure : must have >=1 LTWL (LW-) vuln; GAV present.
+# Implements the per-stream content policy, derived from the GAV index
+# attached to the released image as an OCI referrer:
+#   predisclosure : must have >=1 vuln id (LW- or CVE-); GAV present.
 #   backport      : must have >=1 CVE vuln; GAV present; must have NO LTWL vuln.
 #   validated     : GAV present; must have NO CVE and NO LTWL vuln.
+#
+# Note: the predisclosure gate no longer requires an LTWL (LW-) id. A novel
+# remediation of a known vulnerability may carry only a CVE, so any vuln id
+# satisfies the gate (fail-closed on empty/unrecognized ids).
 #
 # Opt-in per stream via the oci_verify_import_stream ruleData key
 # (validated | backport | predisclosure). Streams that omit it are unaffected.
@@ -321,18 +325,20 @@ deny contains result if {
 }
 
 # METADATA
-# title: Predisclosure requires an LTWL vulnerability
+# title: Predisclosure requires a vulnerability id
 # description: >-
-#   The predisclosure (novel) stream must carry at least one LTWL (LW-) vuln id.
+#   The predisclosure (novel) stream must carry at least one vuln id. The fix may
+#   be a novel remediation of a known vulnerability, so a CVE is sufficient — an
+#   LTWL (LW-) id is not required, but some vuln id must be present.
 # custom:
-#   short_name: predisclosure_requires_ltwl
-#   failure_msg: 'predisclosure stream requires at least one LTWL (novel) vuln id, found none'
+#   short_name: predisclosure_requires_vuln
+#   failure_msg: 'predisclosure stream requires at least one vuln id (novel or CVE), found none'
 #   collections:
 #     - lightwell
 deny contains result if {
 	_stream == "predisclosure"
 	count(_gav_index_referrers) > 0
-	not _has_ltwl
+	not _has_vuln
 	result := metadata.result_helper(rego.metadata.chain(), [])
 }
 
@@ -479,6 +485,11 @@ _cve_vulns := {v | some v in _gav_index_vulns; _is_cve_vuln(v)}
 _has_ltwl if count(_ltwl_vulns) > 0
 
 _has_cve if count(_cve_vulns) > 0
+
+# Predisclosure accepts a vuln id of any recognized kind (novel LW- or CVE).
+_has_vuln if _has_ltwl
+
+_has_vuln if _has_cve
 
 _novel_vuln_id_prefixes := rule_data.get("oci_verify_import_novel_vuln_id_prefixes")
 
