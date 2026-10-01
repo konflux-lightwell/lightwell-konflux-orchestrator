@@ -46,7 +46,10 @@ class ReleaseOnly:
         makes a one-pass invocation useful in CI while retaining the optional
         polling behavior for work that is expected to converge.
         """
+        iteration = 0
         while True:
+            iteration += 1
+            print(f"\n=== Iteration {iteration} (release-only) ===", file=sys.stderr)
             # Release-only owns no import trigger, but it must converge stale
             # running rows before attempting Snapshot/Release reconciliation.
             PipelineMonitor(self.db, self.kube).update_statuses()
@@ -58,13 +61,30 @@ class ReleaseOnly:
             for status in (ImportStatus.SUCCESS, ImportStatus.AWAITING_RELEASE, ImportStatus.FAILED):
                 for item in self.db.get_by_status(status):
                     self._process(item, dry_run)
+            stats = self.db.get_statistics()
+            self._print_statistics(stats)
             if poll_interval is None:
+                print("\n=== Complete (release-only pass) ===", file=sys.stderr)
                 return self._exit_status()
             active = self.db.get_by_status(ImportStatus.TRIGGERED) + self.db.get_by_status(ImportStatus.RUNNING)
             releasing = self.db.get_by_status(ImportStatus.AWAITING_RELEASE)
             if not active and not releasing:
+                print("\n=== Complete (release-only reconciliation) ===", file=sys.stderr)
                 return self._exit_status()
+            print(f"Sleeping {poll_interval}s...", file=sys.stderr)
             time.sleep(poll_interval)
+
+    def _print_statistics(self, stats: dict[str, int]) -> None:
+        """Use the same per-status progress line as full orchestration."""
+        print(
+            f"Status: pending={stats[ImportStatus.PENDING.value]}, "
+            f"triggered={stats[ImportStatus.TRIGGERED.value]}, "
+            f"running={stats[ImportStatus.RUNNING.value]}, "
+            f"releasing={stats[ImportStatus.AWAITING_RELEASE.value]}, "
+            f"success={stats[ImportStatus.SUCCESS.value]}, "
+            f"failed={stats[ImportStatus.FAILED.value]}",
+            file=sys.stderr,
+        )
 
     def _exit_status(self) -> int:
         """Return zero only when no import row remains unresolved."""
