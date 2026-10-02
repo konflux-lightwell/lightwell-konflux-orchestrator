@@ -321,18 +321,37 @@ deny contains result if {
 }
 
 # METADATA
-# title: Predisclosure requires an LTWL vulnerability
+# title: Predisclosure requires the predisclosed distribution target
 # description: >-
-#   The predisclosure (novel) stream must carry at least one LTWL (LW-) vuln id.
+#   The predisclosure (novel) stream is routed by the image's OCI manifest
+#   annotation dev.lightwell.distribution-target, which must equal "predisclosed".
 # custom:
-#   short_name: predisclosure_requires_ltwl
-#   failure_msg: 'predisclosure stream requires at least one LTWL (novel) vuln id, found none'
+#   short_name: predisclosure_requires_predisclosed_target
+#   failure_msg: 'predisclosure stream requires distribution-target annotation %q, got %q'
 #   collections:
 #     - lightwell
 deny contains result if {
 	_stream == "predisclosure"
 	count(_gav_index_referrers) > 0
-	not _has_ltwl
+	_distribution_target_annotation != "predisclosed"
+	result := metadata.result_helper(rego.metadata.chain(), ["predisclosed", _distribution_target_annotation])
+}
+
+# METADATA
+# title: Predisclosure requires a vulnerability id
+# description: >-
+#   The predisclosure (novel) stream must carry at least one vuln id. The fix may
+#   be a novel remediation of a known vulnerability, so a CVE is sufficient — an
+#   LTWL (LW-) id is not required, but some vuln id must be present.
+# custom:
+#   short_name: predisclosure_requires_vuln
+#   failure_msg: 'predisclosure stream requires at least one vuln id (novel or CVE), found none'
+#   collections:
+#     - lightwell
+deny contains result if {
+	_stream == "predisclosure"
+	count(_gav_index_referrers) > 0
+	not _has_vuln
 	result := metadata.result_helper(rego.metadata.chain(), [])
 }
 
@@ -479,6 +498,11 @@ _cve_vulns := {v | some v in _gav_index_vulns; _is_cve_vuln(v)}
 _has_ltwl if count(_ltwl_vulns) > 0
 
 _has_cve if count(_cve_vulns) > 0
+
+# Predisclosure accepts a vuln id of any recognized kind (novel LW- or CVE).
+_has_vuln if _has_ltwl
+
+_has_vuln if _has_cve
 
 _novel_vuln_id_prefixes := rule_data.get("oci_verify_import_novel_vuln_id_prefixes")
 
