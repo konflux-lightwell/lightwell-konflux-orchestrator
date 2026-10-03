@@ -19,6 +19,7 @@ from import_orchestrator.engine.ingest import Ingest, IngestResult
 from import_orchestrator.engine.orchestrator import ImportOrchestrator
 from import_orchestrator.engine.pipeline import PipelineMonitor
 from import_orchestrator.engine.release import ReleaseMonitor
+from import_orchestrator.engine.release_only import ReleaseOnly
 from import_orchestrator.engine.trigger import ImportTrigger
 
 __all__ = [
@@ -28,5 +29,6 @@ __all__ = [
     "IngestResult",
     "PipelineMonitor",
     "ReleaseMonitor",
+    "ReleaseOnly",
     "TriggerError",
 ]

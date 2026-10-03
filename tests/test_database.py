@@ -14,6 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
+import sqlite3
 from datetime import datetime
 from pathlib import Path
 
@@ -177,3 +178,133 @@ class TestImportDatabase:
     def test_parse_timestamp_handles_invalid_string(self, db: ImportDatabase):
         result = db._parse_timestamp("not-a-date")
         assert result is None
+
+    def test_claim_release_slot_validation(self, db: ImportDatabase):
+        ref, _ = db.add_item("quay.io/repo:tag@sha256:abc")
+        assert ref.id is not None
+        with pytest.raises(ValueError, match="max_parallel must be positive"):
+            db.claim_release_slot(ref.id, 0)
+
+    def test_claim_release_slot_success_and_awaiting_release(self, db: ImportDatabase):
+        ref, _ = db.add_item("quay.io/repo:tag@sha256:abc")
+        assert ref.id is not None
+        # From PENDING to AWAITING_RELEASE (claiming the slot and setting release_creation_pending=1)
+        assert db.claim_release_slot(ref.id, 2) is True
+        item = db.get_by_ref("quay.io/repo:tag@sha256:abc")
+        assert item is not None
+        assert item.status == ImportStatus.AWAITING_RELEASE
+        assert item.release_creation_pending is True
+
+        # Calling again while release_creation_pending=1 is rejected to prevent duplicate creations
+        assert db.claim_release_slot(ref.id, 2) is False
+
+        # If release_creation_pending is cleared (e.g. after release creation completes or resets)
+        db.update_status(ref.id, ImportStatus.AWAITING_RELEASE, release_creation_pending=False)
+        assert db.claim_release_slot(ref.id, 2) is True
+
+    def test_claim_release_slot_capacity_full(self, db: ImportDatabase):
+        ref1, _ = db.add_item("quay.io/repo:tag1@sha256:abc1")
+        ref2, _ = db.add_item("quay.io/repo:tag2@sha256:abc2")
+        assert ref1.id is not None and ref2.id is not None
+        assert db.claim_release_slot(ref1.id, 1) is True
+        # Second item exceeds max_parallel=1
+        assert db.claim_release_slot(ref2.id, 1) is False
+
+    def test_claim_release_slot_operational_error(self, db: ImportDatabase, monkeypatch):
+        ref, _ = db.add_item("quay.io/repo:tag@sha256:abc")
+        assert ref.id is not None
+        assert db.conn is not None
+
+        class BrokenConn:
+            def execute(self, *args, **kwargs):
+                raise sqlite3.OperationalError("database is locked")
+
+            def rollback(self):
+                pass
+
+        monkeypatch.setattr(db, "conn", BrokenConn())
+        assert db.claim_release_slot(ref.id, 5) is False
+
+    def test_claim_promotion_release_creation_returns_durable_state_after_lock_error(
+        self, db: ImportDatabase, monkeypatch
+    ):
+        """A transient writer-lock failure must not grant remote-create ownership."""
+        assert db.conn is not None
+
+        class LockedConnection:
+            def execute(self, *args, **kwargs):
+                raise sqlite3.OperationalError("database is locked")
+
+            def rollback(self):
+                raise sqlite3.OperationalError("rollback also failed")
+
+        monkeypatch.setattr(db, "conn", LockedConnection())
+        monkeypatch.setattr(db, "get_promotion_release", lambda *_args: ("existing-release", True))
+
+        claimed, state = db.claim_promotion_release_creation("snapshot", "plan")
+
+        assert claimed is False
+        assert state == ("existing-release", True)
+
+    def test_release_attempts_lifecycle(self, db: ImportDatabase):
+        ref, _ = db.add_item("quay.io/repo:tag@sha256:abc")
+        assert ref.id is not None
+        attempt_id = db.start_release_attempt(ref.id, "snapshot-1", "pipeline-1")
+        assert attempt_id > 0
+
+        # Query all attempts
+        all_attempts = db.get_release_attempts()
+        assert len(all_attempts) == 1
+        assert all_attempts[0]["status"] == "started"
+
+        # Finish attempt
+        db.finish_release_attempt(attempt_id, "success", release="rel-123")
+        by_item = db.get_release_attempts(ref.id)
+        assert len(by_item) == 1
+        assert by_item[0]["status"] == "success"
+        assert by_item[0]["release_name"] == "rel-123"
+
+    def test_update_status_all_fields(self, db: ImportDatabase):
+        ref, _ = db.add_item("quay.io/repo:tag@sha256:abc")
+        assert ref.id is not None
+        now = datetime.now()
+        db.update_status(
+            ref.id,
+            ImportStatus.AWAITING_RELEASE,
+            pipelinerun_name="plr-1",
+            release_name="rel-1",
+            snapshot_name="snap-1",
+            error_message="some err",
+            triggered_at=now,
+            completed_at=now,
+            retry_count=1,
+            release_creation_pending=True,
+            release_plan="plan-1",
+        )
+        item = db.get_by_ref("quay.io/repo:tag@sha256:abc")
+        assert item is not None
+        assert item.pipelinerun_name == "plr-1"
+        assert item.release_name == "rel-1"
+        assert item.snapshot_name == "snap-1"
+        assert item.error_message == "some err"
+        assert item.retry_count == 1
+        assert item.release_creation_pending is True
+        assert item.release_plan == "plan-1"
+
+        # Test empty string sentinel to clear release_name and snapshot_name
+        db.update_status(ref.id, ImportStatus.PENDING, release_name="", snapshot_name="")
+        item = db.get_by_ref("quay.io/repo:tag@sha256:abc")
+        assert item is not None
+        assert item.release_name is None
+        assert item.snapshot_name is None
+
+    def test_count_in_flight(self, db: ImportDatabase):
+        assert db.count_in_flight() == 0
+        ref1, _ = db.add_item("quay.io/repo:tag1@sha256:111")
+        ref2, _ = db.add_item("quay.io/repo:tag2@sha256:222")
+        ref3, _ = db.add_item("quay.io/repo:tag3@sha256:333")
+        assert ref1.id and ref2.id and ref3.id
+        db.update_status(ref1.id, ImportStatus.TRIGGERED)
+        db.update_status(ref2.id, ImportStatus.RUNNING)
+        db.update_status(ref3.id, ImportStatus.AWAITING_RELEASE)
+        assert db.count_in_flight() == 3

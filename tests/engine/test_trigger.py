@@ -22,7 +22,7 @@ import pytest
 from import_orchestrator.database import ImportDatabase
 from import_orchestrator.ecosystems.java.pipelinerun import TriggerError
 from import_orchestrator.engine import ImportTrigger
-from import_orchestrator.models import ImportItem, ImportStatus
+from import_orchestrator.models import ImportItem, ImportStatus, SnapshotLookup, SnapshotLookupState
 
 
 @pytest.fixture
@@ -138,6 +138,102 @@ class TestTriggerNextBatch:
         failed = trigger.db.get_by_status(ImportStatus.FAILED)
         assert len(failed) == 1
         assert "connection refused" in failed[0].error_message
+
+    def test_reuses_pending_snapshot_without_triggering_import(self, db: ImportDatabase, mock_kube: MagicMock):
+        """An exact digest match enters release reconciliation without a new PipelineRun."""
+        item, _ = db.add_item("quay.io/repo:tag@sha256:" + "a" * 64)
+        mock_kube.find_snapshot_by_component_digest.return_value = "snapshot-existing"
+        trigger = ImportTrigger(db, mock_kube, MagicMock(), max_parallel=1, max_retries=3)
+
+        assert trigger.trigger_next_batch() == 0
+        assert db.get_by_status(ImportStatus.AWAITING_RELEASE)[0].snapshot_name == "snapshot-existing"
+        mock_kube.create_pipelinerun.assert_not_called()
+
+    def test_unknown_legacy_snapshot_result_stays_pending(self, trigger: ImportTrigger, mock_kube: MagicMock):
+        """An uncontracted legacy miss is UNKNOWN and must fail closed."""
+        mock_kube.find_snapshot_by_component_digest.return_value = None
+        trigger.db.add_item("quay.io/repo:tag@sha256:" + "b" * 64)
+
+        assert trigger.trigger_next_batch() == 0
+        pending = trigger.db.get_by_status(ImportStatus.PENDING)
+        assert len(pending) == 1
+        assert "unavailable" in pending[0].error_message
+        mock_kube.create_pipelinerun.assert_not_called()
+
+    @pytest.mark.parametrize("state", [SnapshotLookupState.AMBIGUOUS, SnapshotLookupState.UNKNOWN])
+    def test_typed_uncertain_snapshot_result_stays_pending(self, trigger: ImportTrigger, mock_kube: MagicMock, state):
+        trigger.db.add_item("quay.io/repo:tag@sha256:" + "d" * 64)
+        mock_kube.find_snapshot_by_component_digest.return_value = SnapshotLookup(state)
+
+        assert trigger.trigger_next_batch() == 0
+        assert len(trigger.db.get_by_status(ImportStatus.PENDING)) == 1
+        mock_kube.create_pipelinerun.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "lookup",
+        [
+            SnapshotLookup(SnapshotLookupState.CONFIRMED_EMPTY),
+            SnapshotLookup(SnapshotLookupState.AMBIGUOUS),
+            SnapshotLookup(SnapshotLookupState.UNKNOWN),
+        ],
+    )
+    def test_java_source_lookup_uses_fresh_import_only_for_confirmed_source_miss(
+        self, db: ImportDatabase, mock_kube: MagicMock, lookup: SnapshotLookup
+    ):
+        db.add_item("quay.io/repo:tag@sha256:" + "a" * 64)
+        mock_kube.find_snapshot_for_import.return_value = lookup
+        mock_kube.find_snapshot_by_component_digest.return_value = SnapshotLookup(
+            SnapshotLookupState.FOUND, "shared-component-snapshot"
+        )
+        trigger = ImportTrigger(
+            db,
+            mock_kube,
+            MagicMock(),
+            max_parallel=1,
+            max_retries=3,
+            expected_application="app",
+            import_snapshot_resolver=True,
+        )
+
+        mock_kube.create_pipelinerun.return_value = "fresh-pr"
+        expected = 1 if lookup.state is SnapshotLookupState.CONFIRMED_EMPTY else 0
+        assert trigger.trigger_next_batch() == expected
+        assert len(db.get_by_status(ImportStatus.TRIGGERED if expected else ImportStatus.PENDING)) == 1
+        mock_kube.find_snapshot_by_component_digest.assert_not_called()
+        if expected:
+            mock_kube.create_pipelinerun.assert_called_once()
+        else:
+            mock_kube.create_pipelinerun.assert_not_called()
+
+    def test_java_source_match_reuses_snapshot_without_import(self, db: ImportDatabase, mock_kube: MagicMock):
+        item, _ = db.add_item("quay.io/repo:tag@sha256:" + "a" * 64)
+        mock_kube.find_snapshot_for_import.return_value = SnapshotLookup(SnapshotLookupState.FOUND, "source-snapshot")
+        trigger = ImportTrigger(
+            db,
+            mock_kube,
+            MagicMock(),
+            max_parallel=1,
+            max_retries=3,
+            expected_application="app",
+            import_snapshot_resolver=True,
+        )
+
+        assert trigger.trigger_next_batch() == 0
+        assert db.get_by_status(ImportStatus.AWAITING_RELEASE)[0].id == item.id
+        assert db.get_by_status(ImportStatus.AWAITING_RELEASE)[0].snapshot_name == "source-snapshot"
+        mock_kube.find_snapshot_by_component_digest.assert_not_called()
+        mock_kube.create_pipelinerun.assert_not_called()
+
+    def test_force_import_ignores_matching_snapshot(self, db: ImportDatabase, mock_kube: MagicMock):
+        """Force import bypasses Snapshot reuse and submits a PipelineRun."""
+        db.add_item("quay.io/repo:tag@sha256:" + "c" * 64)
+        mock_kube.find_snapshot_by_component_digest.return_value = "snapshot-existing"
+        mock_kube.create_pipelinerun.return_value = "import-forced"
+        trigger = ImportTrigger(db, mock_kube, MagicMock(), max_parallel=1, max_retries=3, force_import=True)
+
+        assert trigger.trigger_next_batch() == 1
+        mock_kube.find_snapshot_by_component_digest.assert_not_called()
+        mock_kube.create_pipelinerun.assert_called_once()
 
     def test_triggers_retry_candidates(self, trigger: ImportTrigger):
         """Verify that failed imports are retried within the retry limit."""

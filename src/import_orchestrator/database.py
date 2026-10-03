@@ -68,6 +68,8 @@ class ImportDatabase:
                 last_checked_at TIMESTAMP,
                 error_message TEXT,
                 retry_count INTEGER DEFAULT 0,
+                release_creation_pending INTEGER NOT NULL DEFAULT 0,
+                release_plan TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """
@@ -85,11 +87,36 @@ class ImportDatabase:
         """
         )
 
-        for col in ("release_name TEXT", "snapshot_name TEXT"):
-            try:
-                cursor.execute(f"ALTER TABLE import_items ADD COLUMN {col}")
-            except sqlite3.OperationalError:
-                pass  # column already exists
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS release_attempts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                import_item_id INTEGER NOT NULL,
+                snapshot_name TEXT NOT NULL,
+                release_name TEXT,
+                pipelinerun_name TEXT,
+                status TEXT NOT NULL,
+                started_at TIMESTAMP NOT NULL,
+                completed_at TIMESTAMP,
+                error TEXT,
+                FOREIGN KEY(import_item_id) REFERENCES import_items(id)
+            )
+            """
+        )
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_release_attempt_item ON release_attempts(import_item_id)")
+
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS promotion_releases (
+                snapshot_name TEXT NOT NULL,
+                release_plan TEXT NOT NULL,
+                release_name TEXT,
+                creation_pending INTEGER NOT NULL DEFAULT 0,
+                updated_at TIMESTAMP NOT NULL,
+                PRIMARY KEY(snapshot_name, release_plan)
+            )
+            """
+        )
 
         self.conn.commit()
 
@@ -147,6 +174,9 @@ class ImportDatabase:
         triggered_at: datetime | None = None,
         completed_at: datetime | None = None,
         retry_count: int | None = None,
+        release_creation_pending: bool | None = None,
+        release_plan: str | None = None,
+        clear_error_message: bool = False,
     ) -> None:
         """Update the status and optional fields for an import item."""
         assert self.conn is not None
@@ -171,6 +201,8 @@ class ImportDatabase:
         if error_message is not None:
             fields.append("error_message = ?")
             values.append(error_message)
+        elif clear_error_message:
+            fields.append("error_message = NULL")
 
         if triggered_at is not None:
             fields.append("triggered_at = ?")
@@ -183,6 +215,14 @@ class ImportDatabase:
         if retry_count is not None:
             fields.append("retry_count = ?")
             values.append(retry_count)
+
+        if release_creation_pending is not None:
+            fields.append("release_creation_pending = ?")
+            values.append(int(release_creation_pending))
+
+        if release_plan is not None:
+            fields.append("release_plan = ?")
+            values.append(release_plan)
 
         values.append(item_id)
 
@@ -244,17 +284,155 @@ class ImportDatabase:
         return [self._row_to_item(row) for row in cursor.fetchall()]
 
     def count_in_flight(self) -> int:
-        """Count entries actively being processed (total minus pending, success, and failed)."""
+        """Count the one global budget: triggered, running, and releasing each use one slot."""
         assert self.conn is not None
-        cursor = self.conn.cursor()
-        cursor.execute(
-            """
-            SELECT COUNT(*) FROM import_items
-            WHERE status NOT IN (?, ?, ?)
-        """,
-            (ImportStatus.PENDING.value, ImportStatus.SUCCESS.value, ImportStatus.FAILED.value),
+        return self.conn.execute(
+            "SELECT COUNT(*) FROM import_items WHERE status IN (?, ?, ?)",
+            (ImportStatus.TRIGGERED.value, ImportStatus.RUNNING.value, ImportStatus.AWAITING_RELEASE.value),
+        ).fetchone()[0]
+
+    def claim_release_slot(self, item_id: int, max_parallel: int) -> bool:
+        """Atomically reserve a release slot under SQLite's writer lock.
+
+        The item is transitioned to ``releasing`` before the remote create call;
+        this prevents another process from admitting work at the boundary.
+        Exclusive ownership is enforced: an item already marked as creating a release
+        cannot be claimed a second time.
+        """
+        if max_parallel <= 0:
+            raise ValueError("max_parallel must be positive")
+        assert self.conn is not None
+        try:
+            self.conn.execute("BEGIN IMMEDIATE")
+            current = self.conn.execute(
+                "SELECT status, release_creation_pending FROM import_items WHERE id = ?", (item_id,)
+            ).fetchone()
+            if not current:
+                self.conn.rollback()
+                return False
+
+            status, pending = current[0], current[1]
+            if pending:
+                # Already claimed or mid-creation; reject concurrent claim
+                self.conn.rollback()
+                return False
+
+            count = self.conn.execute(
+                "SELECT COUNT(*) FROM import_items WHERE status IN (?, ?, ?)",
+                (ImportStatus.TRIGGERED.value, ImportStatus.RUNNING.value, ImportStatus.AWAITING_RELEASE.value),
+            ).fetchone()[0]
+
+            # If already AWAITING_RELEASE, it is already occupying an admission slot in the count.
+            # Only if transitioning from another status (e.g. PENDING) does it need to check count >= max_parallel.
+            if status != ImportStatus.AWAITING_RELEASE.value and count >= max_parallel:
+                self.conn.rollback()
+                return False
+
+            cursor = self.conn.execute(
+                "UPDATE import_items "
+                "SET status=?, release_creation_pending=1, last_checked_at=? "
+                "WHERE id=? AND release_creation_pending=0",
+                (ImportStatus.AWAITING_RELEASE.value, datetime.now().isoformat(), item_id),
+            )
+            if cursor.rowcount != 1:
+                self.conn.rollback()
+                return False
+
+            self.conn.commit()
+            return True
+        except sqlite3.OperationalError:
+            try:
+                self.conn.rollback()
+            except sqlite3.Error:
+                pass
+            return False
+
+    def start_release_attempt(self, item_id: int, snapshot: str, pipelinerun: str | None = None) -> int:
+        """Append a release attempt and return its id; audit rows are never overwritten."""
+        assert self.conn is not None
+        cur = self.conn.execute(
+            "INSERT INTO release_attempts("
+            "import_item_id,snapshot_name,pipelinerun_name,status,started_at) VALUES (?,?,?,?,?)",
+            (item_id, snapshot, pipelinerun, "started", datetime.now().isoformat()),
         )
-        return cursor.fetchone()[0]
+        self.conn.commit()
+        return int(cur.lastrowid)
+
+    def finish_release_attempt(
+        self, attempt_id: int, status: str, release: str | None = None, error: str | None = None
+    ) -> None:
+        """Complete an attempt without mutating earlier audit records."""
+        assert self.conn is not None
+        self.conn.execute(
+            "UPDATE release_attempts SET status=?,release_name=?,completed_at=?,error=? WHERE id=?",
+            (status, release, datetime.now().isoformat(), error, attempt_id),
+        )
+        self.conn.commit()
+
+    def get_release_attempts(self, item_id: int | None = None) -> list[sqlite3.Row]:
+        assert self.conn is not None
+        if item_id is None:
+            return list(self.conn.execute("SELECT * FROM release_attempts ORDER BY id"))
+        return list(self.conn.execute("SELECT * FROM release_attempts WHERE import_item_id=? ORDER BY id", (item_id,)))
+
+    def get_promotion_release(self, snapshot: str, plan: str) -> tuple[str | None, bool] | None:
+        """Return durable promotion release state for an exact Snapshot/ReleasePlan."""
+        assert self.conn is not None
+        row = self.conn.execute(
+            "SELECT release_name, creation_pending FROM promotion_releases WHERE snapshot_name=? AND release_plan=?",
+            (snapshot, plan),
+        ).fetchone()
+        return (row["release_name"], bool(row["creation_pending"])) if row else None
+
+    def claim_promotion_release_creation(self, snapshot: str, plan: str) -> tuple[bool, tuple[str | None, bool] | None]:
+        """Atomically acquire remote-create ownership for one Snapshot/ReleasePlan.
+
+        The successful caller has inserted the durable pending marker while
+        holding SQLite's writer lock and is the *only* caller allowed to invoke
+        the remote create. A caller which loses the race receives the persisted
+        state and must observe/retry it rather than issue another create.
+        """
+        assert self.conn is not None
+        try:
+            self.conn.execute("BEGIN IMMEDIATE")
+            row = self.conn.execute(
+                "SELECT release_name, creation_pending FROM promotion_releases "
+                "WHERE snapshot_name=? AND release_plan=?",
+                (snapshot, plan),
+            ).fetchone()
+            if row is not None:
+                self.conn.rollback()
+                return False, (row["release_name"], bool(row["creation_pending"]))
+            self.conn.execute(
+                "INSERT INTO promotion_releases("
+                "snapshot_name, release_plan, release_name, creation_pending, updated_at) "
+                "VALUES (?, ?, NULL, 1, ?)",
+                (snapshot, plan, datetime.now().isoformat()),
+            )
+            self.conn.commit()
+            return True, None
+        except sqlite3.Error:
+            try:
+                self.conn.rollback()
+            except sqlite3.Error:
+                pass
+            return False, self.get_promotion_release(snapshot, plan)
+
+    def save_promotion_release(self, snapshot: str, plan: str, release: str | None, pending: bool) -> None:
+        """Persist a promotion pointer or ambiguous-create marker after ownership is claimed."""
+        assert self.conn is not None
+        self.conn.execute(
+            """
+            INSERT INTO promotion_releases(snapshot_name, release_plan, release_name, creation_pending, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(snapshot_name, release_plan) DO UPDATE SET
+                release_name=excluded.release_name,
+                creation_pending=excluded.creation_pending,
+                updated_at=excluded.updated_at
+            """,
+            (snapshot, plan, release, int(pending), datetime.now().isoformat()),
+        )
+        self.conn.commit()
 
     def get_statistics(self) -> dict[str, int]:
         """Return counts grouped by status for progress reporting."""
@@ -291,6 +469,8 @@ class ImportDatabase:
             last_checked_at=self._parse_timestamp(row["last_checked_at"]),
             error_message=row["error_message"],
             retry_count=row["retry_count"],
+            release_creation_pending=bool(row["release_creation_pending"]),
+            release_plan=row["release_plan"],
         )
 
     def _parse_timestamp(self, value: str | None) -> datetime | None:
