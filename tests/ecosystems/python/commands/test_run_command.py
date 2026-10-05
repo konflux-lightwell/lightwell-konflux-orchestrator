@@ -112,6 +112,18 @@ class TestRunArgParsing:
         )
         assert args.output_json == "/tmp/result.json"
 
+    def test_release_plan_defaults_to_none(self):
+        parser = make_parser()
+        args = parser.parse_args(["python", "run", "--fix-type", "Backport", "ntplib==0.4.0"])
+        assert args.release_plan is None
+
+    def test_release_plan_override(self):
+        parser = make_parser()
+        args = parser.parse_args(
+            ["python", "run", "--fix-type", "Backport", "--release-plan", "remediated-build-prod", "ntplib==0.4.0"]
+        )
+        assert args.release_plan == "remediated-build-prod"
+
 
 class TestRunCommand:
     @patch("import_orchestrator.ecosystems.python.commands.run.run_single")
