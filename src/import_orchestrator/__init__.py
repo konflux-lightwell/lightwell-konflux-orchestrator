@@ -25,11 +25,25 @@ from import_orchestrator.engine import (
     ReleaseMonitor,
     TriggerError,
 )
-from import_orchestrator.models import ImportItem, ImportStatus, PipelineRunStatus
+from import_orchestrator.models import (
+    Attempt,
+    AttemptPhase,
+    ClusterResource,
+    ImportItem,
+    ImportStatus,
+    Phase,
+    PhaseStatus,
+    PipelineRunStatus,
+    Request,
+)
+from import_orchestrator.workflow_db import WorkflowDatabase
 
 __version__ = "0.1.0"
 
 __all__ = [
+    "Attempt",
+    "AttemptPhase",
+    "ClusterResource",
     "ImportDatabase",
     "ImportItem",
     "ImportOrchestrator",
@@ -38,8 +52,12 @@ __all__ = [
     "Ingest",
     "IngestResult",
     "KubeClient",
+    "Phase",
+    "PhaseStatus",
     "PipelineMonitor",
     "PipelineRunStatus",
     "ReleaseMonitor",
+    "Request",
     "TriggerError",
+    "WorkflowDatabase",
 ]
