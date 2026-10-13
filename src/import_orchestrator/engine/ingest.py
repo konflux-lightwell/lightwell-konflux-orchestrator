@@ -16,10 +16,10 @@ limitations under the License.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
-from import_orchestrator.database import ImportDatabase
+from import_orchestrator.workflow_db import WorkflowDatabase
 
 
 @dataclass(frozen=True)
@@ -36,21 +36,25 @@ class IngestResult:
 
 
 class Ingest:
-    """Ingests items from external sources into the import database.
+    """Ingests items from external sources into the workflow database as Requests.
 
-    Handles deduplication and provides counts of what was ingested.
-    This is the single entry point for getting items into
-    the system, regardless of the data source.
+    Each ref is mapped to a Request's identifying fields by the injected
+    ``build_identity`` callable (an ecosystem's ``request_identity``), so the
+    ingest logic stays ecosystem-neutral. Deduplication is handled by the
+    Request fingerprint (re-ingesting the same artifact for the same target is a
+    no-op). This is the single entry point for getting work into the system,
+    regardless of the data source.
     """
 
-    def __init__(self, db: ImportDatabase):
+    def __init__(self, db: WorkflowDatabase, build_identity: Callable[[str], dict[str, str]]):
         self.db = db
+        self.build_identity = build_identity
 
     def from_lines(self, lines: Iterable[str]) -> IngestResult:
         """Ingest OCI references from an iterable of strings.
 
         Blank lines and comment lines (starting with #) are skipped.
-        Duplicates already in the database are silently ignored.
+        Artifacts already present (same Request fingerprint) are silently ignored.
 
         Args:
             lines: An iterable of strings, each potentially containing an OCI reference.
@@ -62,7 +66,7 @@ class Ingest:
 
         newly_added = 0
         for ref in valid_refs:
-            _, was_inserted = self.db.add_item(ref)
+            _, was_inserted = self.db.get_or_create_request(**self.build_identity(ref))
             if was_inserted:
                 newly_added += 1
 

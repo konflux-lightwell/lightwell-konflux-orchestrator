@@ -17,58 +17,69 @@ limitations under the License.
 from __future__ import annotations
 
 import sys
-from datetime import datetime
 
 from import_orchestrator.clients import KubeClient
-from import_orchestrator.database import ImportDatabase
-from import_orchestrator.models import ImportStatus
+from import_orchestrator.engine.workflow_view import WorkflowView
+from import_orchestrator.models import Phase, PhaseStatus
 from import_orchestrator.utils import extract_tag
 
 
 class PipelineMonitor:
-    """Monitors PipelineRun status and updates the database accordingly.
+    """Monitors intake PipelineRun status and advances the intake phase.
 
-    Polls Kubernetes for PipelineRun statuses and manages the
-    TRIGGERED -> RUNNING -> AWAITING_RELEASE/FAILED transitions.
+    Polls Kubernetes for the intake PipelineRun of each Request's latest Attempt
+    and advances its intake :class:`AttemptPhase` RUNNING -> SUCCESS/FAILED. When
+    the run succeeds, the release monitor takes over (via the snapshot phase);
+    when ``skip_release`` is set the successful intake is the terminal state and
+    nothing further happens.
     """
 
-    def __init__(self, db: ImportDatabase, kube: KubeClient, skip_release: bool = False):
-        self.db = db
+    def __init__(self, view: WorkflowView, kube: KubeClient):
+        self.view = view
+        self.db = view.db
         self.kube = kube
-        self.skip_release = skip_release
+        self.skip_release = view.skip_release
 
     def update_statuses(self) -> None:
-        """Check status of all triggered/running imports and update the database."""
-        to_check = self.db.get_by_status(ImportStatus.TRIGGERED) + self.db.get_by_status(ImportStatus.RUNNING)
-
-        for item in to_check:
-            if not item.pipelinerun_name or item.id is None:
+        """Check the intake PipelineRun of every in-progress Request and update it."""
+        for request in self.db.list_requests():
+            assert request.id is not None
+            intake = self.db.latest_phase_map(request.id).get(Phase.INTAKE)
+            if intake is None or intake.attempt_id is None:
+                continue
+            if intake.status not in (PhaseStatus.PENDING, PhaseStatus.RUNNING):
+                continue
+            if intake.reference_id is None:
                 continue
 
-            pr_status = self.kube.get_pipelinerun_status(item.pipelinerun_name)
-
+            pr_status = self.kube.get_pipelinerun_status(intake.reference_id)
             if pr_status is None:
                 continue
 
-            tag = extract_tag(item.ref)
+            tag = extract_tag(request.artifact)
 
             if pr_status.is_running:
-                if item.status == ImportStatus.TRIGGERED:
-                    self.db.update_status(item.id, ImportStatus.RUNNING)
-                    print(f"  Running: {tag}", file=sys.stderr)
+                continue  # still in flight; intake already recorded RUNNING
             elif pr_status.is_successful:
+                self.db.upsert_phase(
+                    intake.attempt_id,
+                    Phase.INTAKE,
+                    PhaseStatus.SUCCESS,
+                    reference_type=intake.reference_type,
+                    reference_id=intake.reference_id,
+                )
                 if self.skip_release:
-                    self.db.update_status(item.id, ImportStatus.SUCCESS, completed_at=datetime.now())
                     print(f"  ✓ Build done (scratch, no release): {tag}", file=sys.stderr)
                 else:
-                    self.db.update_status(item.id, ImportStatus.AWAITING_RELEASE)
                     print(f"  Pipeline done, awaiting release: {tag}", file=sys.stderr)
             elif pr_status.is_failed:
-                detail = self.kube.get_pipelinerun_failure_detail(item.pipelinerun_name)
-                self.db.update_status(
-                    item.id,
-                    ImportStatus.FAILED,
-                    completed_at=datetime.now(),
+                detail = self.kube.get_pipelinerun_failure_detail(intake.reference_id)
+                self.db.upsert_phase(
+                    intake.attempt_id,
+                    Phase.INTAKE,
+                    PhaseStatus.FAILED,
+                    reference_type=intake.reference_type,
+                    reference_id=intake.reference_id,
                     error_message=detail or "PipelineRun failed",
                 )
                 print(f"  ✗ Failed: {tag}", file=sys.stderr)

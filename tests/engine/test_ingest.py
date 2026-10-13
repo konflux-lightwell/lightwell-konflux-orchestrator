@@ -18,23 +18,36 @@ from pathlib import Path
 
 import pytest
 
-from import_orchestrator.database import ImportDatabase
 from import_orchestrator.ecosystems.java.parser import parse_manifest
 from import_orchestrator.engine import Ingest, IngestResult
+from import_orchestrator.workflow_db import WorkflowDatabase
+
+
+def _identity(ref: str) -> dict[str, str]:
+    """Map a ref to the seven Request fingerprint fields (one per artifact)."""
+    return {
+        "namespace": "ns",
+        "application": "app",
+        "component": "comp",
+        "pipeline": "import-pnc",
+        "release_plan": "rp",
+        "target": "remediated",
+        "artifact": ref,
+    }
 
 
 @pytest.fixture
 def db(tmp_path: Path):
-    """Create a temporary database for testing."""
+    """Create a temporary workflow database for testing."""
     db_path = tmp_path / "test.db"
-    with ImportDatabase(db_path) as database:
+    with WorkflowDatabase(db_path) as database:
         yield database
 
 
 @pytest.fixture
-def ingest(db: ImportDatabase):
+def ingest(db: WorkflowDatabase):
     """Create an Ingest instance with a test database."""
-    return Ingest(db)
+    return Ingest(db, build_identity=_identity)
 
 
 class TestIngestResult:
@@ -57,7 +70,7 @@ class TestFromLines:
     """Test the from_lines method."""
 
     def test_ingests_valid_lines(self, ingest: Ingest):
-        """Verify that valid OCI references are ingested from lines."""
+        """Verify that valid OCI references are ingested from lines as Requests."""
         lines = [
             "oci://example.com/foo:tag1",
             "oci://example.com/bar:tag2",
@@ -68,6 +81,7 @@ class TestFromLines:
 
         assert result.total == 3
         assert result.newly_added == 3
+        assert ingest.db.count_requests() == 3
 
     def test_skips_blank_lines(self, ingest: Ingest):
         """Verify that blank lines are ignored."""
@@ -98,8 +112,8 @@ class TestFromLines:
         assert result.newly_added == 2
 
     def test_handles_duplicates(self, ingest: Ingest):
-        """Verify that duplicate references in lines are handled correctly."""
-        ingest.db.add_item("oci://example.com/foo:tag1")
+        """Verify that duplicate references (same fingerprint) are handled correctly."""
+        ingest.db.get_or_create_request(**_identity("oci://example.com/foo:tag1"))
 
         lines = [
             "oci://example.com/foo:tag1",
@@ -131,6 +145,8 @@ class TestFromLines:
 
         assert result.total == 2
         assert result.newly_added == 2
+        artifacts = {r.artifact for r in ingest.db.list_requests()}
+        assert artifacts == {"oci://example.com/foo:tag1", "oci://example.com/bar:tag2"}
 
 
 class TestFromManifest:
@@ -151,7 +167,7 @@ class TestFromManifest:
         assert result.total == 1
         assert result.newly_added == 1
 
-    def test_combined_ref_format(self, ingest: Ingest, tmp_path: Path, db: ImportDatabase):
+    def test_combined_ref_format(self, ingest: Ingest, tmp_path: Path, db: WorkflowDatabase):
         manifest = tmp_path / "manifest.yaml"
         manifest.write_text(
             "libraries:\n"
@@ -163,13 +179,11 @@ class TestFromManifest:
 
         ingest.from_lines(parse_manifest(manifest))
 
-        from import_orchestrator.models import ImportStatus
+        requests = db.list_requests()
+        assert len(requests) == 1
+        assert requests[0].artifact == "quay.io/ns/repo:build-100@sha256:abcdef"
 
-        pending = db.get_by_status(ImportStatus.PENDING)
-        assert len(pending) == 1
-        assert pending[0].ref == "quay.io/ns/repo:build-100@sha256:abcdef"
-
-    def test_digest_only(self, ingest: Ingest, tmp_path: Path, db: ImportDatabase):
+    def test_digest_only(self, ingest: Ingest, tmp_path: Path, db: WorkflowDatabase):
         manifest = tmp_path / "manifest.yaml"
         manifest.write_text(
             'libraries:\n  - output:\n      artifact:\n        digest: "quay.io/ns/repo@sha256:abcdef"\n'
@@ -179,13 +193,9 @@ class TestFromManifest:
 
         assert result.total == 1
         assert result.newly_added == 1
+        assert db.list_requests()[0].artifact == "quay.io/ns/repo@sha256:abcdef"
 
-        from import_orchestrator.models import ImportStatus
-
-        pending = db.get_by_status(ImportStatus.PENDING)
-        assert pending[0].ref == "quay.io/ns/repo@sha256:abcdef"
-
-    def test_tag_only(self, ingest: Ingest, tmp_path: Path, db: ImportDatabase):
+    def test_tag_only(self, ingest: Ingest, tmp_path: Path, db: WorkflowDatabase):
         manifest = tmp_path / "manifest.yaml"
         manifest.write_text('libraries:\n  - output:\n      artifact:\n        tag: "quay.io/ns/repo:build-100"\n')
 
@@ -193,11 +203,7 @@ class TestFromManifest:
 
         assert result.total == 1
         assert result.newly_added == 1
-
-        from import_orchestrator.models import ImportStatus
-
-        pending = db.get_by_status(ImportStatus.PENDING)
-        assert pending[0].ref == "quay.io/ns/repo:build-100"
+        assert db.list_requests()[0].artifact == "quay.io/ns/repo:build-100"
 
     def test_skips_entries_with_no_tag_or_digest(self, ingest: Ingest, tmp_path: Path):
         manifest = tmp_path / "manifest.yaml"
@@ -249,7 +255,7 @@ class TestFromManifest:
         assert result.newly_added == 3
 
     def test_handles_duplicates(self, ingest: Ingest, tmp_path: Path):
-        ingest.db.add_item("quay.io/ns/repo:build-1@sha256:aaa")
+        ingest.db.get_or_create_request(**_identity("quay.io/ns/repo:build-1@sha256:aaa"))
 
         manifest = tmp_path / "manifest.yaml"
         manifest.write_text(

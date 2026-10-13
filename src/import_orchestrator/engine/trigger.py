@@ -18,50 +18,41 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Callable
-from datetime import datetime
 
 from import_orchestrator.clients.kube import KubeClient
-from import_orchestrator.database import ImportDatabase
 from import_orchestrator.engine.errors import TriggerError
-from import_orchestrator.models import ImportItem, ImportStatus
+from import_orchestrator.engine.workflow_view import WorkflowView
+from import_orchestrator.models import Attempt, ClusterResource, Phase, PhaseStatus, Request
 from import_orchestrator.utils import extract_tag
 
 
 class ImportTrigger:
-    """Triggers PNC import PipelineRuns and manages the PENDING -> TRIGGERED transition.
+    """Starts Attempts and submits intake PipelineRuns.
 
-    The manifest for each import is built by the injected `build_pipelinerun` callable,
-    which maps a ref string to a PipelineRun dict, so the trigger logic is ecosystem-neutral.
+    For a Request with no prior Attempt this opens a fresh Attempt; for a failed
+    Request being retried it opens a new Attempt that carries forward the phases
+    that already succeeded (see :meth:`_open_attempt`). If that carried-over
+    state already includes a successful intake, no new PipelineRun is submitted --
+    the Request resumes from where it failed and the release monitor takes over.
+    Otherwise an intake PipelineRun is built (by the injected ``build_pipelinerun``
+    callable) and the intake phase is recorded RUNNING with the PipelineRun as its
+    reference.
     """
 
     def __init__(
         self,
-        db: ImportDatabase,
+        view: WorkflowView,
         kube: KubeClient,
         build_pipelinerun: Callable[[str], dict],
         max_parallel: int,
         max_retries: int,
     ):
-        self.db = db
+        self.view = view
+        self.db = view.db
         self.kube = kube
         self.build_pipelinerun = build_pipelinerun
         self.max_parallel = max_parallel
         self.max_retries = max_retries
-
-    def trigger_import(self, item: ImportItem) -> str | None:
-        """Build and submit a PipelineRun for the given import item.
-
-        Returns:
-            The generated PipelineRun name.
-
-        Raises:
-            TriggerError: If the manifest build or PipelineRun creation fails.
-        """
-        manifest = self.build_pipelinerun(item.ref)
-        pr_name = self.kube.create_pipelinerun(manifest)
-        if pr_name is None:
-            raise TriggerError("PipelineRun creation failed (API returned no name)")
-        return pr_name
 
     def trigger_next_batch(self) -> int:
         """Trigger imports up to the max_parallel limit, counting all in-flight stages.
@@ -69,69 +60,91 @@ class ImportTrigger:
         Returns:
             The number of imports successfully triggered.
         """
-        in_flight = self.db.count_in_flight()
-        available_slots = max(0, self.max_parallel - in_flight)
-
+        available_slots = max(0, self.max_parallel - self.view.in_flight_count())
         if available_slots == 0:
             return 0
 
-        pending = self.db.get_by_status(ImportStatus.PENDING)
-        retry_candidates = self.db.get_retry_candidates(self.max_retries)
-        candidates = (pending + retry_candidates)[:available_slots]
+        candidates = (self.view.pending() + self.view.retry_candidates(self.max_retries))[:available_slots]
 
         triggered = 0
-        for item in candidates:
-            if item.id is None:
+        for request in candidates:
+            if request.id is None:
                 continue
-            triggered += self._trigger_single_import(item)
+            triggered += self._trigger_single(request)
 
         return triggered
 
-    def _trigger_single_import(self, item: ImportItem) -> int:
-        """Attempt to trigger a single import. Returns 1 on success, 0 on failure."""
-        assert item.id is not None
+    def _trigger_single(self, request: Request) -> int:
+        """Attempt to trigger (or resume) a single Request. Returns 1 if an intake
+        PipelineRun was submitted, 0 otherwise (resume or failure).
 
-        tag = extract_tag(item.ref)  # used only for log messages
+        The intake phase is recorded (RUNNING or FAILED) before this returns on
+        the expected paths, so an Attempt is not left phase-less: an expected
+        build/submit failure (``TriggerError``) is caught and recorded as a
+        failed intake, which keeps one such failure from aborting the whole batch
+        and keeps the Request retriable rather than wedged in a phase-less PENDING
+        state. Any other (unexpected) exception propagates so genuine programming
+        errors surface immediately instead of being retried every poll.
+        """
+        assert request.id is not None
+        tag = extract_tag(request.artifact)  # used only for log messages
 
-        try:
-            pr_name = self.trigger_import(item)
-            new_retry_count = item.retry_count + 1 if item.status == ImportStatus.FAILED else 0
+        attempt = self._open_attempt(request.id)
+        assert attempt.id is not None
 
-            self.db.update_status(
-                item.id,
-                ImportStatus.TRIGGERED,
-                pipelinerun_name=pr_name,
-                snapshot_name="",  # clear cached snapshot/release from a prior attempt
-                release_name="",
-                triggered_at=datetime.now(),
-                retry_count=new_retry_count,
-            )
-
-            retry_indicator = f" (retry {new_retry_count})" if new_retry_count > 0 else ""
-            print(f"  Triggered: {tag}{retry_indicator}", file=sys.stderr)
-            return 1
-
-        except TriggerError as e:
-            self._handle_trigger_failure(item, tag, str(e))
+        # A retry may have carried forward a successful intake; if so, resume from
+        # the later phase rather than re-running the build.
+        intake = self.db.get_phase(attempt.id, Phase.INTAKE)
+        if intake is not None and intake.status == PhaseStatus.SUCCESS:
+            print(f"  Resuming past intake: {tag}", file=sys.stderr)
             return 0
 
-    def _handle_trigger_failure(
-        self,
-        item: ImportItem,
-        tag: str,
-        error_msg: str,
-    ) -> None:
-        """Record a trigger failure in the database with appropriate retry semantics."""
-        assert item.id is not None
+        try:
+            manifest = self.build_pipelinerun(request.artifact)
+            pr_name = self.kube.create_pipelinerun(manifest)
+            if pr_name is None:
+                raise TriggerError("PipelineRun creation failed (API returned no name)")
+        except TriggerError as e:  # an expected build/submit failure leaves a recorded, retriable FAILED intake
+            self.db.upsert_phase(
+                attempt.id,
+                Phase.INTAKE,
+                PhaseStatus.FAILED,
+                error_message=f"PipelineRun trigger failed: {e}",
+            )
+            print(f"  ERROR: Failed to trigger {tag}: {str(e)[:100]}", file=sys.stderr)
+            return 0
 
-        self.db.update_status(
-            item.id,
-            ImportStatus.FAILED,
-            error_message=f"PipelineRun trigger failed: {error_msg}",
-            retry_count=item.retry_count + 1,
+        self.db.upsert_phase(
+            attempt.id,
+            Phase.INTAKE,
+            PhaseStatus.RUNNING,
+            reference_type=ClusterResource.PIPELINE_RUN,
+            reference_id=pr_name,
         )
+        attempts = self.db.attempt_count(request.id)
+        retry_indicator = f" (attempt {attempts})" if attempts > 1 else ""
+        print(f"  Triggered: {tag}{retry_indicator}", file=sys.stderr)
+        return 1
 
-        print(
-            f"  ERROR: Failed to trigger {tag}: {error_msg[:100]}",
-            file=sys.stderr,
-        )
+    def _open_attempt(self, request_id: int) -> Attempt:
+        """Open the Attempt to record this trigger against.
+
+        - No Attempt yet: start a fresh one.
+        - A latest Attempt exists but has no intake phase (e.g. a crash between
+          creating the Attempt and recording its intake): reuse it, so recovery
+          re-submits into the same Attempt instead of stacking another phase-less
+          one.
+        - Otherwise (the latest Attempt's intake already settled): start a retry
+          Attempt carrying forward the settled phases. Deciding *which* phases
+          carry forward is the caller's job (the store only persists them): the
+          retry seeds the new Attempt with the previous attempt's phases that
+          carry forward (see :attr:`PhaseStatus.carries_forward`), so a completed
+          phase is not re-run and history is never overwritten.
+        """
+        latest = self.db.latest_attempt(request_id)
+        if latest is None or latest.id is None:
+            return self.db.create_attempt(request_id)
+        if self.db.get_phase(latest.id, Phase.INTAKE) is None:
+            return latest
+        carried = [phase for phase in self.db.list_phases(latest.id) if phase.status.carries_forward]
+        return self.db.create_attempt(request_id, initial_phases=carried)

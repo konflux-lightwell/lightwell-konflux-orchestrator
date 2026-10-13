@@ -19,11 +19,11 @@ from __future__ import annotations
 import sys
 import time
 
-from import_orchestrator.database import ImportDatabase
 from import_orchestrator.engine.pipeline import PipelineMonitor
 from import_orchestrator.engine.release import ReleaseMonitor
 from import_orchestrator.engine.trigger import ImportTrigger
-from import_orchestrator.models import ImportStatus
+from import_orchestrator.engine.workflow_view import WorkflowView
+from import_orchestrator.models import WorkflowState
 
 
 class ImportOrchestrator:
@@ -31,18 +31,20 @@ class ImportOrchestrator:
 
     This is a thin coordinator that manages the polling loop and delegates
     to ImportTrigger, PipelineMonitor, and ReleaseMonitor for the actual work.
+    Completion and statistics are derived from each Request's latest Attempt via
+    the shared :class:`WorkflowView`.
     """
 
     def __init__(
         self,
-        db: ImportDatabase,
+        view: WorkflowView,
         trigger: ImportTrigger,
         pipeline_monitor: PipelineMonitor,
         release_monitor: ReleaseMonitor,
         poll_interval: int,
         max_retries: int,
     ):
-        self.db = db
+        self.view = view
         self.poll_interval = poll_interval
         self.max_retries = max_retries
         self._trigger = trigger
@@ -50,11 +52,11 @@ class ImportOrchestrator:
         self._release_monitor = release_monitor
 
     def update_pipelinerun_statuses(self) -> None:
-        """Check status of all triggered/running imports and update the database."""
+        """Check status of all in-progress intake PipelineRuns and update phases."""
         self._pipeline_monitor.update_statuses()
 
     def update_release_statuses(self) -> None:
-        """For AWAITING_RELEASE imports, find the Release and check its status."""
+        """For Requests past intake, discover snapshots and track releases."""
         self._release_monitor.update_statuses()
 
     def trigger_next_batch(self) -> int:
@@ -66,26 +68,17 @@ class ImportOrchestrator:
         return self._trigger.trigger_next_batch()
 
     def is_complete(self) -> bool:
-        """Check if all imports are either successful or permanently failed."""
-        stats = self.db.get_statistics()
-        incomplete = (
-            stats.get(ImportStatus.PENDING.value, 0)
-            + stats.get(ImportStatus.TRIGGERED.value, 0)
-            + stats.get(ImportStatus.RUNNING.value, 0)
-            + stats.get(ImportStatus.AWAITING_RELEASE.value, 0)
-        )
-        retryable = len(self.db.get_retry_candidates(self.max_retries))
-        return incomplete == 0 and retryable == 0
+        """Check if all requests are either successful or permanently failed."""
+        return self.view.is_complete(self.max_retries)
 
     def _print_statistics(self, stats: dict[str, int]) -> None:
-        """Print current import statistics to stderr."""
+        """Print current statistics to stderr."""
         print(
-            f"Status: pending={stats[ImportStatus.PENDING.value]}, "
-            f"triggered={stats[ImportStatus.TRIGGERED.value]}, "
-            f"running={stats[ImportStatus.RUNNING.value]}, "
-            f"releasing={stats[ImportStatus.AWAITING_RELEASE.value]}, "
-            f"success={stats[ImportStatus.SUCCESS.value]}, "
-            f"failed={stats[ImportStatus.FAILED.value]}",
+            f"Status: pending={stats[WorkflowState.PENDING.value]}, "
+            f"running={stats[WorkflowState.RUNNING.value]}, "
+            f"releasing={stats[WorkflowState.AWAITING_RELEASE.value]}, "
+            f"success={stats[WorkflowState.SUCCESS.value]}, "
+            f"failed={stats[WorkflowState.FAILED.value]}",
             file=sys.stderr,
         )
 
@@ -108,14 +101,14 @@ class ImportOrchestrator:
             if triggered > 0:
                 print(f"Triggered {triggered} new import(s)", file=sys.stderr)
 
-            self._print_statistics(self.db.get_statistics())
+            self._print_statistics(self.view.statistics())
 
             if not self.is_complete():
                 print(f"Sleeping {self.poll_interval}s...", file=sys.stderr)
                 time.sleep(self.poll_interval)
 
-        final_stats = self.db.get_statistics()
+        final_stats = self.view.statistics()
         print("\n=== Complete ===", file=sys.stderr)
         self._print_statistics(final_stats)
 
-        return 0 if final_stats.get(ImportStatus.FAILED.value, 0) == 0 else 1
+        return 0 if final_stats.get(WorkflowState.FAILED.value, 0) == 0 else 1
