@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 
+from import_orchestrator.ecosystems.base import build_request_identity
 from import_orchestrator.ecosystems.python import config
 from import_orchestrator.ecosystems.python.pipelinerun import build_pipelinerun_manifest, parse_ref
 from import_orchestrator.engine.pipeline_loader import apply_pipeline_overrides, load_pipeline
@@ -56,6 +57,19 @@ class PythonEcosystem:
             wheel_server_url=getattr(args, "wheel_server_url", None),
         )
         return apply_pipeline_overrides(manifest, pipeline_path)
+
+    def request_identity(self, ref: str, args: argparse.Namespace) -> dict[str, str]:
+        target = getattr(args, "target", config.DEFAULT_TARGET)
+        cfg = config.TARGET_CONFIGS[target]
+        return build_request_identity(
+            namespace=self.namespace,
+            application=cfg["app"],
+            component=cfg["component"],
+            pipeline=self.pipelinerun_prefix,
+            release_plan=getattr(args, "release_plan", "") or "",
+            target=target,
+            artifact=ref,
+        )
 
     def target_skip_release(self, target: str) -> bool:
         return config.TARGET_CONFIGS.get(target, {}).get("skip_release", False)

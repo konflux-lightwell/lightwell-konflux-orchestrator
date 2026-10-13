@@ -133,3 +133,23 @@ class TestTargetSkipRelease:
 
     def test_unknown_target_defaults_to_not_skipping(self):
         assert PythonEcosystem().target_skip_release("UNKNOWN") is False
+
+
+def test_request_identity_defaults_to_remediated_target():
+    identity = PythonEcosystem().request_identity("foolib==0.4.0", argparse.Namespace())
+    assert identity == {
+        "namespace": "lightwell-python-tenant",
+        "application": "remediated-build",
+        "component": "remediated-build",
+        "pipeline": "python-remediated-build",
+        "release_plan": "",
+        "target": "REMEDIATED",
+        "artifact": "foolib==0.4.0",
+    }
+
+
+def test_request_identity_honours_target():
+    identity = PythonEcosystem().request_identity("foolib==0.4.0", argparse.Namespace(target="SCRATCH"))
+    assert identity["application"] == "scratch-build"
+    assert identity["target"] == "SCRATCH"
+    assert identity["artifact"] == "foolib==0.4.0"

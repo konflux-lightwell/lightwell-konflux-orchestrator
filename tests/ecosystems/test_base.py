@@ -26,6 +26,17 @@ class _Dummy:
     def build_pipelinerun(self, ref, args):
         return {"ref": ref}
 
+    def request_identity(self, ref, args):
+        return {
+            "namespace": self.namespace,
+            "application": "dummy-app",
+            "component": "dummy-app",
+            "pipeline": "dummy",
+            "release_plan": "",
+            "target": "stage",
+            "artifact": ref,
+        }
+
     def register_cli(self, subparsers):
         return None
 

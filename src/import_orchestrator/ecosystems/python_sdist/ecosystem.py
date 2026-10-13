@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 
+from import_orchestrator.ecosystems.base import build_request_identity
 from import_orchestrator.ecosystems.python_sdist import config
 from import_orchestrator.ecosystems.python_sdist.pipelinerun import build_pipelinerun_manifest, parse_ref
 from import_orchestrator.engine.pipeline_loader import load_pipeline
@@ -51,6 +52,19 @@ class PythonSdistEcosystem:
             source_registries=source_registries,
             pipeline_git_url=pipeline_git_url,
             pipeline_revision=pipeline_revision,
+        )
+
+    def request_identity(self, ref: str, args: argparse.Namespace) -> dict[str, str]:
+        target = getattr(args, "target", config.DEFAULT_TARGET)
+        cfg = config.TARGET_CONFIGS[target]
+        return build_request_identity(
+            namespace=self.namespace,
+            application=cfg["app"],
+            component=cfg["component"],
+            pipeline=self.pipelinerun_prefix,
+            release_plan=getattr(args, "release_plan", "") or "",
+            target=target,
+            artifact=ref,
         )
 
     def target_skip_release(self, target: str) -> bool:

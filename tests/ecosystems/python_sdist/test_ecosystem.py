@@ -85,3 +85,18 @@ def test_build_pipelinerun_default_target_uses_mirror_app(monkeypatch, tmp_path)
 
     labels = manifest["metadata"]["labels"]
     assert labels["appstudio.openshift.io/application"] == "python-sdist-mirror"
+
+
+def test_request_identity_defaults_to_mirror_target():
+    from import_orchestrator.ecosystems.python_sdist.ecosystem import PythonSdistEcosystem
+
+    identity = PythonSdistEcosystem().request_identity("foolib==0.4.0", argparse.Namespace())
+    assert identity == {
+        "namespace": "lightwell-python-tenant",
+        "application": "python-sdist-mirror",
+        "component": "python-sdist-mirror",
+        "pipeline": "python-sdist-ingest",
+        "release_plan": "",
+        "target": "MIRROR",
+        "artifact": "foolib==0.4.0",
+    }

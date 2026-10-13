@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 
 from import_orchestrator.constants import NAMESPACE
+from import_orchestrator.ecosystems.base import build_request_identity
 from import_orchestrator.ecosystems.java import config
 from import_orchestrator.ecosystems.java.pipelinerun import (
     build_pipelinerun_manifest,
@@ -57,6 +58,19 @@ class JavaEcosystem:
             namespace=self.namespace,
         )
         return apply_pipeline_overrides(manifest, pipeline_path)
+
+    def request_identity(self, ref: str, args: argparse.Namespace) -> dict[str, str]:
+        artifact_type = getattr(args, "artifact_type", "STAGE")
+        cfg = config.ARTIFACT_CONFIGS[artifact_type]
+        return build_request_identity(
+            namespace=self.namespace,
+            application=cfg["app"],
+            component=cfg["app"],
+            pipeline=self.pipelinerun_prefix,
+            release_plan=getattr(args, "release_plan", "") or "",
+            target=artifact_type.lower(),
+            artifact=ref,
+        )
 
     def register_cli(self, subparsers: argparse._SubParsersAction) -> None:
         from import_orchestrator.commands import import_file

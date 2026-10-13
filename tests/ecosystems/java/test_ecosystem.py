@@ -102,6 +102,19 @@ def test_java_namespace():
     assert JavaEcosystem().namespace == "lightwell-poc-tenant"
 
 
+def test_request_identity_leaves_release_plan_empty():
+    identity = JavaEcosystem().request_identity("quay.io/repo:lw-ABC@sha256:deadbeef", _args("STAGE"))
+    assert identity == {
+        "namespace": "lightwell-poc-tenant",
+        "application": "pnc-import-stage",
+        "component": "pnc-import-stage",
+        "pipeline": "pnc-import",
+        "release_plan": "",
+        "target": "stage",
+        "artifact": "quay.io/repo:lw-ABC@sha256:deadbeef",
+    }
+
+
 def test_build_pipelinerun_uses_ecosystem_namespace(monkeypatch, tmp_path):
     pipeline_file = tmp_path / "tekton" / "pipelines" / "pnc-import" / "pnc-import.yaml"
     pipeline_file.parent.mkdir(parents=True)

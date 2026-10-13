@@ -25,6 +25,36 @@ DEFAULT_PIPELINERUN_ANNOTATIONS: dict[str, str] = {
 }
 
 
+def build_request_identity(
+    *,
+    namespace: str,
+    application: str,
+    component: str,
+    pipeline: str,
+    target: str,
+    artifact: str,
+    release_plan: str = "",
+) -> dict[str, str]:
+    """Assemble the ADR-0001 Request fingerprint from its resolved fields.
+
+    The fingerprint *rule* -- which seven fields identify a Request and how they
+    are normalized (``pipeline`` stripped of its trailing ``-``, ``release_plan``
+    coerced to an empty string when unknown) -- is the same for every ecosystem;
+    only the field *values* are ecosystem-specific. Centralized here so ecosystems
+    supply values, not rules. The returned dict is passed straight to
+    ``WorkflowDatabase.get_or_create_request``.
+    """
+    return {
+        "namespace": namespace,
+        "application": application,
+        "component": component,
+        "pipeline": pipeline.rstrip("-"),
+        "release_plan": release_plan or "",
+        "target": target,
+        "artifact": artifact,
+    }
+
+
 @runtime_checkable
 class Ecosystem(Protocol):
     """Contract each ecosystem implements so the generic core can run its pipeline.
@@ -41,6 +71,19 @@ class Ecosystem(Protocol):
 
     def build_pipelinerun(self, ref: str, args: argparse.Namespace) -> dict:
         """Build a PipelineRun manifest dict for one import item (by its ref)."""
+        ...
+
+    def request_identity(self, ref: str, args: argparse.Namespace) -> dict[str, str]:
+        """Return the identifying fields of the Request for a ref (ADR-0001).
+
+        Maps a ref plus the invocation args to the seven fingerprint fields a
+        ``Request`` is created from: ``namespace``, ``application``, ``component``,
+        ``pipeline``, ``release_plan``, ``target`` and ``artifact``. Fields not
+        known at ingest (notably ``release_plan`` for ecosystems that discover the
+        ReleasePlan from the snapshot) are returned as the empty string. This is
+        the precursor to the ADR "recipes"; the returned dict is passed straight
+        to ``WorkflowDatabase.get_or_create_request``.
+        """
         ...
 
     def register_cli(self, subparsers: argparse._SubParsersAction) -> None:
