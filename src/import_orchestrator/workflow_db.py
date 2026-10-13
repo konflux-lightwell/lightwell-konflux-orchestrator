@@ -17,6 +17,7 @@ limitations under the License.
 from __future__ import annotations
 
 import sqlite3
+import sys
 from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
@@ -54,19 +55,33 @@ class WorkflowDatabase:
     def __init__(self, db_path: Path):
         self.db_path = db_path
         self.conn: sqlite3.Connection | None = None
+        self._legacy_item_count: int | None = None
 
     def __enter__(self) -> WorkflowDatabase:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(str(self.db_path))
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
-        self.legacy_item_count = self._count_legacy_items()
         self._initialize_schema()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self.conn:
             self.conn.close()
+
+    @property
+    def legacy_item_count(self) -> int:
+        """Row count of the legacy flat ``import_items`` table, queried on first
+        access and cached.
+
+        Computed lazily rather than in :meth:`__enter__` so a normal open pays
+        nothing; only the legacy-database warning path (and its tests) ever reads
+        it. The legacy table is never written by this class, so the count is stable
+        for the lifetime of the connection and safe to cache.
+        """
+        if self._legacy_item_count is None:
+            self._legacy_item_count = self._count_legacy_items()
+        return self._legacy_item_count
 
     def _count_legacy_items(self) -> int:
         """Return the row count of the legacy flat ``import_items`` table.
@@ -464,3 +479,28 @@ class WorkflowDatabase:
             return datetime.fromisoformat(value)
         except (ValueError, TypeError):
             return None
+
+
+def warn_if_legacy_database(db: WorkflowDatabase) -> bool:
+    """Warn when opening a state database written by the pre-cutover flat model.
+
+    The Request/Attempt/AttemptPhase schema (ADR-0001 / LWLP-2510) replaced the
+    flat ``import_items`` table. There is no migration: the new tables start empty,
+    so any in-flight state from the old schema cannot be resumed and the run will
+    re-import from scratch. Rather than silently drop that state, warn the user and
+    point them at ``--reset`` or a fresh ``--db``.
+
+    Returns:
+        True if a non-empty legacy table was detected (and a warning printed).
+    """
+    if db.legacy_item_count <= 0:
+        return False
+
+    print(
+        f"WARNING: {db.db_path} was written by an older version and holds "
+        f"{db.legacy_item_count} legacy import item(s) that cannot be resumed under the "
+        "new workflow model. Those items will be ignored and re-imported from scratch. "
+        "Pass --reset to start clean, or point --db at a new file to silence this warning.",
+        file=sys.stderr,
+    )
+    return True

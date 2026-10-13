@@ -20,45 +20,87 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from import_orchestrator.commands.run import run_single
-from import_orchestrator.database import ImportDatabase
 from import_orchestrator.engine import ImportOrchestrator, PipelineMonitor
-from import_orchestrator.models import ImportStatus
+from import_orchestrator.models import ClusterResource, Phase, PhaseStatus
+from import_orchestrator.workflow_db import WorkflowDatabase
 
 _REF = "ntplib==0.4.0"
 
 
-def _args(**overrides):
+def _identity(ref: str, args) -> dict:
+    return {
+        "namespace": "lightwell-tenant",
+        "application": "app",
+        "component": "comp",
+        "pipeline": "p",
+        "release_plan": "",
+        "target": "remediated",
+        "artifact": ref,
+    }
+
+
+def _make_eco(**overrides):
     eco = MagicMock()
     eco.namespace = "lightwell-tenant"
     eco.pipelinerun_prefix = "prefix"
     eco.build_pipelinerun.return_value = {"kind": "PipelineRun"}
-    base = dict(ecosystem=eco, max_retries=3, poll_interval=30, db_explicit=False, db=None, output_json=None)
+    eco.request_identity.side_effect = _identity
+    for key, value in overrides.items():
+        setattr(eco, key, value)
+    return eco
+
+
+def _args(**overrides):
+    eco = overrides.pop("ecosystem", None) or _make_eco()
+    base = dict(ecosystem=eco, max_retries=3, poll_interval=0, db_explicit=False, db=None, output_json=None)
     base.update(overrides)
     return argparse.Namespace(**base)
 
 
-def _item_count(db_path: Path) -> int:
-    with ImportDatabase(db_path) as db:
-        return sum(db.get_statistics().values())
+def _request_count(db_path: Path) -> int:
+    with WorkflowDatabase(db_path) as db:
+        return db.count_requests()
 
 
-def _make_success(**fields):
-    """Return a fake run_until_complete that marks the seeded ref SUCCESS."""
+def _record_phases(
+    db: WorkflowDatabase, status: PhaseStatus, *, pipelinerun=None, snapshot=None, release=None, error=None
+):
+    """Record the latest attempt's phases for the single seeded request."""
+    request = db.list_requests()[0]
+    attempt = db.latest_attempt(request.id) or db.create_attempt(request.id)
+    if pipelinerun:
+        db.upsert_phase(
+            attempt.id, Phase.INTAKE, status, ClusterResource.PIPELINE_RUN, pipelinerun, error_message=error
+        )
+    else:
+        db.upsert_phase(attempt.id, Phase.INTAKE, status, error_message=error)
+    if snapshot:
+        db.upsert_phase(attempt.id, Phase.SNAPSHOT, PhaseStatus.SUCCESS, ClusterResource.SNAPSHOT, snapshot)
+    if release:
+        db.upsert_phase(attempt.id, Phase.RELEASE, PhaseStatus.SUCCESS, ClusterResource.RELEASE, release)
+
+
+def _make_success(pipelinerun_name=None, snapshot_name=None, release_name=None):
+    """Return a fake run_until_complete that marks the seeded ref's phases SUCCESS."""
 
     def fake_run(self):
-        item = self.db.get_by_ref(_REF)
-        self.db.update_status(item.id, ImportStatus.SUCCESS, **fields)
+        _record_phases(
+            self.view.db,
+            PhaseStatus.SUCCESS,
+            pipelinerun=pipelinerun_name,
+            snapshot=snapshot_name,
+            release=release_name,
+        )
         return 0
 
     return fake_run
 
 
 def _make_failure(error_message):
-    """Return a fake run_until_complete that marks the seeded ref FAILED."""
+    """Return a fake run_until_complete that marks the seeded ref's intake FAILED."""
 
     def fake_run(self):
-        item = self.db.get_by_ref(_REF)
-        self.db.update_status(item.id, ImportStatus.FAILED, error_message=error_message)
+        _record_phases(self.view.db, PhaseStatus.FAILED, pipelinerun="pr-x", error=error_message)
         return 1
 
     return fake_run
@@ -73,17 +115,17 @@ class TestEphemeralDatabase:
 
         def fake_run(self):
             # Capture DB state mid-run, before the ephemeral dir is removed.
-            captured["items"] = sum(self.db.get_statistics().values())
+            captured["requests"] = self.view.db.count_requests()
             return 0
 
         with (
             patch("import_orchestrator.commands.run.KubeClient"),
             patch.object(ImportOrchestrator, "run_until_complete", fake_run),
         ):
-            rc = run_single(_args(), "ntplib==0.4.0")
+            rc = run_single(_args(), _REF)
 
         assert rc == 0
-        assert captured["items"] == 1  # exactly the one seeded ref
+        assert captured["requests"] == 1  # exactly the one seeded ref
         assert not eph_dir.exists()  # ephemeral DB removed afterward
 
     def test_exit_code_propagates(self, tmp_path, monkeypatch):
@@ -92,7 +134,7 @@ class TestEphemeralDatabase:
             patch("import_orchestrator.commands.run.KubeClient"),
             patch.object(ImportOrchestrator, "run_until_complete", lambda self: 1),
         ):
-            rc = run_single(_args(), "ntplib==0.4.0")
+            rc = run_single(_args(), _REF)
         assert rc == 1
 
 
@@ -104,11 +146,11 @@ class TestPersistentDatabase:
             patch("import_orchestrator.commands.run.KubeClient"),
             patch.object(ImportOrchestrator, "run_until_complete", lambda self: 0),
         ):
-            rc = run_single(_args(db_explicit=True, db=db_path), "ntplib==0.4.0")
+            rc = run_single(_args(db_explicit=True, db=db_path), _REF)
 
         assert rc == 0
         assert db_path.exists()  # persistent DB is not deleted
-        assert _item_count(db_path) == 1  # the single ref was seeded
+        assert _request_count(db_path) == 1  # the single ref was seeded
 
     def test_resume_dedups_existing_ref(self, tmp_path):
         db_path = tmp_path / "ct-123.db"
@@ -118,9 +160,9 @@ class TestPersistentDatabase:
                 patch("import_orchestrator.commands.run.KubeClient"),
                 patch.object(ImportOrchestrator, "run_until_complete", lambda self: 0),
             ):
-                run_single(_args(db_explicit=True, db=db_path), "ntplib==0.4.0")
+                run_single(_args(db_explicit=True, db=db_path), _REF)
 
-        assert _item_count(db_path) == 1  # second run does not duplicate the ref
+        assert _request_count(db_path) == 1  # second run does not duplicate the ref
 
 
 class TestResultPayload:
@@ -193,9 +235,7 @@ class TestResultPayload:
 
     def test_scratch_payload_has_no_release_name(self, tmp_path, monkeypatch, capsys):
         monkeypatch.setattr("tempfile.mkdtemp", lambda *a, **k: str(tmp_path / "eph"))
-        eco = MagicMock()
-        eco.namespace = "lightwell-tenant"
-        eco.pipelinerun_prefix = "prefix"
+        eco = _make_eco()
         eco.target_skip_release.return_value = True
         fake = _make_success(pipelinerun_name="scratch-abc", snapshot_name="snap-xyz")
         with (
@@ -207,19 +247,20 @@ class TestResultPayload:
         assert rc == 0
         payload = json.loads(capsys.readouterr().out)
         assert payload["release_name"] is None
+        assert payload["status"] == "success"
 
 
 class TestSkipRelease:
-    def _captured_pipeline_monitor(self, tmp_path, monkeypatch, args):
-        """Run run_single and return the PipelineMonitor that was constructed."""
+    def _captured_skip_release(self, tmp_path, monkeypatch, args):
+        """Run run_single and return the skip_release flag the PipelineMonitor saw."""
         monkeypatch.setattr("tempfile.mkdtemp", lambda *a, **k: str(tmp_path / "eph"))
         captured = {}
 
         real_init = PipelineMonitor.__init__
 
-        def capturing_init(self, db, kube, skip_release=False):
-            captured["skip_release"] = skip_release
-            real_init(self, db, kube, skip_release=skip_release)
+        def capturing_init(self, view, kube):
+            captured["skip_release"] = view.skip_release
+            real_init(self, view, kube)
 
         with (
             patch("import_orchestrator.commands.run.KubeClient"),
@@ -228,24 +269,17 @@ class TestSkipRelease:
         ):
             run_single(args, _REF)
 
-        return captured
+        return captured["skip_release"]
 
     def test_non_releasing_target_sets_skip_release(self, tmp_path, monkeypatch):
-        eco = MagicMock()
-        eco.namespace = "lightwell-tenant"
-        eco.pipelinerun_prefix = "prefix"
+        eco = _make_eco()
         eco.target_skip_release.return_value = True
-        captured = self._captured_pipeline_monitor(tmp_path, monkeypatch, _args(ecosystem=eco, target="SCRATCH"))
-        assert captured["skip_release"] is True
+        assert self._captured_skip_release(tmp_path, monkeypatch, _args(ecosystem=eco, target="SCRATCH")) is True
 
     def test_releasing_target_does_not_skip_release(self, tmp_path, monkeypatch):
-        eco = MagicMock()
-        eco.namespace = "lightwell-tenant"
-        eco.pipelinerun_prefix = "prefix"
+        eco = _make_eco()
         eco.target_skip_release.return_value = False
-        captured = self._captured_pipeline_monitor(tmp_path, monkeypatch, _args(ecosystem=eco, target="REMEDIATED"))
-        assert captured["skip_release"] is False
+        assert self._captured_skip_release(tmp_path, monkeypatch, _args(ecosystem=eco, target="REMEDIATED")) is False
 
     def test_no_target_does_not_skip_release(self, tmp_path, monkeypatch):
-        captured = self._captured_pipeline_monitor(tmp_path, monkeypatch, _args())
-        assert captured["skip_release"] is False
+        assert self._captured_skip_release(tmp_path, monkeypatch, _args()) is False

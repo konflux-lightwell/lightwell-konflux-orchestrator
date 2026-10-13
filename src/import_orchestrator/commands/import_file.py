@@ -20,9 +20,9 @@ import argparse
 import sys
 from pathlib import Path
 
-from import_orchestrator.database import ImportDatabase
 from import_orchestrator.ecosystems.base import Ecosystem
 from import_orchestrator.engine import Ingest
+from import_orchestrator.workflow_db import WorkflowDatabase, warn_if_legacy_database
 
 
 def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> None:
@@ -50,8 +50,10 @@ def run(args: argparse.Namespace) -> int:
 
     lines = args.file.read_text().splitlines()
 
-    with ImportDatabase(args.db) as db:
-        ingest = Ingest(db)
+    eco = args.ecosystem
+    with WorkflowDatabase(args.db) as db:
+        warn_if_legacy_database(db)
+        ingest = Ingest(db, build_identity=lambda ref: eco.request_identity(ref, args))
         result = ingest.from_lines(lines)
 
     _print_summary(result)

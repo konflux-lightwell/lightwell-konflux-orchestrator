@@ -27,11 +27,16 @@ from import_orchestrator.constants import (
     DEFAULT_POLL_INTERVAL,
     KUBEARCHIVE_API,
 )
-from import_orchestrator.database import ImportDatabase
-from import_orchestrator.engine import ImportOrchestrator, ImportTrigger, PipelineMonitor, ReleaseMonitor
+from import_orchestrator.engine import (
+    ImportOrchestrator,
+    ImportTrigger,
+    PipelineMonitor,
+    ReleaseMonitor,
+    WorkflowView,
+)
 from import_orchestrator.engine.errors import TriggerError
-from import_orchestrator.models import ImportStatus
 from import_orchestrator.release_data import ReleaseDataError, ReleaseDataResolver, application_of
+from import_orchestrator.workflow_db import WorkflowDatabase, warn_if_legacy_database
 
 
 def add_common_orchestrate_args(parser: argparse.ArgumentParser) -> None:
@@ -81,10 +86,9 @@ def add_common_orchestrate_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def _is_database_empty(db: ImportDatabase) -> bool:
-    """Check whether the database has any import references at all."""
-    stats = db.get_statistics()
-    return sum(stats.values()) == 0
+def _is_database_empty(db: WorkflowDatabase) -> bool:
+    """Check whether the database has any requests at all."""
+    return db.count_requests() == 0
 
 
 def run_orchestrate(args: argparse.Namespace, empty_db_warning: str) -> int:
@@ -94,28 +98,32 @@ def run_orchestrate(args: argparse.Namespace, empty_db_warning: str) -> int:
     PipelineRun prefix and manifest builder. ``empty_db_warning`` is the
     ecosystem-specific hint shown when the database has no references yet.
     """
-    with ImportDatabase(args.db) as db:
+    with WorkflowDatabase(args.db) as db:
+        warn_if_legacy_database(db)
+
         if _is_database_empty(db):
             print(f"WARNING: {empty_db_warning}", file=sys.stderr)
 
-        if getattr(args, "print_resources", False):
-            return _run_print_resources(args, db)
-
         eco = args.ecosystem
+        target = getattr(args, "target", None)
+        skip_release = target is not None and getattr(eco, "target_skip_release", lambda t: False)(target)
+        view = WorkflowView(db, skip_release)
+
+        if getattr(args, "print_resources", False):
+            return _run_print_resources(args, view)
+
         kube = KubeClient(eco.namespace, CLUSTER_API, KUBEARCHIVE_API)
 
         trigger = ImportTrigger(
-            db=db,
+            view=view,
             kube=kube,
             build_pipelinerun=lambda ref: eco.build_pipelinerun(ref, args),
             max_parallel=args.max_parallel,
             max_retries=args.max_retries,
         )
-        target = getattr(args, "target", None)
-        skip_release = target is not None and getattr(eco, "target_skip_release", lambda t: False)(target)
-        pipeline_monitor = PipelineMonitor(db=db, kube=kube, skip_release=skip_release)
+        pipeline_monitor = PipelineMonitor(view=view, kube=kube)
         release_monitor = ReleaseMonitor(
-            db=db,
+            view=view,
             kube=kube,
             max_parallel=args.max_parallel,
             prefix=eco.pipelinerun_prefix,
@@ -123,7 +131,7 @@ def run_orchestrate(args: argparse.Namespace, empty_db_warning: str) -> int:
         )
 
         orchestrator = ImportOrchestrator(
-            db=db,
+            view=view,
             trigger=trigger,
             pipeline_monitor=pipeline_monitor,
             release_monitor=release_monitor,
@@ -134,15 +142,15 @@ def run_orchestrate(args: argparse.Namespace, empty_db_warning: str) -> int:
         return orchestrator.run_until_complete()
 
 
-def _run_print_resources(args: argparse.Namespace, db: ImportDatabase) -> int:
+def _run_print_resources(args: argparse.Namespace, view: WorkflowView) -> int:
     """Preview the release chain for every pending reference, without the cluster.
 
-    For each pending item this builds the PipelineRun manifest the trigger would
+    For each pending request this builds the PipelineRun manifest the trigger would
     submit, then resolves its ReleasePlan and ReleasePlanAdmission from a local
     konflux-release-data checkout. Nothing is created and no KubeClient is opened.
     """
     eco = args.ecosystem
-    pending = db.get_by_status(ImportStatus.PENDING)
+    pending = view.pending()
     if not pending:
         print("No pending references to preview.", file=sys.stderr)
         return 0
@@ -153,10 +161,10 @@ def _run_print_resources(args: argparse.Namespace, db: ImportDatabase) -> int:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
 
-    for item in pending:
-        print(f"\n=== {item.ref} ===")
+    for request in pending:
+        print(f"\n=== {request.artifact} ===")
         try:
-            manifest = eco.build_pipelinerun(item.ref, args)
+            manifest = eco.build_pipelinerun(request.artifact, args)
         except TriggerError as exc:
             print(f"  ERROR building PipelineRun: {exc}", file=sys.stderr)
             continue

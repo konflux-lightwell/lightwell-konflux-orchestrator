@@ -26,9 +26,8 @@ from import_orchestrator.constants import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_POLL_INTERVAL,
 )
-from import_orchestrator.database import ImportDatabase
 from import_orchestrator.ecosystems.java import config as java_config
-from import_orchestrator.models import ImportStatus
+from import_orchestrator.workflow_db import WorkflowDatabase
 
 
 class TestParserEcosystem:
@@ -202,16 +201,24 @@ class TestMainImportFile:
         exit_code = main()
         assert exit_code == 0
 
-        with ImportDatabase(db_path) as db:
-            pending = db.get_by_status(ImportStatus.PENDING)
-            assert len(pending) == 2
-            refs = {r.ref for r in pending}
-            assert refs == {"quay.io/repo:tag1@sha256:aaa", "quay.io/repo:tag2@sha256:bbb"}
+        with WorkflowDatabase(db_path) as db:
+            requests = db.list_requests()
+            assert len(requests) == 2
+            artifacts = {r.artifact for r in requests}
+            assert artifacts == {"quay.io/repo:tag1@sha256:aaa", "quay.io/repo:tag2@sha256:bbb"}
 
     def test_works_with_reset_flag(self, monkeypatch, tmp_path: Path):
         db_path = tmp_path / "test.db"
-        with ImportDatabase(db_path) as db:
-            db.add_item("quay.io/repo:old@sha256:old")
+        with WorkflowDatabase(db_path) as db:
+            db.get_or_create_request(
+                namespace="ns",
+                application="app",
+                component="comp",
+                pipeline="import-pnc",
+                release_plan="rp",
+                artifact="quay.io/repo:old@sha256:old",
+                target="stage",
+            )
 
         refs_file = tmp_path / "refs.txt"
         refs_file.write_text("quay.io/repo:new@sha256:new\n")
@@ -224,7 +231,7 @@ class TestMainImportFile:
         exit_code = main()
         assert exit_code == 0
 
-        with ImportDatabase(db_path) as db:
-            pending = db.get_by_status(ImportStatus.PENDING)
-            assert len(pending) == 1
-            assert pending[0].ref == "quay.io/repo:new@sha256:new"
+        with WorkflowDatabase(db_path) as db:
+            requests = db.list_requests()
+            assert len(requests) == 1
+            assert requests[0].artifact == "quay.io/repo:new@sha256:new"

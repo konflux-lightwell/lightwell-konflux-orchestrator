@@ -52,7 +52,7 @@ class KubeClient:
     """
 
     # Diagnostics captured on failure are bounded so a runaway build log cannot
-    # bloat the ImportItem's error_message (and any Jira comment derived from it).
+    # bloat the phase's error_message (and any Jira comment derived from it).
     _MAX_LOG_LINES = 20
     _MAX_DETAIL_CHARS = 4000
 
@@ -126,7 +126,7 @@ class KubeClient:
         container logs. Each source is optional: whatever can be gathered is
         returned, degrading to ``None`` only when no PipelineRun data is
         available at all. Callers (e.g. balor-fianna) surface this as the
-        ImportItem's ``error_message`` instead of the opaque "PipelineRun
+        phase's ``error_message`` instead of the opaque "PipelineRun
         failed".
         """
         pr = self._fetch_resource(

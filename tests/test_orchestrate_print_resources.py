@@ -102,30 +102,32 @@ def _args(eco, repo: Path | None) -> argparse.Namespace:
     return argparse.Namespace(ecosystem=eco, release_data_repo=str(repo) if repo else None)
 
 
-class _FakeDB:
+class _FakeView:
+    """Minimal WorkflowView stand-in exposing just ``pending()`` for preview."""
+
     def __init__(self, pending):
         self._pending = pending
 
-    def get_by_status(self, status):
+    def pending(self):
         return self._pending
 
 
 class TestRunPrintResources:
     def test_no_pending_returns_zero(self, capsys):
-        rc = _run_print_resources(_args(_eco(), None), _FakeDB([]))
+        rc = _run_print_resources(_args(_eco(), None), _FakeView([]))
         assert rc == 0
         assert "No pending references" in capsys.readouterr().err
 
     def test_resolver_ensure_error_returns_one(self, capsys):
-        db = _FakeDB([SimpleNamespace(ref="quay.io/x@sha256:abc")])
+        view = _FakeView([SimpleNamespace(artifact="quay.io/x@sha256:abc")])
         with patch.object(ReleaseDataResolver, "ensure", side_effect=ReleaseDataError("no repo")):
-            rc = _run_print_resources(_args(_eco(), None), db)
+            rc = _run_print_resources(_args(_eco(), None), view)
         assert rc == 1
         assert "no repo" in capsys.readouterr().err
 
     def test_happy_path_prints_full_chain(self, release_repo: Path, capsys):
-        db = _FakeDB([SimpleNamespace(ref="quay.io/x@sha256:abc")])
-        rc = _run_print_resources(_args(_eco(), release_repo), db)
+        view = _FakeView([SimpleNamespace(artifact="quay.io/x@sha256:abc")])
+        rc = _run_print_resources(_args(_eco(), release_repo), view)
         assert rc == 0
         out = capsys.readouterr().out
         assert "Application:          pnc-import-novel" in out
@@ -138,16 +140,16 @@ class TestRunPrintResources:
         assert "Intention:          production" in out
 
     def test_build_pipelinerun_error_is_reported_and_skipped(self, release_repo: Path, capsys):
-        db = _FakeDB([SimpleNamespace(ref="quay.io/x@sha256:abc")])
+        view = _FakeView([SimpleNamespace(artifact="quay.io/x@sha256:abc")])
         args = _args(_eco(error=TriggerError("bad ref")), release_repo)
-        rc = _run_print_resources(args, db)
+        rc = _run_print_resources(args, view)
         assert rc == 0
         assert "ERROR building PipelineRun: bad ref" in capsys.readouterr().err
 
     def test_missing_application_label_skips_chain(self, release_repo: Path, capsys):
-        db = _FakeDB([SimpleNamespace(ref="quay.io/x@sha256:abc")])
+        view = _FakeView([SimpleNamespace(artifact="quay.io/x@sha256:abc")])
         args = _args(_eco(_manifest(app=None)), release_repo)
-        rc = _run_print_resources(args, db)
+        rc = _run_print_resources(args, view)
         assert rc == 0
         out = capsys.readouterr().out
         assert "(no application label)" in out

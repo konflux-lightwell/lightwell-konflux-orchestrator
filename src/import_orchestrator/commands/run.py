@@ -25,15 +25,16 @@ from pathlib import Path
 
 from import_orchestrator.clients import KubeClient
 from import_orchestrator.constants import CLUSTER_API, KUBEARCHIVE_API
-from import_orchestrator.database import ImportDatabase
 from import_orchestrator.engine import (
     ImportOrchestrator,
     ImportTrigger,
     Ingest,
     PipelineMonitor,
     ReleaseMonitor,
+    WorkflowView,
 )
-from import_orchestrator.models import ImportItem, ImportStatus
+from import_orchestrator.models import Phase, PhaseStatus, Request, WorkflowState, derive_state
+from import_orchestrator.workflow_db import WorkflowDatabase, warn_if_legacy_database
 
 
 def _resolve_db(args: argparse.Namespace) -> tuple[Path, str | None]:
@@ -55,19 +56,21 @@ def _resolve_db(args: argparse.Namespace) -> tuple[Path, str | None]:
     return Path(tmp_dir) / "state.db", tmp_dir
 
 
-def _result_payload(ref: str, item: ImportItem | None, rc: int) -> dict:
+def _result_payload(ref: str, view: WorkflowView, request: Request | None, rc: int) -> dict:
     """Build the structured result payload for a completed single-ref run.
 
-    Captures the final ``ImportItem`` state so callers can record build outputs
-    on success (``pipelinerun_name``, ``snapshot_name``, ``release_name``) and
-    diagnose failures (``error_message``). ``item`` is normally present after the
-    run; if the lookup somehow returns nothing, fall back to a minimal payload
-    whose status is derived from the exit code.
+    Reconstructs the final state from the Request's latest Attempt phases so
+    callers can record build outputs on success (``pipelinerun_name``,
+    ``snapshot_name``, ``release_name``) and diagnose failures
+    (``error_message``). The payload keys match the pre-cutover flat model so
+    existing consumers are unaffected. If the Request lookup somehow returns
+    nothing, fall back to a minimal payload whose status is derived from the exit
+    code.
     """
-    if item is None:
+    if request is None or request.id is None:
         return {
             "ref": ref,
-            "status": ImportStatus.SUCCESS.value if rc == 0 else ImportStatus.FAILED.value,
+            "status": WorkflowState.SUCCESS.value if rc == 0 else WorkflowState.FAILED.value,
             "pipelinerun_name": None,
             "snapshot_name": None,
             "release_name": None,
@@ -75,14 +78,22 @@ def _result_payload(ref: str, item: ImportItem | None, rc: int) -> dict:
             "retry_count": 0,
         }
 
+    phases = view.db.latest_phase_map(request.id)
+    intake = phases.get(Phase.INTAKE)
+    snapshot = phases.get(Phase.SNAPSHOT)
+    release = phases.get(Phase.RELEASE)
+    error = next(
+        (p.error_message for p in phases.values() if p.status == PhaseStatus.FAILED and p.error_message),
+        None,
+    )
     return {
-        "ref": item.ref,
-        "status": item.status.value,
-        "pipelinerun_name": item.pipelinerun_name,
-        "snapshot_name": item.snapshot_name,
-        "release_name": item.release_name,
-        "error_message": item.error_message,
-        "retry_count": item.retry_count,
+        "ref": request.artifact,
+        "status": derive_state(phases, view.skip_release).value,
+        "pipelinerun_name": intake.reference_id if intake else None,
+        "snapshot_name": snapshot.reference_id if snapshot else None,
+        "release_name": release.reference_id if release else None,
+        "error_message": error,
+        "retry_count": max(0, view.db.attempt_count(request.id) - 1),
     }
 
 
@@ -118,24 +129,28 @@ def run_single(args: argparse.Namespace, ref: str) -> int:
     """
     db_path, cleanup_dir = _resolve_db(args)
     try:
-        with ImportDatabase(db_path) as db:
-            Ingest(db).from_lines([ref])
+        with WorkflowDatabase(db_path) as db:
+            warn_if_legacy_database(db)
 
             eco = args.ecosystem
+            target = getattr(args, "target", None)
+            skip_release = target is not None and getattr(eco, "target_skip_release", lambda t: False)(target)
+
+            Ingest(db, build_identity=lambda r: eco.request_identity(r, args)).from_lines([ref])
+
             kube = KubeClient(eco.namespace, CLUSTER_API, KUBEARCHIVE_API)
+            view = WorkflowView(db, skip_release)
 
             trigger = ImportTrigger(
-                db=db,
+                view=view,
                 kube=kube,
                 build_pipelinerun=lambda r: eco.build_pipelinerun(r, args),
                 max_parallel=1,
                 max_retries=args.max_retries,
             )
-            target = getattr(args, "target", None)
-            skip_release = target is not None and getattr(eco, "target_skip_release", lambda t: False)(target)
-            pipeline_monitor = PipelineMonitor(db=db, kube=kube, skip_release=skip_release)
+            pipeline_monitor = PipelineMonitor(view=view, kube=kube)
             release_monitor = ReleaseMonitor(
-                db=db,
+                view=view,
                 kube=kube,
                 max_parallel=1,
                 prefix=eco.pipelinerun_prefix,
@@ -143,7 +158,7 @@ def run_single(args: argparse.Namespace, ref: str) -> int:
             )
 
             orchestrator = ImportOrchestrator(
-                db=db,
+                view=view,
                 trigger=trigger,
                 pipeline_monitor=pipeline_monitor,
                 release_monitor=release_monitor,
@@ -154,7 +169,8 @@ def run_single(args: argparse.Namespace, ref: str) -> int:
             rc = orchestrator.run_until_complete()
 
             # Capture final state while the DB is still open, before cleanup.
-            payload = _result_payload(ref, db.get_by_ref(ref), rc)
+            request = next((r for r in db.list_requests() if r.artifact == ref), None)
+            payload = _result_payload(ref, view, request, rc)
             _emit_result(payload, getattr(args, "output_json", None))
 
             return rc

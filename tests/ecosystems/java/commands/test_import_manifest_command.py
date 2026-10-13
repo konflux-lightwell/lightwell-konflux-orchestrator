@@ -20,8 +20,7 @@ from pathlib import Path
 import pytest
 
 from import_orchestrator.cli import main, make_parser
-from import_orchestrator.database import ImportDatabase
-from import_orchestrator.models import ImportStatus
+from import_orchestrator.workflow_db import WorkflowDatabase
 
 SIMPLE_MANIFEST = textwrap.dedent("""\
     libraries:
@@ -84,14 +83,21 @@ class TestMainImportManifest:
         exit_code = main()
         assert exit_code == 0
 
-        with ImportDatabase(db_path) as db:
-            pending = db.get_by_status(ImportStatus.PENDING)
-            assert len(pending) == 1
+        with WorkflowDatabase(db_path) as db:
+            assert db.count_requests() == 1
 
     def test_works_with_reset_flag(self, monkeypatch, tmp_path: Path):
         db_path = tmp_path / "test.db"
-        with ImportDatabase(db_path) as db:
-            db.add_item("quay.io/ns/repo:old@sha256:old")
+        with WorkflowDatabase(db_path) as db:
+            db.get_or_create_request(
+                namespace="ns",
+                application="app",
+                component="comp",
+                pipeline="import-pnc",
+                release_plan="rp",
+                artifact="quay.io/ns/repo:old@sha256:old",
+                target="stage",
+            )
 
         manifest = tmp_path / "consolidated.yaml"
         manifest.write_text(SIMPLE_MANIFEST)
@@ -104,6 +110,5 @@ class TestMainImportManifest:
         exit_code = main()
         assert exit_code == 0
 
-        with ImportDatabase(db_path) as db:
-            pending = db.get_by_status(ImportStatus.PENDING)
-            assert len(pending) == 1
+        with WorkflowDatabase(db_path) as db:
+            assert db.count_requests() == 1

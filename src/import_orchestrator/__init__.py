@@ -15,7 +15,6 @@ limitations under the License.
 """
 
 from import_orchestrator.clients import KubeClient
-from import_orchestrator.database import ImportDatabase
 from import_orchestrator.engine import (
     ImportOrchestrator,
     ImportTrigger,
@@ -24,17 +23,18 @@ from import_orchestrator.engine import (
     PipelineMonitor,
     ReleaseMonitor,
     TriggerError,
+    WorkflowView,
 )
 from import_orchestrator.models import (
     Attempt,
     AttemptPhase,
     ClusterResource,
-    ImportItem,
-    ImportStatus,
     Phase,
     PhaseStatus,
     PipelineRunStatus,
     Request,
+    WorkflowState,
+    derive_state,
 )
 from import_orchestrator.workflow_db import WorkflowDatabase
 
@@ -44,10 +44,7 @@ __all__ = [
     "Attempt",
     "AttemptPhase",
     "ClusterResource",
-    "ImportDatabase",
-    "ImportItem",
     "ImportOrchestrator",
-    "ImportStatus",
     "ImportTrigger",
     "Ingest",
     "IngestResult",
@@ -60,4 +57,7 @@ __all__ = [
     "Request",
     "TriggerError",
     "WorkflowDatabase",
+    "WorkflowState",
+    "WorkflowView",
+    "derive_state",
 ]
