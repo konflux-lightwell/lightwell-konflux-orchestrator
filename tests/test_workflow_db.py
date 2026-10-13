@@ -181,7 +181,7 @@ class TestAttemptPhases:
         assert advanced.updated_at >= created.created_at
         assert len(store.list_phases(attempt_id)) == 1
 
-    def test_upsert_does_not_clear_existing_reference(self, store: WorkflowDatabase):
+    def test_upsert_writes_omitted_reference_as_absent(self, store: WorkflowDatabase):
         attempt_id = self._attempt_id(store)
         store.upsert_phase(
             attempt_id,
@@ -190,10 +190,9 @@ class TestAttemptPhases:
             reference_type=ClusterResource.PIPELINE_RUN,
             reference_id="pnc-import-xyz",
         )
-        # Advance with no reference supplied: the earlier reference must survive.
         advanced = store.upsert_phase(attempt_id, Phase.INTAKE, PhaseStatus.SUCCESS)
-        assert advanced.reference_type is ClusterResource.PIPELINE_RUN
-        assert advanced.reference_id == "pnc-import-xyz"
+        assert advanced.reference_type is None
+        assert advanced.reference_id is None
 
     def test_upsert_updates_reference_and_error_on_existing_phase(self, store: WorkflowDatabase):
         attempt_id = self._attempt_id(store)
@@ -236,12 +235,11 @@ class TestAttemptPhases:
         phase = store.upsert_phase(attempt_id, Phase.SNAPSHOT, PhaseStatus.SUCCESS, error_message="ignored")
         assert phase.error_message is None
 
-    def test_upsert_keeps_failure_detail_when_readvanced_without_message(self, store: WorkflowDatabase):
+    def test_upsert_writes_omitted_error_message_as_absent(self, store: WorkflowDatabase):
         attempt_id = self._attempt_id(store)
         store.upsert_phase(attempt_id, Phase.RELEASE, PhaseStatus.FAILED, error_message="first")
-        # Re-touching a still-failed phase without a new message keeps the detail.
         advanced = store.upsert_phase(attempt_id, Phase.RELEASE, PhaseStatus.FAILED)
-        assert advanced.error_message == "first"
+        assert advanced.error_message is None
 
     def test_upsert_skipped_status(self, store: WorkflowDatabase):
         attempt_id = self._attempt_id(store)
@@ -472,3 +470,25 @@ class TestStoreInfrastructure:
 
     def test_parse_timestamp_handles_invalid_string(self, store: WorkflowDatabase):
         assert store._parse_timestamp("not-a-date") is None
+
+
+class TestDerivedViews:
+    def test_latest_phase_map_empty_without_attempt(self, store: WorkflowDatabase):
+        request, _ = _make_request(store)
+        assert store.latest_phase_map(request.id) == {}
+
+    def test_latest_phase_map_uses_latest_attempt(self, store: WorkflowDatabase):
+        request, _ = _make_request(store)
+        first = store.create_attempt(request.id)
+        store.upsert_phase(first.id, Phase.INTAKE, PhaseStatus.FAILED, error_message="old")
+        second = store.create_attempt(request.id)
+        store.upsert_phase(second.id, Phase.INTAKE, PhaseStatus.RUNNING)
+
+        phase_map = store.latest_phase_map(request.id)
+        assert phase_map[Phase.INTAKE].status is PhaseStatus.RUNNING
+
+    def test_count_requests(self, store: WorkflowDatabase):
+        assert store.count_requests() == 0
+        _make_request(store)
+        _make_request(store, artifact="quay.io/light-castle/java-secure@sha256:def")
+        assert store.count_requests() == 2

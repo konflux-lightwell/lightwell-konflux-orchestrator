@@ -22,34 +22,6 @@ from enum import Enum
 from typing import Literal
 
 
-class ImportStatus(str, Enum):
-    """Status of an import item."""
-
-    PENDING = "pending"
-    TRIGGERED = "triggered"
-    RUNNING = "running"
-    AWAITING_RELEASE = "releasing"
-    SUCCESS = "success"
-    FAILED = "failed"
-
-
-@dataclass
-class ImportItem:
-    """An item to be imported, identified by an ecosystem-specific unique ref."""
-
-    id: int | None
-    ref: str
-    status: ImportStatus
-    pipelinerun_name: str | None = None
-    snapshot_name: str | None = None
-    release_name: str | None = None
-    triggered_at: datetime | None = None
-    completed_at: datetime | None = None
-    last_checked_at: datetime | None = None
-    error_message: str | None = None
-    retry_count: int = 0
-
-
 @dataclass
 class PipelineRunStatus:
     """Status of a PipelineRun."""
@@ -79,7 +51,7 @@ class PipelineRunStatus:
 # ---------------------------------------------------------------------------
 # Request / Attempt / AttemptPhase model (ADR-0001).
 #
-# These replace the flat ``ImportItem``: a ``Request`` is the intent to release
+# These replace the former flat import-item model: a ``Request`` is the intent to release
 # one artifact for one target; each run of the workflow is an ``Attempt``; and an
 # ``Attempt`` accrues an ``AttemptPhase`` row for each of the four phases as the
 # workflow reaches it (rows are created on demand, not pre-seeded). Retrying
@@ -218,3 +190,55 @@ class AttemptPhase:
             )
         if self.status is not PhaseStatus.FAILED:
             self.error_message = None
+
+
+class WorkflowState(str, Enum):
+    """The overall state of a Request, derived from its latest Attempt's phases.
+
+    This is a *reporting* projection of the per-phase model onto a single value
+    (for progress statistics, trigger batching and completion checks); it is not
+    persisted. The string values match the former flat status enum so statistics
+    output and the ``run-single`` JSON payload stay backwards compatible after the
+    Request/Attempt cutover.
+    """
+
+    PENDING = "pending"
+    RUNNING = "running"
+    AWAITING_RELEASE = "releasing"
+    SUCCESS = "success"
+    FAILED = "failed"
+
+
+def derive_state(phases: dict[Phase, AttemptPhase], skip_release: bool) -> WorkflowState:
+    """Reduce the latest Attempt's phase rows to a single :class:`WorkflowState`.
+
+    ``phases`` maps each recorded :class:`Phase` to its :class:`AttemptPhase` for
+    the request's latest attempt (as returned by
+    :meth:`WorkflowDatabase.latest_phase_map`); an empty map means no attempt has
+    started yet. ``skip_release`` is True for targets whose workflow ends at a
+    successful build (no Release CR is produced), so a successful intake is the
+    terminal success state.
+
+    A FAILED phase anywhere in the latest attempt makes the whole request FAILED
+    (the attempt is retried by starting a new Attempt, not by mutating this one).
+    """
+    intake = phases.get(Phase.INTAKE)
+    if intake is None:
+        return WorkflowState.PENDING
+    if _any_failed(phases):
+        return WorkflowState.FAILED
+    if intake.status in (PhaseStatus.PENDING, PhaseStatus.RUNNING):
+        return WorkflowState.RUNNING
+    # Intake succeeded.
+    if skip_release:
+        return WorkflowState.SUCCESS
+    release = phases.get(Phase.RELEASE)
+    if release is not None and release.status == PhaseStatus.SUCCESS:
+        return WorkflowState.SUCCESS
+    # Intake done, release not yet successful: snapshot/integration/release in flight.
+    return WorkflowState.AWAITING_RELEASE
+
+
+def _any_failed(phases: dict[Phase, AttemptPhase]) -> bool:
+    """True if any phase of the attempt is in the FAILED state."""
+    return any(phase.status == PhaseStatus.FAILED for phase in phases.values())

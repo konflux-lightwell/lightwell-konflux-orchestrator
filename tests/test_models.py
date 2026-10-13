@@ -21,60 +21,13 @@ from import_orchestrator.models import (
     Attempt,
     AttemptPhase,
     ClusterResource,
-    ImportItem,
-    ImportStatus,
     Phase,
     PhaseStatus,
     PipelineRunStatus,
     Request,
+    WorkflowState,
+    derive_state,
 )
-
-
-class TestImportStatus:
-    def test_values(self):
-        assert ImportStatus.PENDING.value == "pending"
-        assert ImportStatus.TRIGGERED.value == "triggered"
-        assert ImportStatus.RUNNING.value == "running"
-        assert ImportStatus.SUCCESS.value == "success"
-        assert ImportStatus.FAILED.value == "failed"
-
-    def test_is_string_enum(self):
-        assert isinstance(ImportStatus.PENDING, str)
-        assert ImportStatus.PENDING == "pending"
-
-    def test_round_trip_from_value(self):
-        for status in ImportStatus:
-            assert ImportStatus(status.value) is status
-
-
-class TestImportItem:
-    def test_defaults(self):
-        item = ImportItem(id=1, ref="quay.io/repo:tag@sha256:abc", status=ImportStatus.PENDING)
-        assert item.pipelinerun_name is None
-        assert item.triggered_at is None
-        assert item.completed_at is None
-        assert item.last_checked_at is None
-        assert item.error_message is None
-        assert item.retry_count == 0
-
-    def test_all_fields(self):
-        from datetime import datetime
-
-        now = datetime.now()
-        item = ImportItem(
-            id=42,
-            ref="quay.io/repo:tag@sha256:abc",
-            status=ImportStatus.RUNNING,
-            pipelinerun_name="pnc-import-abc",
-            triggered_at=now,
-            completed_at=None,
-            last_checked_at=now,
-            error_message=None,
-            retry_count=2,
-        )
-        assert item.id == 42
-        assert item.retry_count == 2
-        assert item.pipelinerun_name == "pnc-import-abc"
 
 
 class TestPipelineRunStatus:
@@ -296,3 +249,80 @@ class TestAttemptPhaseValidation:
             error_message="ignored",
         )
         assert phase.error_message is None
+
+
+class TestWorkflowState:
+    def test_values(self):
+        assert WorkflowState.PENDING.value == "pending"
+        assert WorkflowState.RUNNING.value == "running"
+        assert WorkflowState.AWAITING_RELEASE.value == "releasing"
+        assert WorkflowState.SUCCESS.value == "success"
+        assert WorkflowState.FAILED.value == "failed"
+
+    def test_is_string_enum(self):
+        assert isinstance(WorkflowState.SUCCESS, str)
+        assert WorkflowState.SUCCESS == "success"
+
+    def test_round_trip_from_value(self):
+        for state in WorkflowState:
+            assert WorkflowState(state.value) is state
+
+
+def _phase(name: Phase, status: PhaseStatus) -> AttemptPhase:
+    """Build a bare AttemptPhase for derive_state tests."""
+    return AttemptPhase(id=None, attempt_id=1, name=name, status=status)
+
+
+class TestDeriveState:
+    def test_no_phases_is_pending(self):
+        assert derive_state({}, skip_release=False) is WorkflowState.PENDING
+
+    def test_intake_running_is_running(self):
+        phases = {Phase.INTAKE: _phase(Phase.INTAKE, PhaseStatus.RUNNING)}
+        assert derive_state(phases, skip_release=False) is WorkflowState.RUNNING
+
+    def test_intake_pending_is_running(self):
+        phases = {Phase.INTAKE: _phase(Phase.INTAKE, PhaseStatus.PENDING)}
+        assert derive_state(phases, skip_release=False) is WorkflowState.RUNNING
+
+    def test_failed_intake_is_failed(self):
+        phases = {Phase.INTAKE: _phase(Phase.INTAKE, PhaseStatus.FAILED)}
+        assert derive_state(phases, skip_release=False) is WorkflowState.FAILED
+
+    def test_failed_later_phase_is_failed(self):
+        phases = {
+            Phase.INTAKE: _phase(Phase.INTAKE, PhaseStatus.SUCCESS),
+            Phase.SNAPSHOT: _phase(Phase.SNAPSHOT, PhaseStatus.SUCCESS),
+            Phase.RELEASE: _phase(Phase.RELEASE, PhaseStatus.FAILED),
+        }
+        assert derive_state(phases, skip_release=False) is WorkflowState.FAILED
+
+    def test_intake_success_awaiting_release(self):
+        phases = {Phase.INTAKE: _phase(Phase.INTAKE, PhaseStatus.SUCCESS)}
+        assert derive_state(phases, skip_release=False) is WorkflowState.AWAITING_RELEASE
+
+    def test_intake_success_skip_release_is_success(self):
+        phases = {Phase.INTAKE: _phase(Phase.INTAKE, PhaseStatus.SUCCESS)}
+        assert derive_state(phases, skip_release=True) is WorkflowState.SUCCESS
+
+    def test_release_success_is_success(self):
+        phases = {
+            Phase.INTAKE: _phase(Phase.INTAKE, PhaseStatus.SUCCESS),
+            Phase.SNAPSHOT: _phase(Phase.SNAPSHOT, PhaseStatus.SUCCESS),
+            Phase.INTEGRATION_TESTS: _phase(Phase.INTEGRATION_TESTS, PhaseStatus.SKIPPED),
+            Phase.RELEASE: _phase(Phase.RELEASE, PhaseStatus.SUCCESS),
+        }
+        assert derive_state(phases, skip_release=False) is WorkflowState.SUCCESS
+
+    def test_release_running_awaiting_release(self):
+        phases = {
+            Phase.INTAKE: _phase(Phase.INTAKE, PhaseStatus.SUCCESS),
+            Phase.SNAPSHOT: _phase(Phase.SNAPSHOT, PhaseStatus.SUCCESS),
+            Phase.RELEASE: _phase(Phase.RELEASE, PhaseStatus.RUNNING),
+        }
+        assert derive_state(phases, skip_release=False) is WorkflowState.AWAITING_RELEASE
+
+    @pytest.mark.parametrize("skip_release", [True, False])
+    def test_failed_intake_failed_regardless_of_skip(self, skip_release):
+        phases = {Phase.INTAKE: _phase(Phase.INTAKE, PhaseStatus.FAILED)}
+        assert derive_state(phases, skip_release=skip_release) is WorkflowState.FAILED

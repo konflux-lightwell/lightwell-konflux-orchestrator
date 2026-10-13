@@ -60,12 +60,30 @@ class WorkflowDatabase:
         self.conn = sqlite3.connect(str(self.db_path))
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
+        self.legacy_item_count = self._count_legacy_items()
         self._initialize_schema()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self.conn:
             self.conn.close()
+
+    def _count_legacy_items(self) -> int:
+        """Return the row count of the legacy flat ``import_items`` table.
+
+        Returns 0 when the table is absent (the normal case for a fresh database).
+        Used to detect a pre-cutover state database so callers can warn that its
+        in-flight state cannot be resumed under the new Request/Attempt schema (see
+        ADR-0001 / LWLP-2510 cutover); the new tables start empty and no migration
+        is performed.
+        """
+        assert self.conn is not None
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='import_items'")
+        if cursor.fetchone() is None:
+            return 0
+        cursor.execute("SELECT COUNT(*) FROM import_items")
+        return cursor.fetchone()[0]
 
     def _initialize_schema(self) -> None:
         """Create tables and indexes if they don't exist."""
@@ -274,11 +292,11 @@ class WorkflowDatabase:
     ) -> AttemptPhase:
         """Create or advance the given phase of an Attempt.
 
-        A missing phase is inserted. An existing one has its status updated and
-        ``updated_at`` bumped. ``reference_type`` and ``reference_id`` must be
-        supplied together and must match the phase. ``error_message`` is stored
-        only while the phase is FAILED. Omitting the reference leaves the one
-        already recorded on this attempt in place.
+        A missing phase is inserted. An existing one is overwritten with the
+        supplied status, reference, and error message, and ``updated_at`` is
+        bumped. ``reference_type`` and ``reference_id`` must be supplied together
+        and must match the phase. ``error_message`` is stored only while the
+        phase is FAILED.
 
         Raises:
             ValueError: if only one of reference_type/reference_id is supplied,
@@ -332,36 +350,20 @@ class WorkflowDatabase:
         assert self.conn is not None
         assert existing.id is not None
         cursor = self.conn.cursor()
-
-        fields = ["status = ?", "updated_at = ?"]
-        values: list = [incoming.status.value, datetime.now(timezone.utc).isoformat()]
-
-        # The (reference_type, reference_id) pair is a single unit; when supplied,
-        # write both. When omitted, the existing reference is preserved.
-        if incoming.reference_type is not None:
-            fields.append("reference_type = ?")
-            values.append(incoming.reference_type.value)
-            fields.append("reference_id = ?")
-            values.append(incoming.reference_id)
-
-        # error_message already tracks the status on ``incoming`` (None unless
-        # FAILED). Clear it whenever not FAILED; when FAILED, only overwrite with a
-        # freshly supplied message so an earlier failure detail is not lost.
-        if incoming.status != PhaseStatus.FAILED:
-            fields.append("error_message = ?")
-            values.append(None)
-        elif incoming.error_message is not None:
-            fields.append("error_message = ?")
-            values.append(incoming.error_message)
-
-        values.append(existing.id)
         cursor.execute(
-            f"""
+            """
             UPDATE attempt_phases
-            SET {", ".join(fields)}
+            SET status = ?, reference_type = ?, reference_id = ?, error_message = ?, updated_at = ?
             WHERE id = ?
-        """,  # nosec B608 - field names are hardcoded, not user input
-            values,
+        """,
+            (
+                incoming.status.value,
+                incoming.reference_type.value if incoming.reference_type else None,
+                incoming.reference_id,
+                incoming.error_message,
+                datetime.now(timezone.utc).isoformat(),
+                existing.id,
+            ),
         )
         self.conn.commit()
         return self._get_phase_by_id(existing.id)  # type: ignore[return-value]
@@ -383,6 +385,33 @@ class WorkflowDatabase:
         cursor = self.conn.cursor()
         cursor.execute("SELECT * FROM attempt_phases WHERE attempt_id = ? ORDER BY id", (attempt_id,))
         return [self._row_to_phase(row) for row in cursor.fetchall()]
+
+    # -- Derived views -----------------------------------------------------
+
+    def latest_phase_map(self, request_id: int) -> dict[Phase, AttemptPhase]:
+        """Return the phases of a Request's latest Attempt, keyed by phase name.
+
+        An empty dict means the Request has no Attempt yet, or its latest Attempt
+        has no phases recorded. Feeds :func:`import_orchestrator.models.derive_state`.
+        """
+        latest = self.latest_attempt(request_id)
+        if latest is None or latest.id is None:
+            return {}
+        return {phase.name: phase for phase in self.list_phases(latest.id)}
+
+    def attempt_count(self, request_id: int) -> int:
+        """Return how many Attempts a Request has had."""
+        assert self.conn is not None
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM attempts WHERE request_id = ?", (request_id,))
+        return cursor.fetchone()[0]
+
+    def count_requests(self) -> int:
+        """Return the total number of Requests."""
+        assert self.conn is not None
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM requests")
+        return cursor.fetchone()[0]
 
     # -- Row mappers -------------------------------------------------------
 
