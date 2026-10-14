@@ -28,11 +28,8 @@ def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> No
     """Register the 'trigger' subcommand with the given subparsers."""
     parser = subparsers.add_parser(
         "trigger",
-        help="Trigger a python-remediated-build PipelineRun",
-        description=(
-            "Trigger a python-remediated-build PipelineRun on the Konflux cluster "
-            "for a single package==version reference."
-        ),
+        help="Trigger a python-build PipelineRun",
+        description="Trigger a python-build PipelineRun on the Konflux cluster for a single package==version reference.",  # noqa: E501
     )
 
     parser.add_argument(
@@ -46,10 +43,14 @@ def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> No
         help=f"Build target (default: {config.DEFAULT_TARGET}, or LIGHTWELL_PYTHON_TARGET env var)",
     )
     parser.add_argument(
-        "--fix-type",
-        choices=("Backport", "Novel"),
-        required=True,
-        help="Remediation type passed to the Pipeline for version calculation.",
+        "--build-type",
+        choices=("Backport", "Novel", "Validated"),
+        default=None,
+        help=(
+            "Build type passed to the Pipeline (Backport, Novel, or Validated). "
+            "When omitted, defaults to Validated for VALIDATED/VALIDATED-STAGE targets "
+            "and Backport for all others."
+        ),
     )
     parser.add_argument(
         "--builds-tag",

@@ -284,8 +284,12 @@ spec:
           fname="$(basename "$f")"
           fname_lower="$(echo "$fname" | tr '[:upper:]' '[:lower:]')"
           if [[ "$fname_lower" == "${PACKAGE}-${VERSION}.tar.gz" || "$fname_lower" == "${PKG_NORM}-${VERSION}.tar.gz" ]]; then
-            echo "Renaming built sdist $fname to $AUTHORITATIVE_NAME"
-            mv "$f" "/var/workdir/output/sdists-repo/builds/$AUTHORITATIVE_NAME"
+            if [[ "$fname" == "$AUTHORITATIVE_NAME" ]]; then
+              echo "Renaming built sdist $fname to $AUTHORITATIVE_NAME (same name, skipping)"
+            else
+              echo "Renaming built sdist $fname to $AUTHORITATIVE_NAME"
+              mv "$f" "/var/workdir/output/sdists-repo/builds/$AUTHORITATIVE_NAME"
+            fi
           fi
         done
 

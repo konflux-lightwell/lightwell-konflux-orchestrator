@@ -51,10 +51,10 @@ def build_pipelinerun_manifest(
     git_auth_secret: str,
     service_account: str | None = None,
     builds_tag: str | None = None,
-    fix_type: str = "Backport",
+    build_type: str = "Backport",
     wheel_server_url: str | None = None,
 ) -> dict[str, Any]:
-    """Build a python-remediated-build PipelineRun manifest for one package/version.
+    """Build a python-build PipelineRun manifest for one package/version.
 
     ``git_auth_secret`` names the secret bound to the ``git-auth`` workspace,
     which the clone task uses to authenticate against the lightwell-builds repo.
@@ -68,25 +68,29 @@ def build_pipelinerun_manifest(
     to the validated ``<package>/<version>`` tag; a caller passes the remediation
     branch or a pinned commit to build patched source instead.
 
-    ``fix_type`` identifies the remediation stream and is passed to the Pipeline
-    as ``FIX_TYPE`` for commit-distance version calculation.
+    ``build_type`` controls the pipeline build mode: ``Backport`` or ``Novel``
+    for remediated builds (commit-distance version suffix applied), or
+    ``Validated`` for an upstream rebuild (no version suffix, no wheel server).
     """
     # Push to the Konflux component repository (<tenant>/<application>/<component>),
     # which is the only repo the build service account can push to. The package and
     # version are encoded in the tag rather than a per-package repo.
     image = f"{image_repo_base}/{application}/{component}:{package}-{version}"
     tag = builds_tag or f"{package}/{version}"
+    # Validated builds skip the prebuilt wheel server; pass empty string so the
+    # fromager task's [[ -n "$WHEEL_SERVER_URL" ]] guard disables it.
+    effective_wheel_server = "" if build_type == "Validated" else (wheel_server_url or config.WHEEL_SERVER_URL)
     spec: dict[str, Any] = {
         "pipelineSpec": pipeline_spec,
         "params": [
             {"name": "PACKAGE", "value": package},
             {"name": "VERSION", "value": version},
-            {"name": "FIX_TYPE", "value": fix_type},
+            {"name": "BUILD_TYPE", "value": build_type},
             {"name": "LIGHTWELL_BUILDS_REPO_URL", "value": f"{repo_base}/pypi.org-{package}"},
             {"name": "LIGHTWELL_BUILDS_TAG", "value": tag},
             {"name": "IMAGE", "value": image},
             {"name": "ociStorage", "value": f"{image}.src"},
-            {"name": "WHEEL_SERVER_URL", "value": wheel_server_url or config.WHEEL_SERVER_URL},
+            {"name": "WHEEL_SERVER_URL", "value": effective_wheel_server},
             {"name": "BUILD_CONFIGS_REPO_URL", "value": get_build_config_source()},
             {"name": "BUILD_CONFIGS_REVISION", "value": get_build_config_revision()},
         ],

@@ -56,10 +56,12 @@ spec:
         The git tag used in lightwell-builds for this version. Used for logging
         and provenance.
       type: string
-    - name: FIX_TYPE
+    - name: BUILD_TYPE
       description: >-
-        Remediation type controlling commit-distance calculation. Must be
-        Backport or Novel.
+        Build mode controlling version calculation. Accepted values:
+          Backport  — remediated build, B/N from commits since ingestion tag.
+          Novel     — remediated build, B from ingestion→baseline, N from baseline→HEAD.
+          Validated — upstream rebuild; no version suffix is applied.
       type: string
     - name: BUILD_CONFIGS_REPO_URL
       description: Build-config registry URL, supplied by the orchestrator.
@@ -159,28 +161,49 @@ spec:
           value: $(params.VERSION)
         - name: LIGHTWELL_BUILDS_TAG
           value: $(params.LIGHTWELL_BUILDS_TAG)
-        - name: FIX_TYPE
-          value: $(params.FIX_TYPE)
+        - name: BUILD_TYPE
+          value: $(params.BUILD_TYPE)
       script: |
         #!/usr/bin/env bash
         set -euo pipefail
 
-        echo "Computing B and N version components for ${PACKAGE} ${VERSION}"
+        echo "Computing version for ${PACKAGE} ${VERSION} (BUILD_TYPE=${BUILD_TYPE})"
         echo "Git repository: /var/workdir/source-repo"
-        
+
+        case "${BUILD_TYPE}" in
+          Backport|Novel|Validated) ;;
+          *)
+            echo "ERROR: BUILD_TYPE must be Backport, Novel, or Validated (got: ${BUILD_TYPE})" >&2
+            exit 1
+            ;;
+        esac
+
+        if [ "${BUILD_TYPE}" = "Validated" ]; then
+          echo "Validated build: using upstream version as-is, skipping B/N calculation"
+          COMPUTED_VERSION="${VERSION}"
+          B=0
+          N=0
+          SHORT_COMMIT=""
+
+          echo "Computed version: ${COMPUTED_VERSION}"
+          echo -n "${COMPUTED_VERSION}" > $(results.COMPUTED_VERSION.path)
+          echo -n "${B}" > $(results.B_VALUE.path)
+          echo -n "${N}" > $(results.N_VALUE.path)
+
+          cat > /var/workdir/version-env.sh <<EOF
+        export COMPUTED_VERSION="${COMPUTED_VERSION}"
+        export B_VALUE="${B}"
+        export N_VALUE="${N}"
+        export UPSTREAM_VERSION="${VERSION}"
+        export SHORT_COMMIT="${SHORT_COMMIT}"
+        EOF
+          exit 0
+        fi
+
         pushd /var/workdir/source-repo
 
         git config --global --add safe.directory /var/workdir/source-repo
 
-        case "${FIX_TYPE}" in
-          Backport|Novel)
-            BUILD_TYPE="${FIX_TYPE}"
-            ;;
-          *)
-            echo "ERROR: FIX_TYPE must be Backport or Novel (got: ${FIX_TYPE})" >&2
-            exit 1
-            ;;
-        esac
         echo "Build type: ${BUILD_TYPE}"
 
         # The canonical ingestion tag for this package-version
@@ -427,6 +450,10 @@ spec:
                     computed_version = line.split('=', 1)[1].strip().strip('"')
                 elif line.startswith('export UPSTREAM_VERSION='):
                     upstream_version = line.split('=', 1)[1].strip().strip('"')
+
+        if computed_version == upstream_version:
+            print(f"Validated build: version unchanged ({upstream_version}), skipping metadata rewrite")
+            sys.exit(0)
 
         print(f"Rewriting version metadata: {upstream_version} → {computed_version}")
 

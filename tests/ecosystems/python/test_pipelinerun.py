@@ -97,7 +97,7 @@ class TestBuildManifest:
         params = {p["name"]: p["value"] for p in _manifest()["spec"]["params"]}
         assert params["PACKAGE"] == "foolib"
         assert params["VERSION"] == "0.4.0"
-        assert params["FIX_TYPE"] == "Backport"
+        assert params["BUILD_TYPE"] == "Backport"
         assert params["LIGHTWELL_BUILDS_TAG"] == "foolib/0.4.0"
         assert params["WHEEL_SERVER_URL"] == "https://packages.redhat.com/lightwell/python/validated/simple/"
         assert params["BUILD_CONFIGS_REPO_URL"] == "https://example.test/build-configs.git"
@@ -119,9 +119,22 @@ class TestBuildManifest:
         }
         assert params["WHEEL_SERVER_URL"] == "https://custom.repo/simple/"
 
-    def test_fix_type_is_passed_to_pipeline(self):
-        params = {p["name"]: p["value"] for p in _manifest(fix_type="Novel")["spec"]["params"]}
-        assert params["FIX_TYPE"] == "Novel"
+    def test_build_type_is_passed_to_pipeline(self):
+        params = {p["name"]: p["value"] for p in _manifest(build_type="Novel")["spec"]["params"]}
+        assert params["BUILD_TYPE"] == "Novel"
+
+    def test_validated_build_type_omits_wheel_server(self):
+        params = {p["name"]: p["value"] for p in _manifest(build_type="Validated")["spec"]["params"]}
+        assert params["BUILD_TYPE"] == "Validated"
+        assert params["WHEEL_SERVER_URL"] == ""
+
+    def test_validated_build_type_ignores_wheel_server_url_arg(self):
+        # wheel_server_url is ignored when build_type is Validated
+        params = {
+            p["name"]: p["value"]
+            for p in _manifest(build_type="Validated", wheel_server_url="https://custom.repo/simple/")["spec"]["params"]
+        }
+        assert params["WHEEL_SERVER_URL"] == ""
 
     def test_builds_tag_defaults_to_validated_version_tag(self):
         # With no builds_tag, the tag falls back to the validated <package>/<version>.

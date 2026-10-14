@@ -24,7 +24,7 @@ from import_orchestrator.engine.pipeline_loader import apply_pipeline_overrides,
 
 
 class PythonEcosystem:
-    """Python ecosystem: CVE-remediated wheel builds via the python-remediated-build pipeline."""
+    """Python ecosystem: Python wheel builds via the python-build pipeline."""
 
     name = "python"
     default_db_path = config.PYTHON_DEFAULT_DB_PATH
@@ -35,7 +35,10 @@ class PythonEcosystem:
         package, version = parse_ref(ref)
         target = getattr(args, "target", config.DEFAULT_TARGET)
         builds_tag = getattr(args, "builds_tag", None)
-        fix_type = getattr(args, "fix_type", "Backport")
+        # Default build_type based on target: Validated targets ship upstream versions,
+        # everything else defaults to a Backport remediated build.
+        default_build_type = "Validated" if target in ("VALIDATED", "VALIDATED-STAGE") else "Backport"
+        build_type = getattr(args, "build_type", None) or default_build_type
         cfg = config.TARGET_CONFIGS[target]
         pipeline_path = config.pipeline_definition_path()
         pipeline_spec = load_pipeline(pipeline_path)
@@ -52,7 +55,7 @@ class PythonEcosystem:
             image_repo_base=config.IMAGE_REPO_BASE,
             git_auth_secret=config.GIT_AUTH_SECRET,
             builds_tag=builds_tag,
-            fix_type=fix_type,
+            build_type=build_type,
             wheel_server_url=getattr(args, "wheel_server_url", None),
         )
         return apply_pipeline_overrides(manifest, pipeline_path)

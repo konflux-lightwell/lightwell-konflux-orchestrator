@@ -29,9 +29,9 @@ def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> No
     """Register the 'run' subcommand with the given subparsers."""
     parser = subparsers.add_parser(
         "run",
-        help="Orchestrate a single python-remediated-build PipelineRun end-to-end",
+        help="Orchestrate a single python-build PipelineRun end-to-end",
         description=(
-            "Trigger a python-remediated-build PipelineRun for a single "
+            "Trigger a python-build PipelineRun for a single "
             "package==version reference and monitor it end-to-end, with state "
             "tracking and retries. Like 'trigger', but synchronous: it waits for "
             "the import to reach a terminal state instead of returning immediately. "
@@ -51,10 +51,14 @@ def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> No
         help=f"Build target (default: {config.DEFAULT_TARGET}, or LIGHTWELL_PYTHON_TARGET env var)",
     )
     parser.add_argument(
-        "--fix-type",
-        choices=("Backport", "Novel"),
-        required=True,
-        help="Remediation type passed to the Pipeline for version calculation.",
+        "--build-type",
+        choices=("Backport", "Novel", "Validated"),
+        default=None,
+        help=(
+            "Build type passed to the Pipeline (Backport, Novel, or Validated). "
+            "When omitted, defaults to Validated for VALIDATED/VALIDATED-STAGE targets "
+            "and Backport for all others."
+        ),
     )
     parser.add_argument(
         "--builds-tag",

@@ -21,12 +21,22 @@ from pathlib import Path
 
 PYTHON_DEFAULT_DB_PATH = "./python_import_state.db"
 NAMESPACE = "lightwell-python-tenant"
-PIPELINERUN_PREFIX = "python-remediated-build-"
+PIPELINERUN_PREFIX = "python-build-"
 
 # Build targets, keyed by target name. Each supplies the Konflux application and
 # component labels applied to the PipelineRun, and whether the target produces a
 # Release CR (`releases`). Selected via `--target`.
 TARGET_CONFIGS: dict[str, dict] = {
+    "VALIDATED": {
+        "app": "python-validated",
+        "component": "python-validated",
+        "service_account": "build-pipeline-python-validated",
+    },
+    "VALIDATED-STAGE": {
+        "app": "python-validated-stage",
+        "component": "python-validated-stage",
+        "service_account": "build-pipeline-python-validated-stage",
+    },
     "REMEDIATED": {
         "app": "remediated-build",
         "component": "remediated-build",
@@ -61,12 +71,12 @@ WHEEL_SERVER_URL = os.environ.get(
 
 
 def pipeline_definition_path() -> Path:
-    """Return the path to the python-remediated-build pipeline definition.
+    """Return the path to the python-build pipeline definition.
 
     Configurable via TEKTON_PIPELINE_DIR; otherwise falls back to the repo layout.
     """
     if pipeline_dir := os.environ.get("TEKTON_PIPELINE_DIR"):
-        return Path(pipeline_dir) / "pipelines" / "python-remediated-build" / "python-remediated-build.yaml"
+        return Path(pipeline_dir) / "pipelines" / "python-build" / "python-build.yaml"
     # config.py -> python/ -> ecosystems/ -> import_orchestrator/ -> src/ -> project root
     project_root = Path(__file__).resolve().parents[4]
-    return project_root / "tekton" / "pipelines" / "python-remediated-build" / "python-remediated-build.yaml"
+    return project_root / "tekton" / "pipelines" / "python-build" / "python-build.yaml"

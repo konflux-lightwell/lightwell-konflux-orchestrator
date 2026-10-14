@@ -31,33 +31,48 @@ class TestTriggerArgParsing:
 
     def test_ref_parsed(self):
         parser = make_parser()
-        args = parser.parse_args(["python", "trigger", "--fix-type", "Backport", "ntplib==0.4.0"])
+        args = parser.parse_args(["python", "trigger", "--build-type", "Backport", "ntplib==0.4.0"])
         assert args.ref == "ntplib==0.4.0"
+
+    def test_build_type_defaults_to_none(self):
+        parser = make_parser()
+        args = parser.parse_args(["python", "trigger", "ntplib==0.4.0"])
+        assert args.build_type is None
+
+    def test_build_type_validated_accepted(self):
+        parser = make_parser()
+        args = parser.parse_args(["python", "trigger", "--build-type", "Validated", "ntplib==0.4.0"])
+        assert args.build_type == "Validated"
+
+    def test_invalid_build_type_rejected(self):
+        parser = make_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(["python", "trigger", "--build-type", "NOPE", "ntplib==0.4.0"])
 
     def test_command_is_trigger(self):
         parser = make_parser()
-        args = parser.parse_args(["python", "trigger", "--fix-type", "Backport", "ntplib==0.4.0"])
+        args = parser.parse_args(["python", "trigger", "--build-type", "Backport", "ntplib==0.4.0"])
         assert args.command == "trigger"
 
     def test_ecosystem_attached(self):
         parser = make_parser()
-        args = parser.parse_args(["python", "trigger", "--fix-type", "Backport", "ntplib==0.4.0"])
+        args = parser.parse_args(["python", "trigger", "--build-type", "Backport", "ntplib==0.4.0"])
         assert args.ecosystem.name == "python"
 
     def test_target_default(self, monkeypatch):
         monkeypatch.delenv("LIGHTWELL_PYTHON_TARGET", raising=False)
         parser = make_parser()
-        args = parser.parse_args(["python", "trigger", "--fix-type", "Backport", "ntplib==0.4.0"])
+        args = parser.parse_args(["python", "trigger", "--build-type", "Backport", "ntplib==0.4.0"])
         assert args.target == "REMEDIATED"
 
     def test_invalid_target_rejected(self):
         parser = make_parser()
         with pytest.raises(SystemExit):
-            parser.parse_args(["python", "trigger", "--fix-type", "Backport", "--target", "NOPE", "ntplib==0.4.0"])
+            parser.parse_args(["python", "trigger", "--build-type", "Backport", "--target", "NOPE", "ntplib==0.4.0"])
 
     def test_builds_tag_defaults_to_none(self):
         parser = make_parser()
-        args = parser.parse_args(["python", "trigger", "--fix-type", "Backport", "ntplib==0.4.0"])
+        args = parser.parse_args(["python", "trigger", "--build-type", "Backport", "ntplib==0.4.0"])
         assert args.builds_tag is None
 
     def test_builds_tag_parsed(self):
@@ -66,7 +81,7 @@ class TestTriggerArgParsing:
             [
                 "python",
                 "trigger",
-                "--fix-type",
+                "--build-type",
                 "Backport",
                 "--builds-tag",
                 "CVE-2025-1234/0.4.0/pipeline-9",
@@ -82,7 +97,7 @@ class TestTriggerArgParsing:
             [
                 "python",
                 "trigger",
-                "--fix-type",
+                "--build-type",
                 "Backport",
                 "--builds-tag",
                 "deadbeefcafe1234567890abcdef1234567890ab",
@@ -98,7 +113,7 @@ class TestTriggerArgParsing:
             [
                 "python",
                 "trigger",
-                "--fix-type",
+                "--build-type",
                 "Backport",
                 "--builds-ref",
                 "deadbeefcafe1234567890abcdef1234567890ab",

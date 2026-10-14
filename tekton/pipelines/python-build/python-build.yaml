@@ -2,15 +2,27 @@
 apiVersion: tekton.dev/v1
 kind: Pipeline
 metadata:
-  name: python-remediated-build
+  name: python-build
   annotations:
     tekton.dev/pipelines.minVersion: 0.12.1
-    tekton.dev/tags: python, wheels, fromager, lightwell, konflux, remediated
+    tekton.dev/tags: python, wheels, fromager, lightwell, konflux
   labels:
     app.kubernetes.io/version: "0.1"
 spec:
   description: >-
-    Build CVE-remediated Python wheels from a lightwell-builds git repository.
+    Build Python wheels from a lightwell-builds git repository.
+
+    Supports two build modes controlled by BUILD_TYPE:
+
+    Remediated (Backport or Novel):
+      Builds CVE-remediated wheels. B and N version components are computed from
+      git history and appended as a local version suffix (+rhlw.{B}[.n.{N}]).
+      A prebuilt wheel server is consulted for dependency resolution.
+
+    Validated:
+      Builds a straight upstream rebuild. No version suffix is applied — the
+      wheel ships with the upstream version as-is. No prebuilt wheel server is
+      used; dependencies are resolved from upstream sources.
 
     Pipeline flow:
       1. git-clone-oci-ta: Clone pypi.org-<package> from lightwell-builds at the
@@ -44,10 +56,12 @@ spec:
         Package version string to build. For example: 0.4.0, 2.5.0.
       type: string
 
-    - name: FIX_TYPE
+    - name: BUILD_TYPE
       description: >-
-        Remediation type controlling commit-distance calculation. Must be
-        Backport or Novel.
+        Build mode. Accepted values:
+          Backport — remediated build, B/N from commits since ingestion tag.
+          Novel    — remediated build, B from ingestion→baseline, N from baseline→HEAD.
+          Validated — upstream rebuild; no version suffix, no wheel server.
       type: string
     - name: BUILD_CONFIGS_REPO_URL
       description: Build-config registry URL, supplied by the orchestrator.
@@ -95,9 +109,12 @@ spec:
       default: ""
 
     - name: WHEEL_SERVER_URL
-      description: Wheel server URL for prebuilt wheel lookup during fromager dependency resolution.
+      description: >-
+        Wheel server URL for prebuilt wheel lookup during fromager dependency
+        resolution. Pass an empty string (the default for Validated builds) to
+        disable prebuilt wheel lookup and resolve all dependencies from source.
       type: string
-      default: https://packages.redhat.com/lightwell/python/validated/simple/
+      default: ""
 
     - name: caTrustConfigMapName
       description: The name of the ConfigMap to read CA bundle data from.
@@ -176,7 +193,8 @@ spec:
         resolver: bundles
         params:
           - name: bundle
-            value: quay.io/konflux-ci/tekton-catalog/task-source-to-sdist:0.1@sha256:d9ffa5ea239dea59431d46d72027aa021d01b3666d270bdc464af30d272ca54d
+            value: quay.io/redhat-user-workloads/lightwell-poc-tenant/tekton-bundles/source-to-sdist:on-pr-61b72517e38df6c60f658f2caf506b98faf2582b
+            # value: quay.io/konflux-ci/tekton-catalog/task-source-to-sdist:0.1@sha256:d9ffa5ea239dea59431d46d72027aa021d01b3666d270bdc464af30d272ca54d
           - name: name
             value: source-to-sdist
           - name: kind
@@ -190,8 +208,8 @@ spec:
           value: $(params.PACKAGE)
         - name: VERSION
           value: $(params.VERSION)
-        - name: FIX_TYPE
-          value: $(params.FIX_TYPE)
+        - name: BUILD_TYPE
+          value: $(params.BUILD_TYPE)
         - name: BUILD_CONFIGS_REPO_URL
           value: $(params.BUILD_CONFIGS_REPO_URL)
         - name: BUILD_CONFIGS_REVISION
@@ -216,7 +234,8 @@ spec:
         resolver: bundles
         params:
           - name: bundle
-            value: quay.io/konflux-ci/tekton-catalog/task-fromager-build-wheels:0.1@sha256:d91789f1d906fb2028e0aaa05b6f150a03b05ee5a4af9db47c02fab39bcd218b
+            value: quay.io/redhat-user-workloads/lightwell-poc-tenant/tekton-bundles/fromager-build-wheels:on-pr-f26d77008b4e2fab70817da8229df9619fc6a048
+            # value: quay.io/konflux-ci/tekton-catalog/task-fromager-build-wheels:0.1@sha256:d91789f1d906fb2028e0aaa05b6f150a03b05ee5a4af9db47c02fab39bcd218b
           - name: name
             value: python-fromager-build-wheels
           - name: kind
@@ -281,7 +300,8 @@ spec:
         resolver: bundles
         params:
           - name: bundle
-            value: quay.io/konflux-ci/tekton-catalog/task-attach-build-index:0.1@sha256:b0e9f66ca97f76adad133ca6a498b0a09ff9d13eb3f97941733f7b729f79fabc
+            value: quay.io/redhat-user-workloads/lightwell-poc-tenant/tekton-bundles/attach-build-index:on-pr-0c64ce1c73c6a09b840ce1afe29c8d29078e482c
+            # value: quay.io/konflux-ci/tekton-catalog/task-attach-build-index:0.1@sha256:b0e9f66ca97f76adad133ca6a498b0a09ff9d13eb3f97941733f7b729f79fabc
           - name: name
             value: attach-build-index
           - name: kind

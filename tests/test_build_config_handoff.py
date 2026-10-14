@@ -4,7 +4,7 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-PIPELINE = ROOT / "tekton/pipelines/python-remediated-build/python-remediated-build.yaml"
+PIPELINE = ROOT / "tekton/pipelines/python-build/python-build.yaml"
 SOURCE_TASK = ROOT / "tekton/tasks/source-to-sdist/0.1/source-to-sdist.yaml"
 WHEEL_TASK = ROOT / "tekton/tasks/python-fromager-build-wheels/0.1/python-fromager-build-wheels.yaml"
 

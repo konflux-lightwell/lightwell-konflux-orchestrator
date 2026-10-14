@@ -33,11 +33,11 @@ def test_python_attributes():
     eco = PythonEcosystem()
     assert eco.name == "python"
     assert eco.namespace == "lightwell-python-tenant"
-    assert eco.pipelinerun_prefix == "python-remediated-build-"
+    assert eco.pipelinerun_prefix == "python-build-"
 
 
 def test_build_pipelinerun_from_ref(monkeypatch, tmp_path):
-    pipeline_file = tmp_path / "tekton" / "pipelines" / "python-remediated-build" / "python-remediated-build.yaml"
+    pipeline_file = tmp_path / "tekton" / "pipelines" / "python-build" / "python-build.yaml"
     pipeline_file.parent.mkdir(parents=True)
     pipeline_file.write_text("spec:\n  tasks: []\n")
     monkeypatch.setenv("TEKTON_PIPELINE_DIR", str(tmp_path / "tekton"))
@@ -51,7 +51,7 @@ def test_build_pipelinerun_from_ref(monkeypatch, tmp_path):
 
 
 def test_build_pipelinerun_uses_default_target_labels(monkeypatch, tmp_path):
-    pipeline_file = tmp_path / "tekton" / "pipelines" / "python-remediated-build" / "python-remediated-build.yaml"
+    pipeline_file = tmp_path / "tekton" / "pipelines" / "python-build" / "python-build.yaml"
     pipeline_file.parent.mkdir(parents=True)
     pipeline_file.write_text("spec:\n  tasks: []\n")
     monkeypatch.setenv("TEKTON_PIPELINE_DIR", str(tmp_path / "tekton"))
@@ -65,7 +65,7 @@ def test_build_pipelinerun_uses_default_target_labels(monkeypatch, tmp_path):
 
 
 def test_build_pipelinerun_threads_builds_tag(monkeypatch, tmp_path):
-    pipeline_file = tmp_path / "tekton" / "pipelines" / "python-remediated-build" / "python-remediated-build.yaml"
+    pipeline_file = tmp_path / "tekton" / "pipelines" / "python-build" / "python-build.yaml"
     pipeline_file.parent.mkdir(parents=True)
     pipeline_file.write_text("spec:\n  tasks: []\n")
     monkeypatch.setenv("TEKTON_PIPELINE_DIR", str(tmp_path / "tekton"))
@@ -78,11 +78,11 @@ def test_build_pipelinerun_threads_builds_tag(monkeypatch, tmp_path):
 
 
 def test_build_pipelinerun_applies_overrides(monkeypatch, tmp_path):
-    pipeline_file = tmp_path / "tekton" / "pipelines" / "python-remediated-build" / "python-remediated-build.yaml"
+    pipeline_file = tmp_path / "tekton" / "pipelines" / "python-build" / "python-build.yaml"
     pipeline_file.parent.mkdir(parents=True)
     pipeline_file.write_text("spec:\n  tasks: []\n")
 
-    overrides_file = tmp_path / "tekton" / "pipelines" / "python-remediated-build" / "overrides.yaml"
+    overrides_file = tmp_path / "tekton" / "pipelines" / "python-build" / "overrides.yaml"
     overrides_file.write_text("timeouts:\n  pipeline: 1h\n")
     monkeypatch.setenv("TEKTON_PIPELINE_DIR", str(tmp_path / "tekton"))
 
@@ -98,7 +98,7 @@ def test_build_pipelinerun_rejects_malformed_ref(tmp_path, monkeypatch):
 
 
 def _pipeline_file(tmp_path, monkeypatch):
-    f = tmp_path / "tekton" / "pipelines" / "python-remediated-build" / "python-remediated-build.yaml"
+    f = tmp_path / "tekton" / "pipelines" / "python-build" / "python-build.yaml"
     f.parent.mkdir(parents=True)
     f.write_text("spec:\n  tasks: []\n")
     monkeypatch.setenv("TEKTON_PIPELINE_DIR", str(tmp_path / "tekton"))
@@ -122,6 +122,21 @@ def test_build_pipelinerun_remediated_service_account(monkeypatch, tmp_path):
     _pipeline_file(tmp_path, monkeypatch)
     manifest = PythonEcosystem().build_pipelinerun("foolib==0.4.0", argparse.Namespace(target="REMEDIATED"))
     assert manifest["spec"]["taskRunTemplate"]["serviceAccountName"] == "build-pipeline-remediated-build"
+
+
+def test_build_pipelinerun_validated_target_defaults_build_type(monkeypatch, tmp_path):
+    _pipeline_file(tmp_path, monkeypatch)
+    manifest = PythonEcosystem().build_pipelinerun("foolib==0.4.0", argparse.Namespace(target="VALIDATED"))
+    params = {p["name"]: p["value"] for p in manifest["spec"]["params"]}
+    assert params["BUILD_TYPE"] == "Validated"
+    assert params["WHEEL_SERVER_URL"] == ""
+
+
+def test_build_pipelinerun_remediated_target_defaults_build_type(monkeypatch, tmp_path):
+    _pipeline_file(tmp_path, monkeypatch)
+    manifest = PythonEcosystem().build_pipelinerun("foolib==0.4.0", argparse.Namespace(target="REMEDIATED"))
+    params = {p["name"]: p["value"] for p in manifest["spec"]["params"]}
+    assert params["BUILD_TYPE"] == "Backport"
 
 
 class TestTargetSkipRelease:
