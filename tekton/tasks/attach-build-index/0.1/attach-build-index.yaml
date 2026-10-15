@@ -19,9 +19,11 @@ spec:
     The primary PURL, the remediated version, and the vulnerability IDs are
     derived from the ADR-0005 `Lightwell-Fix:` commit trailers on the checked-out
     lightwell-builds source (restored from SOURCE_ARTIFACT, whose HEAD is the
-    tagged cumulative-patch commit). The task fails closed (`--require-vuln`): a
-    remediated build with no resolvable vulnerability IDs is a hard error rather
-    than an index that silently ships `vulns: []`.
+    tagged cumulative-patch commit). Remediated builds (Backport/Novel) fail
+    closed (`--require-vuln`): a remediated build with no resolvable
+    vulnerability IDs is a hard error rather than an index that silently ships
+    `vulns: []`. Validated builds carry no vulns by definition and skip that
+    check.
   params:
     - name: SOURCE_ARTIFACT
       description: >-
@@ -53,6 +55,13 @@ spec:
         version.full and used as the PURL version, so primaryPurl matches
         version.full (enforced by the BuildIndex schema).
       type: string
+    - name: BUILD_TYPE
+      description: >-
+        Build mode: Backport, Novel, or Validated. Controls --require-vuln:
+        remediated builds fail closed when no vulnerability IDs resolve from
+        the Lightwell-Fix trailers; Validated builds carry no vulns.
+      type: string
+      default: "Backport"
     - name: caTrustConfigMapName
       description: The name of the ConfigMap to read CA bundle data from.
       type: string
@@ -66,6 +75,12 @@ spec:
       description: >-
         The component image reference the build-index referrer was attached to
         (repo@sha256:...). Empty if nothing was attached.
+    - name: BUILD_INDEX_DIGEST
+      description: >-
+        The sha256 content digest (sha256:...) of the attached build-index.json.
+        Recorded as a PipelineRun result so Tekton Chains attests it, letting
+        Enterprise Contract verify at release time that the publish manifest a
+        release consumed is exactly the one this build produced (LWLP-3276).
   stepTemplate:
     env:
       - name: IMAGE_REF
@@ -145,7 +160,14 @@ spec:
         # $SRC/.git and writes the document. It never touches the registry here, so
         # it needs no credentials — all registry auth is confined to the attach below.
         #
-        # --require-vuln: fail closed if no vuln IDs resolve from the trailers.
+        # --require-vuln is BUILD_TYPE-conditional: remediated builds (Backport/
+        # Novel) fail closed when no vulnerability IDs resolve from the trailers;
+        # Validated builds carry no vulns by definition and skip the check.
+        REQUIRE_VULN_ARGS=()
+        if [[ "$(params.BUILD_TYPE)" != "Validated" ]]; then
+          REQUIRE_VULN_ARGS+=(--require-vuln)
+        fi
+
         fath-cuan index create \
           --ecosystem pypi \
           --purl "$PURL" \
@@ -154,6 +176,7 @@ spec:
           --b "$B" \
           --n "$N" \
           --git-dir "$SRC" \
+          "${REQUIRE_VULN_ARGS[@]}" \
           --output /var/workdir/build-index.json
 
         echo "--- build-index.json ---"
@@ -193,6 +216,12 @@ spec:
           "build-index.json:${BUILD_INDEX_MEDIA_TYPE}"
 
         echo -n "$IMAGE_REF" | tee "$(results.BUILD_INDEX_ATTACHED_REF.path)"
+
+        # Content digest of the attached manifest, emitted as a task result so
+        # Tekton Chains attests it; the release-side EC rule (LWLP-3276)
+        # verifies a release consumed exactly this digest.
+        INDEX_DIGEST="sha256:$(sha256sum /var/workdir/build-index.json | awk '{print $1}')"
+        echo -n "$INDEX_DIGEST" | tee "$(results.BUILD_INDEX_DIGEST.path)"
   volumes:
     - configMap:
         items:
