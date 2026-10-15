@@ -253,6 +253,10 @@ spec:
           value: $(tasks.source-to-sdist.results.COMPUTED_VERSION)
         - name: BUILD_TYPE
           value: $(params.BUILD_TYPE)
+        - name: ociStorage
+          value: $(params.ociStorage)
+        - name: ociArtifactExpiresAfter
+          value: $(params.ociArtifactExpiresAfter)
         - name: IMAGE
           value: $(params.IMAGE)
         - name: IMAGE_EXPIRES_AFTER
@@ -313,6 +317,8 @@ spec:
       params:
         - name: SOURCE_ARTIFACT
           value: $(tasks.clone-lightwell-builds.results.SOURCE_ARTIFACT)
+        - name: MANIFEST_ARTIFACT
+          value: $(tasks.fromager-build-wheels.results.MANIFEST_ARTIFACT)
         - name: IMAGE_REF
           value: $(tasks.fromager-build-wheels.results.IMAGE_REF)
         - name: PACKAGE
