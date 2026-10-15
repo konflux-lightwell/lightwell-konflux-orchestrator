@@ -20,9 +20,9 @@ from unittest.mock import MagicMock
 import pytest
 
 from import_orchestrator.clients import KubeClient
-from import_orchestrator.engine import PipelineMonitor, WorkflowView
-from import_orchestrator.models import ClusterResource, Phase, PhaseStatus, PipelineRunStatus, Request, WorkflowState
-from import_orchestrator.workflow_db import WorkflowDatabase
+from import_orchestrator.database import WorkflowDatabase
+from import_orchestrator.engine import PipelineMonitor, RequestView
+from import_orchestrator.models import ClusterResource, Phase, PhaseStatus, PipelineRunStatus, Request, RequestState
 
 
 def _identity(ref: str) -> dict[str, str]:
@@ -69,13 +69,13 @@ def mock_kube():
 
 @pytest.fixture
 def monitor(db: WorkflowDatabase, mock_kube: MagicMock):
-    return PipelineMonitor(WorkflowView(db, skip_release=False), mock_kube)
+    return PipelineMonitor(RequestView(db, skip_release=False), mock_kube)
 
 
 @pytest.fixture
 def scratch_monitor(db: WorkflowDatabase, mock_kube: MagicMock):
     """PipelineMonitor with skip_release=True (scratch/non-releasing target)."""
-    return PipelineMonitor(WorkflowView(db, skip_release=True), mock_kube)
+    return PipelineMonitor(RequestView(db, skip_release=True), mock_kube)
 
 
 class TestUpdateStatuses:
@@ -100,7 +100,7 @@ class TestUpdateStatuses:
         monitor.update_statuses()
 
         assert _intake(db, request).status == PhaseStatus.SUCCESS
-        assert monitor.view.state(request) == WorkflowState.AWAITING_RELEASE
+        assert monitor.view.state(request) == RequestState.AWAITING_RELEASE
 
     def test_failed_pipeline_advances_to_failed(
         self, monitor: PipelineMonitor, db: WorkflowDatabase, mock_kube: MagicMock
@@ -172,7 +172,7 @@ class TestUpdateStatuses:
         scratch_monitor.update_statuses()
 
         assert _intake(db, request).status == PhaseStatus.SUCCESS
-        assert scratch_monitor.view.state(request) == WorkflowState.SUCCESS
+        assert scratch_monitor.view.state(request) == RequestState.SUCCESS
 
     def test_processes_multiple_imports(self, monitor: PipelineMonitor, db: WorkflowDatabase, mock_kube: MagicMock):
         """Verify that multiple imports are processed correctly."""

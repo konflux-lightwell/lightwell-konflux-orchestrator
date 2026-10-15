@@ -20,10 +20,10 @@ import argparse
 import sys
 from pathlib import Path
 
+from import_orchestrator.database import WorkflowDatabase, warn_if_legacy_database
 from import_orchestrator.ecosystems.base import Ecosystem
 from import_orchestrator.ecosystems.java.parser import parse_manifest
 from import_orchestrator.engine import Ingest
-from import_orchestrator.workflow_db import WorkflowDatabase, warn_if_legacy_database
 
 
 def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> None:

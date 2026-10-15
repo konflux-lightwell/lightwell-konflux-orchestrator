@@ -192,7 +192,7 @@ class AttemptPhase:
             self.error_message = None
 
 
-class WorkflowState(str, Enum):
+class RequestState(str, Enum):
     """The overall state of a Request, derived from its latest Attempt's phases.
 
     This is a *reporting* projection of the per-phase model onto a single value
@@ -209,8 +209,8 @@ class WorkflowState(str, Enum):
     FAILED = "failed"
 
 
-def derive_state(phases: dict[Phase, AttemptPhase], skip_release: bool) -> WorkflowState:
-    """Reduce the latest Attempt's phase rows to a single :class:`WorkflowState`.
+def derive_state(phases: dict[Phase, AttemptPhase], skip_release: bool) -> RequestState:
+    """Reduce the latest Attempt's phase rows to a single :class:`RequestState`.
 
     ``phases`` maps each recorded :class:`Phase` to its :class:`AttemptPhase` for
     the request's latest attempt (as returned by
@@ -224,19 +224,19 @@ def derive_state(phases: dict[Phase, AttemptPhase], skip_release: bool) -> Workf
     """
     intake = phases.get(Phase.INTAKE)
     if intake is None:
-        return WorkflowState.PENDING
+        return RequestState.PENDING
     if _any_failed(phases):
-        return WorkflowState.FAILED
+        return RequestState.FAILED
     if intake.status in (PhaseStatus.PENDING, PhaseStatus.RUNNING):
-        return WorkflowState.RUNNING
+        return RequestState.RUNNING
     # Intake succeeded.
     if skip_release:
-        return WorkflowState.SUCCESS
+        return RequestState.SUCCESS
     release = phases.get(Phase.RELEASE)
     if release is not None and release.status == PhaseStatus.SUCCESS:
-        return WorkflowState.SUCCESS
+        return RequestState.SUCCESS
     # Intake done, release not yet successful: snapshot/integration/release in flight.
-    return WorkflowState.AWAITING_RELEASE
+    return RequestState.AWAITING_RELEASE
 
 
 def _any_failed(phases: dict[Phase, AttemptPhase]) -> bool:

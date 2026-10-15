@@ -27,16 +27,16 @@ from import_orchestrator.constants import (
     DEFAULT_POLL_INTERVAL,
     KUBEARCHIVE_API,
 )
+from import_orchestrator.database import WorkflowDatabase, warn_if_legacy_database
 from import_orchestrator.engine import (
     ImportOrchestrator,
     ImportTrigger,
     PipelineMonitor,
     ReleaseMonitor,
-    WorkflowView,
+    RequestView,
 )
 from import_orchestrator.engine.errors import TriggerError
 from import_orchestrator.release_data import ReleaseDataError, ReleaseDataResolver, application_of
-from import_orchestrator.workflow_db import WorkflowDatabase, warn_if_legacy_database
 
 
 def add_common_orchestrate_args(parser: argparse.ArgumentParser) -> None:
@@ -107,7 +107,7 @@ def run_orchestrate(args: argparse.Namespace, empty_db_warning: str) -> int:
         eco = args.ecosystem
         target = getattr(args, "target", None)
         skip_release = target is not None and getattr(eco, "target_skip_release", lambda t: False)(target)
-        view = WorkflowView(db, skip_release)
+        view = RequestView(db, skip_release)
 
         if getattr(args, "print_resources", False):
             return _run_print_resources(args, view)
@@ -142,7 +142,7 @@ def run_orchestrate(args: argparse.Namespace, empty_db_warning: str) -> int:
         return orchestrator.run_until_complete()
 
 
-def _run_print_resources(args: argparse.Namespace, view: WorkflowView) -> int:
+def _run_print_resources(args: argparse.Namespace, view: RequestView) -> int:
     """Preview the release chain for every pending reference, without the cluster.
 
     For each pending request this builds the PipelineRun manifest the trigger would

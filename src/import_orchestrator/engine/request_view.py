@@ -16,13 +16,13 @@ limitations under the License.
 
 from __future__ import annotations
 
-from import_orchestrator.models import Request, WorkflowState, derive_state
-from import_orchestrator.workflow_db import WorkflowDatabase
+from import_orchestrator.database import WorkflowDatabase
+from import_orchestrator.models import Request, RequestState, derive_state
 
 
-class WorkflowView:
+class RequestView:
     """Projects the per-phase Request/Attempt model onto the aggregate reads the
-    orchestration loop needs: a single :class:`WorkflowState` per Request, plus
+    orchestration loop needs: a single :class:`RequestState` per Request, plus
     the batching, retry and completion queries that used to read a flat status
     column.
 
@@ -40,8 +40,8 @@ class WorkflowView:
         self.db = db
         self.skip_release = skip_release
 
-    def state(self, request: Request) -> WorkflowState:
-        """Return the overall :class:`WorkflowState` of a Request."""
+    def state(self, request: Request) -> RequestState:
+        """Return the overall :class:`RequestState` of a Request."""
         assert request.id is not None
         return derive_state(self.db.latest_phase_map(request.id), self.skip_release)
 
@@ -56,7 +56,7 @@ class WorkflowView:
         Attempt has no intake phase recorded (e.g. a crash between creating the
         Attempt and recording its intake). Both must be (re)triggered, so this is
         defined by the derived state rather than ``attempt_count``."""
-        return [r for r in self.requests() if self.state(r) == WorkflowState.PENDING]
+        return [r for r in self.requests() if self.state(r) == RequestState.PENDING]
 
     def retry_candidates(self, max_retries: int) -> list[Request]:
         """Failed Requests still eligible for another attempt."""
@@ -64,13 +64,11 @@ class WorkflowView:
 
     def in_flight_count(self) -> int:
         """Count Requests actively being processed (running or awaiting release)."""
-        return sum(
-            1 for r in self.requests() if self.state(r) in (WorkflowState.RUNNING, WorkflowState.AWAITING_RELEASE)
-        )
+        return sum(1 for r in self.requests() if self.state(r) in (RequestState.RUNNING, RequestState.AWAITING_RELEASE))
 
     def statistics(self) -> dict[str, int]:
-        """Return counts grouped by :class:`WorkflowState` value, for reporting."""
-        stats = {s.value: 0 for s in WorkflowState}
+        """Return counts grouped by :class:`RequestState` value, for reporting."""
+        stats = {s.value: 0 for s in RequestState}
         for r in self.requests():
             stats[self.state(r).value] += 1
         return stats
@@ -79,13 +77,13 @@ class WorkflowView:
         """True when no Request is still in flight or retriable."""
         for r in self.requests():
             st = self.state(r)
-            if st in (WorkflowState.PENDING, WorkflowState.RUNNING, WorkflowState.AWAITING_RELEASE):
+            if st in (RequestState.PENDING, RequestState.RUNNING, RequestState.AWAITING_RELEASE):
                 return False
-            if st == WorkflowState.FAILED and self._is_retriable(r, max_retries):
+            if st == RequestState.FAILED and self._is_retriable(r, max_retries):
                 return False
         return True
 
     def _is_retriable(self, request: Request, max_retries: int) -> bool:
         if request.id is None:
             return False
-        return self.state(request) == WorkflowState.FAILED and self.db.attempt_count(request.id) <= max_retries
+        return self.state(request) == RequestState.FAILED and self.db.attempt_count(request.id) <= max_retries

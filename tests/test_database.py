@@ -20,9 +20,9 @@ from pathlib import Path
 
 import pytest
 
-from import_orchestrator import workflow_db as workflow_db_module
+from import_orchestrator import database as database_module
+from import_orchestrator.database import WorkflowDatabase
 from import_orchestrator.models import AttemptPhase, ClusterResource, Phase, PhaseStatus
-from import_orchestrator.workflow_db import WorkflowDatabase
 
 REQUEST_FIELDS = {
     "namespace": "lightwell-poc-tenant",
@@ -262,7 +262,7 @@ class TestAttemptPhases:
             def fromisoformat(value):
                 return datetime.fromisoformat(value)
 
-        monkeypatch.setattr(workflow_db_module, "datetime", _Clock)
+        monkeypatch.setattr(database_module, "datetime", _Clock)
         attempt_id = self._attempt_id(store)
         created = store.upsert_phase(attempt_id, Phase.INTAKE, PhaseStatus.RUNNING)
         advanced = store.upsert_phase(attempt_id, Phase.INTAKE, PhaseStatus.SUCCESS)

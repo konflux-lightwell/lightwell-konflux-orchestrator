@@ -20,9 +20,9 @@ from unittest.mock import MagicMock
 import pytest
 
 from import_orchestrator.clients import KubeClient
-from import_orchestrator.engine import ReleaseMonitor, WorkflowView
-from import_orchestrator.models import ClusterResource, Phase, PhaseStatus, Request, WorkflowState
-from import_orchestrator.workflow_db import WorkflowDatabase
+from import_orchestrator.database import WorkflowDatabase
+from import_orchestrator.engine import ReleaseMonitor, RequestView
+from import_orchestrator.models import ClusterResource, Phase, PhaseStatus, Request, RequestState
 
 
 def _identity(ref: str) -> dict[str, str]:
@@ -92,7 +92,7 @@ def mock_kube():
 
 @pytest.fixture
 def monitor(db: WorkflowDatabase, mock_kube: MagicMock):
-    return ReleaseMonitor(WorkflowView(db, skip_release=False), mock_kube, max_parallel=5, prefix="pnc-import-")
+    return ReleaseMonitor(RequestView(db, skip_release=False), mock_kube, max_parallel=5, prefix="pnc-import-")
 
 
 class TestDiscoverSnapshot:
@@ -162,7 +162,7 @@ class TestFindOrCreateRelease:
 
     def test_defers_when_capacity_full(self, db: WorkflowDatabase, mock_kube: MagicMock):
         """Verify that release creation is deferred when max_parallel is reached."""
-        monitor = ReleaseMonitor(WorkflowView(db, skip_release=False), mock_kube, max_parallel=5, prefix="pnc-import-")
+        monitor = ReleaseMonitor(RequestView(db, skip_release=False), mock_kube, max_parallel=5, prefix="pnc-import-")
         # 5 active releases already tracked.
         for i in range(5):
             _seed(db, f"active{i}", snapshot=f"snapshot-{i}", release=f"release-{i}")
@@ -211,7 +211,7 @@ class TestReleasePlanOverride:
     def pinned_monitor(self, db: WorkflowDatabase, mock_kube: MagicMock):
         """A monitor pinned to the novel-stage ReleasePlan."""
         return ReleaseMonitor(
-            WorkflowView(db, skip_release=False),
+            RequestView(db, skip_release=False),
             mock_kube,
             max_parallel=5,
             prefix="pnc-import-",
@@ -288,7 +288,7 @@ class TestCheckReleaseCompletion:
         monitor.update_statuses()
 
         assert _phase(db, request, Phase.RELEASE).status == PhaseStatus.SUCCESS
-        assert monitor.view.state(request) == WorkflowState.SUCCESS
+        assert monitor.view.state(request) == RequestState.SUCCESS
 
     def test_marks_failed_when_release_fails(self, monitor: ReleaseMonitor, db: WorkflowDatabase, mock_kube: MagicMock):
         """Verify the release phase is marked FAILED when the release fails."""
@@ -300,7 +300,7 @@ class TestCheckReleaseCompletion:
         release = _phase(db, request, Phase.RELEASE)
         assert release.status == PhaseStatus.FAILED
         assert release.error_message == "Release release-456 failed"
-        assert monitor.view.state(request) == WorkflowState.FAILED
+        assert monitor.view.state(request) == RequestState.FAILED
 
     def test_waits_when_release_still_running(
         self, monitor: ReleaseMonitor, db: WorkflowDatabase, mock_kube: MagicMock
@@ -315,7 +315,7 @@ class TestCheckReleaseCompletion:
 
     def test_skip_release_is_noop(self, db: WorkflowDatabase, mock_kube: MagicMock):
         """A skip_release monitor does nothing even for a request past intake."""
-        monitor = ReleaseMonitor(WorkflowView(db, skip_release=True), mock_kube, max_parallel=5, prefix="pnc-import-")
+        monitor = ReleaseMonitor(RequestView(db, skip_release=True), mock_kube, max_parallel=5, prefix="pnc-import-")
         request = _seed(db, "r1")
 
         monitor.update_statuses()
@@ -348,4 +348,4 @@ class TestIntegration:
         # Poll 3: Release completes
         mock_kube.get_release_status.return_value = "True"
         monitor.update_statuses()
-        assert monitor.view.state(request) == WorkflowState.SUCCESS
+        assert monitor.view.state(request) == RequestState.SUCCESS

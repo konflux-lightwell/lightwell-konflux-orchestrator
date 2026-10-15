@@ -20,7 +20,7 @@ from pathlib import Path
 import pytest
 
 from import_orchestrator.cli import main, make_parser
-from import_orchestrator.workflow_db import WorkflowDatabase
+from import_orchestrator.database import WorkflowDatabase
 
 SIMPLE_MANIFEST = textwrap.dedent("""\
     libraries:

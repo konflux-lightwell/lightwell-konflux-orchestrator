@@ -20,9 +20,9 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from import_orchestrator.commands.run import run_single
+from import_orchestrator.database import WorkflowDatabase
 from import_orchestrator.engine import ImportOrchestrator, PipelineMonitor
 from import_orchestrator.models import ClusterResource, Phase, PhaseStatus
-from import_orchestrator.workflow_db import WorkflowDatabase
 
 _REF = "ntplib==0.4.0"
 

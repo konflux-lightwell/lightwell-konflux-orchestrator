@@ -18,9 +18,9 @@ from pathlib import Path
 
 import pytest
 
-from import_orchestrator.engine import WorkflowView
-from import_orchestrator.models import ClusterResource, Phase, PhaseStatus, Request, WorkflowState
-from import_orchestrator.workflow_db import WorkflowDatabase
+from import_orchestrator.database import WorkflowDatabase
+from import_orchestrator.engine import RequestView
+from import_orchestrator.models import ClusterResource, Phase, PhaseStatus, Request, RequestState
 
 
 def _identity(ref: str) -> dict[str, str]:
@@ -43,7 +43,7 @@ def db(tmp_path: Path):
 
 @pytest.fixture
 def view(db: WorkflowDatabase):
-    return WorkflowView(db, skip_release=False)
+    return RequestView(db, skip_release=False)
 
 
 def _pending(db: WorkflowDatabase, ref: str) -> Request:
@@ -70,13 +70,13 @@ def _failed(db: WorkflowDatabase, ref: str, attempts: int = 1) -> Request:
 
 class TestState:
     def test_pending(self, db, view):
-        assert view.state(_pending(db, "r1")) == WorkflowState.PENDING
+        assert view.state(_pending(db, "r1")) == RequestState.PENDING
 
     def test_running(self, db, view):
-        assert view.state(_running(db, "r1")) == WorkflowState.RUNNING
+        assert view.state(_running(db, "r1")) == RequestState.RUNNING
 
     def test_failed(self, db, view):
-        assert view.state(_failed(db, "r1")) == WorkflowState.FAILED
+        assert view.state(_failed(db, "r1")) == RequestState.FAILED
 
 
 class TestSelectors:
@@ -125,7 +125,7 @@ class TestIsComplete:
 
 class TestSkipRelease:
     def test_intake_success_is_terminal_when_skip_release(self, db):
-        view = WorkflowView(db, skip_release=True)
+        view = RequestView(db, skip_release=True)
         request = _pending(db, "r1")
         attempt = db.create_attempt(request.id)
         db.upsert_phase(
@@ -135,5 +135,5 @@ class TestSkipRelease:
             reference_type=ClusterResource.PIPELINE_RUN,
             reference_id="pr-1",
         )
-        assert view.state(request) == WorkflowState.SUCCESS
+        assert view.state(request) == RequestState.SUCCESS
         assert view.is_complete(max_retries=3) is True

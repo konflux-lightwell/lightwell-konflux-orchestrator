@@ -26,8 +26,8 @@ from import_orchestrator.constants import (
     DEFAULT_MAX_RETRIES,
     DEFAULT_POLL_INTERVAL,
 )
+from import_orchestrator.database import WorkflowDatabase
 from import_orchestrator.ecosystems.java import config as java_config
-from import_orchestrator.workflow_db import WorkflowDatabase
 
 
 class TestParserEcosystem:

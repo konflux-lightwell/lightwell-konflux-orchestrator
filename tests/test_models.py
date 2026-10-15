@@ -25,7 +25,7 @@ from import_orchestrator.models import (
     PhaseStatus,
     PipelineRunStatus,
     Request,
-    WorkflowState,
+    RequestState,
     derive_state,
 )
 
@@ -251,21 +251,21 @@ class TestAttemptPhaseValidation:
         assert phase.error_message is None
 
 
-class TestWorkflowState:
+class TestRequestState:
     def test_values(self):
-        assert WorkflowState.PENDING.value == "pending"
-        assert WorkflowState.RUNNING.value == "running"
-        assert WorkflowState.AWAITING_RELEASE.value == "releasing"
-        assert WorkflowState.SUCCESS.value == "success"
-        assert WorkflowState.FAILED.value == "failed"
+        assert RequestState.PENDING.value == "pending"
+        assert RequestState.RUNNING.value == "running"
+        assert RequestState.AWAITING_RELEASE.value == "releasing"
+        assert RequestState.SUCCESS.value == "success"
+        assert RequestState.FAILED.value == "failed"
 
     def test_is_string_enum(self):
-        assert isinstance(WorkflowState.SUCCESS, str)
-        assert WorkflowState.SUCCESS == "success"
+        assert isinstance(RequestState.SUCCESS, str)
+        assert RequestState.SUCCESS == "success"
 
     def test_round_trip_from_value(self):
-        for state in WorkflowState:
-            assert WorkflowState(state.value) is state
+        for state in RequestState:
+            assert RequestState(state.value) is state
 
 
 def _phase(name: Phase, status: PhaseStatus) -> AttemptPhase:
@@ -275,19 +275,19 @@ def _phase(name: Phase, status: PhaseStatus) -> AttemptPhase:
 
 class TestDeriveState:
     def test_no_phases_is_pending(self):
-        assert derive_state({}, skip_release=False) is WorkflowState.PENDING
+        assert derive_state({}, skip_release=False) is RequestState.PENDING
 
     def test_intake_running_is_running(self):
         phases = {Phase.INTAKE: _phase(Phase.INTAKE, PhaseStatus.RUNNING)}
-        assert derive_state(phases, skip_release=False) is WorkflowState.RUNNING
+        assert derive_state(phases, skip_release=False) is RequestState.RUNNING
 
     def test_intake_pending_is_running(self):
         phases = {Phase.INTAKE: _phase(Phase.INTAKE, PhaseStatus.PENDING)}
-        assert derive_state(phases, skip_release=False) is WorkflowState.RUNNING
+        assert derive_state(phases, skip_release=False) is RequestState.RUNNING
 
     def test_failed_intake_is_failed(self):
         phases = {Phase.INTAKE: _phase(Phase.INTAKE, PhaseStatus.FAILED)}
-        assert derive_state(phases, skip_release=False) is WorkflowState.FAILED
+        assert derive_state(phases, skip_release=False) is RequestState.FAILED
 
     def test_failed_later_phase_is_failed(self):
         phases = {
@@ -295,15 +295,15 @@ class TestDeriveState:
             Phase.SNAPSHOT: _phase(Phase.SNAPSHOT, PhaseStatus.SUCCESS),
             Phase.RELEASE: _phase(Phase.RELEASE, PhaseStatus.FAILED),
         }
-        assert derive_state(phases, skip_release=False) is WorkflowState.FAILED
+        assert derive_state(phases, skip_release=False) is RequestState.FAILED
 
     def test_intake_success_awaiting_release(self):
         phases = {Phase.INTAKE: _phase(Phase.INTAKE, PhaseStatus.SUCCESS)}
-        assert derive_state(phases, skip_release=False) is WorkflowState.AWAITING_RELEASE
+        assert derive_state(phases, skip_release=False) is RequestState.AWAITING_RELEASE
 
     def test_intake_success_skip_release_is_success(self):
         phases = {Phase.INTAKE: _phase(Phase.INTAKE, PhaseStatus.SUCCESS)}
-        assert derive_state(phases, skip_release=True) is WorkflowState.SUCCESS
+        assert derive_state(phases, skip_release=True) is RequestState.SUCCESS
 
     def test_release_success_is_success(self):
         phases = {
@@ -312,7 +312,7 @@ class TestDeriveState:
             Phase.INTEGRATION_TESTS: _phase(Phase.INTEGRATION_TESTS, PhaseStatus.SKIPPED),
             Phase.RELEASE: _phase(Phase.RELEASE, PhaseStatus.SUCCESS),
         }
-        assert derive_state(phases, skip_release=False) is WorkflowState.SUCCESS
+        assert derive_state(phases, skip_release=False) is RequestState.SUCCESS
 
     def test_release_running_awaiting_release(self):
         phases = {
@@ -320,9 +320,9 @@ class TestDeriveState:
             Phase.SNAPSHOT: _phase(Phase.SNAPSHOT, PhaseStatus.SUCCESS),
             Phase.RELEASE: _phase(Phase.RELEASE, PhaseStatus.RUNNING),
         }
-        assert derive_state(phases, skip_release=False) is WorkflowState.AWAITING_RELEASE
+        assert derive_state(phases, skip_release=False) is RequestState.AWAITING_RELEASE
 
     @pytest.mark.parametrize("skip_release", [True, False])
     def test_failed_intake_failed_regardless_of_skip(self, skip_release):
         phases = {Phase.INTAKE: _phase(Phase.INTAKE, PhaseStatus.FAILED)}
-        assert derive_state(phases, skip_release=skip_release) is WorkflowState.FAILED
+        assert derive_state(phases, skip_release=skip_release) is RequestState.FAILED

@@ -20,16 +20,16 @@ from unittest.mock import MagicMock
 import pytest
 
 from import_orchestrator.clients import KubeClient
+from import_orchestrator.database import WorkflowDatabase
 from import_orchestrator.ecosystems.java.pipelinerun import TriggerError
 from import_orchestrator.engine import (
     ImportOrchestrator,
     ImportTrigger,
     PipelineMonitor,
     ReleaseMonitor,
-    WorkflowView,
+    RequestView,
 )
 from import_orchestrator.models import ClusterResource, Phase, PhaseStatus, PipelineRunStatus, Request
-from import_orchestrator.workflow_db import WorkflowDatabase
 
 
 def _identity(ref: str) -> dict[str, str]:
@@ -107,7 +107,7 @@ def mock_kube():
 @pytest.fixture
 def orchestrator(db: WorkflowDatabase, mock_kube: MagicMock):
     mock_kube.create_pipelinerun.return_value = "pnc-import-xxx"
-    view = WorkflowView(db, skip_release=False)
+    view = RequestView(db, skip_release=False)
     trigger = ImportTrigger(
         view=view,
         kube=mock_kube,
@@ -220,7 +220,7 @@ class TestRunUntilComplete:
 
 class TestStatistics:
     def test_statistics_has_no_triggered_key(self, orchestrator: ImportOrchestrator, db: WorkflowDatabase):
-        """The statistics projection uses WorkflowState values (no 'triggered')."""
+        """The statistics projection uses RequestState values (no 'triggered')."""
         _seed_running(db, "r1")
         stats = orchestrator.view.statistics()
         assert set(stats) == {"pending", "running", "releasing", "success", "failed"}

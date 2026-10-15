@@ -25,16 +25,16 @@ from pathlib import Path
 
 from import_orchestrator.clients import KubeClient
 from import_orchestrator.constants import CLUSTER_API, KUBEARCHIVE_API
+from import_orchestrator.database import WorkflowDatabase, warn_if_legacy_database
 from import_orchestrator.engine import (
     ImportOrchestrator,
     ImportTrigger,
     Ingest,
     PipelineMonitor,
     ReleaseMonitor,
-    WorkflowView,
+    RequestView,
 )
-from import_orchestrator.models import Phase, PhaseStatus, Request, WorkflowState, derive_state
-from import_orchestrator.workflow_db import WorkflowDatabase, warn_if_legacy_database
+from import_orchestrator.models import Phase, PhaseStatus, Request, RequestState, derive_state
 
 
 def _resolve_db(args: argparse.Namespace) -> tuple[Path, str | None]:
@@ -56,7 +56,7 @@ def _resolve_db(args: argparse.Namespace) -> tuple[Path, str | None]:
     return Path(tmp_dir) / "state.db", tmp_dir
 
 
-def _result_payload(ref: str, view: WorkflowView, request: Request | None, rc: int) -> dict:
+def _result_payload(ref: str, view: RequestView, request: Request | None, rc: int) -> dict:
     """Build the structured result payload for a completed single-ref run.
 
     Reconstructs the final state from the Request's latest Attempt phases so
@@ -70,7 +70,7 @@ def _result_payload(ref: str, view: WorkflowView, request: Request | None, rc: i
     if request is None or request.id is None:
         return {
             "ref": ref,
-            "status": WorkflowState.SUCCESS.value if rc == 0 else WorkflowState.FAILED.value,
+            "status": RequestState.SUCCESS.value if rc == 0 else RequestState.FAILED.value,
             "pipelinerun_name": None,
             "snapshot_name": None,
             "release_name": None,
@@ -139,7 +139,7 @@ def run_single(args: argparse.Namespace, ref: str) -> int:
             Ingest(db, build_identity=lambda r: eco.request_identity(r, args)).from_lines([ref])
 
             kube = KubeClient(eco.namespace, CLUSTER_API, KUBEARCHIVE_API)
-            view = WorkflowView(db, skip_release)
+            view = RequestView(db, skip_release)
 
             trigger = ImportTrigger(
                 view=view,

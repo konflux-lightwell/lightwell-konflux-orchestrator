@@ -18,9 +18,9 @@ from pathlib import Path
 
 import pytest
 
+from import_orchestrator.database import WorkflowDatabase
 from import_orchestrator.ecosystems.java.parser import parse_manifest
 from import_orchestrator.engine import Ingest, IngestResult
-from import_orchestrator.workflow_db import WorkflowDatabase
 
 
 def _identity(ref: str) -> dict[str, str]:

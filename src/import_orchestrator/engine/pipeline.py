@@ -19,7 +19,7 @@ from __future__ import annotations
 import sys
 
 from import_orchestrator.clients import KubeClient
-from import_orchestrator.engine.workflow_view import WorkflowView
+from import_orchestrator.engine.request_view import RequestView
 from import_orchestrator.models import Phase, PhaseStatus
 from import_orchestrator.utils import extract_tag
 
@@ -34,7 +34,7 @@ class PipelineMonitor:
     nothing further happens.
     """
 
-    def __init__(self, view: WorkflowView, kube: KubeClient):
+    def __init__(self, view: RequestView, kube: KubeClient):
         self.view = view
         self.db = view.db
         self.kube = kube

@@ -19,10 +19,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from import_orchestrator.database import WorkflowDatabase
 from import_orchestrator.ecosystems.java.pipelinerun import TriggerError
-from import_orchestrator.engine import ImportTrigger, WorkflowView
-from import_orchestrator.models import ClusterResource, Phase, PhaseStatus, Request, WorkflowState
-from import_orchestrator.workflow_db import WorkflowDatabase
+from import_orchestrator.engine import ImportTrigger, RequestView
+from import_orchestrator.models import ClusterResource, Phase, PhaseStatus, Request, RequestState
 
 
 def _identity(ref: str) -> dict[str, str]:
@@ -85,7 +85,7 @@ def mock_build():
 
 @pytest.fixture
 def trigger(db: WorkflowDatabase, mock_kube: MagicMock, mock_build: MagicMock):
-    view = WorkflowView(db, skip_release=False)
+    view = RequestView(db, skip_release=False)
     return ImportTrigger(
         view=view,
         kube=mock_kube,
@@ -231,7 +231,7 @@ class TestTriggerNextBatch:
             db.upsert_phase(attempt.id, Phase.INTAKE, PhaseStatus.FAILED, error_message="boom")
 
         view = trigger.view
-        assert view.state(request) == WorkflowState.FAILED
+        assert view.state(request) == RequestState.FAILED
         assert trigger.trigger_next_batch() == 0
         assert db.attempt_count(request.id) == 4  # unchanged
 

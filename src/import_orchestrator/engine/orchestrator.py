@@ -21,9 +21,9 @@ import time
 
 from import_orchestrator.engine.pipeline import PipelineMonitor
 from import_orchestrator.engine.release import ReleaseMonitor
+from import_orchestrator.engine.request_view import RequestView
 from import_orchestrator.engine.trigger import ImportTrigger
-from import_orchestrator.engine.workflow_view import WorkflowView
-from import_orchestrator.models import WorkflowState
+from import_orchestrator.models import RequestState
 
 
 class ImportOrchestrator:
@@ -32,12 +32,12 @@ class ImportOrchestrator:
     This is a thin coordinator that manages the polling loop and delegates
     to ImportTrigger, PipelineMonitor, and ReleaseMonitor for the actual work.
     Completion and statistics are derived from each Request's latest Attempt via
-    the shared :class:`WorkflowView`.
+    the shared :class:`RequestView`.
     """
 
     def __init__(
         self,
-        view: WorkflowView,
+        view: RequestView,
         trigger: ImportTrigger,
         pipeline_monitor: PipelineMonitor,
         release_monitor: ReleaseMonitor,
@@ -74,11 +74,11 @@ class ImportOrchestrator:
     def _print_statistics(self, stats: dict[str, int]) -> None:
         """Print current statistics to stderr."""
         print(
-            f"Status: pending={stats[WorkflowState.PENDING.value]}, "
-            f"running={stats[WorkflowState.RUNNING.value]}, "
-            f"releasing={stats[WorkflowState.AWAITING_RELEASE.value]}, "
-            f"success={stats[WorkflowState.SUCCESS.value]}, "
-            f"failed={stats[WorkflowState.FAILED.value]}",
+            f"Status: pending={stats[RequestState.PENDING.value]}, "
+            f"running={stats[RequestState.RUNNING.value]}, "
+            f"releasing={stats[RequestState.AWAITING_RELEASE.value]}, "
+            f"success={stats[RequestState.SUCCESS.value]}, "
+            f"failed={stats[RequestState.FAILED.value]}",
             file=sys.stderr,
         )
 
@@ -111,4 +111,4 @@ class ImportOrchestrator:
         print("\n=== Complete ===", file=sys.stderr)
         self._print_statistics(final_stats)
 
-        return 0 if final_stats.get(WorkflowState.FAILED.value, 0) == 0 else 1
+        return 0 if final_stats.get(RequestState.FAILED.value, 0) == 0 else 1

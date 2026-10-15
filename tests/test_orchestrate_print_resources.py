@@ -103,7 +103,7 @@ def _args(eco, repo: Path | None) -> argparse.Namespace:
 
 
 class _FakeView:
-    """Minimal WorkflowView stand-in exposing just ``pending()`` for preview."""
+    """Minimal RequestView stand-in exposing just ``pending()`` for preview."""
 
     def __init__(self, pending):
         self._pending = pending

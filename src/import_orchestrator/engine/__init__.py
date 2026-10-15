@@ -19,8 +19,8 @@ from import_orchestrator.engine.ingest import Ingest, IngestResult
 from import_orchestrator.engine.orchestrator import ImportOrchestrator
 from import_orchestrator.engine.pipeline import PipelineMonitor
 from import_orchestrator.engine.release import ReleaseMonitor
+from import_orchestrator.engine.request_view import RequestView
 from import_orchestrator.engine.trigger import ImportTrigger
-from import_orchestrator.engine.workflow_view import WorkflowView
 
 __all__ = [
     "ImportOrchestrator",
@@ -30,5 +30,5 @@ __all__ = [
     "PipelineMonitor",
     "ReleaseMonitor",
     "TriggerError",
-    "WorkflowView",
+    "RequestView",
 ]

@@ -17,7 +17,7 @@ limitations under the License.
 import sqlite3
 from pathlib import Path
 
-from import_orchestrator.workflow_db import WorkflowDatabase, warn_if_legacy_database
+from import_orchestrator.database import WorkflowDatabase, warn_if_legacy_database
 
 
 def _write_legacy_db(db_path: Path, rows: int) -> None:

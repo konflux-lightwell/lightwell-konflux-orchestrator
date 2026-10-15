@@ -21,7 +21,7 @@ from collections.abc import Callable
 
 from import_orchestrator.clients.kube import KubeClient
 from import_orchestrator.engine.errors import TriggerError
-from import_orchestrator.engine.workflow_view import WorkflowView
+from import_orchestrator.engine.request_view import RequestView
 from import_orchestrator.models import Attempt, ClusterResource, Phase, PhaseStatus, Request
 from import_orchestrator.utils import extract_tag
 
@@ -41,7 +41,7 @@ class ImportTrigger:
 
     def __init__(
         self,
-        view: WorkflowView,
+        view: RequestView,
         kube: KubeClient,
         build_pipelinerun: Callable[[str], dict],
         max_parallel: int,
