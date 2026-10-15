@@ -33,6 +33,14 @@ spec:
         HEAD (tagged) commit — the same artifact source-to-sdist consumes for
         its `git archive`, so .git is guaranteed present.
       type: string
+    - name: MANIFEST_ARTIFACT
+      description: >-
+        Trusted Artifact URI containing build-manifest.json produced by
+        python-fromager-build-wheels. When non-empty, companion produced modules
+        and cached ride-along dependencies are read and passed to fath-cuan
+        index create via --produced-purl and --extra-purl.
+      type: string
+      default: ""
     - name: IMAGE_REF
       description: >-
         Digest-pinned reference (repo@sha256:...) of the wheels component image
@@ -61,7 +69,6 @@ spec:
         remediated builds fail closed when no vulnerability IDs resolve from
         the Lightwell-Fix trailers; Validated builds carry no vulns.
       type: string
-      default: "Backport"
     - name: caTrustConfigMapName
       description: The name of the ConfigMap to read CA bundle data from.
       type: string
@@ -105,6 +112,21 @@ spec:
       args:
         - use
         - $(params.SOURCE_ARTIFACT)=/var/workdir/source
+    # ── Restore build-manifest.json (if provided) ─────────────────────────────
+    - name: use-manifest-artifact
+      image: quay.io/konflux-ci/build-trusted-artifacts:latest@sha256:9bd32f6bafb517b309e11a2d89365052b4ab3f1c9c23c4ffd45aff6f03960476
+      computeResources:
+        limits:
+          memory: 512Mi
+        requests:
+          cpu: 100m
+          memory: 512Mi
+      volumeMounts:
+        - mountPath: /var/workdir
+          name: workdir
+      args:
+        - use
+        - $(params.MANIFEST_ARTIFACT)=/var/workdir
     # ── Generate build-index.json from trailers and attach it as a referrer ───
     - name: create-and-attach
       # Dedicated fath-cuan build-side image (LWLP-1844), digest-pinned. Replaces
@@ -168,6 +190,77 @@ spec:
           REQUIRE_VULN_ARGS+=(--require-vuln)
         fi
 
+        MANIFEST_ARTIFACT="$(params.MANIFEST_ARTIFACT)"
+        MANIFEST_ARGS=()
+
+        if [ -n "$MANIFEST_ARTIFACT" ]; then
+          echo "Processing MANIFEST_ARTIFACT: $MANIFEST_ARTIFACT"
+          MANIFEST_FILE=""
+          for candidate in /var/workdir/build-manifest.json /var/workdir/manifest/build-manifest.json; do
+            if [ -f "$candidate" ]; then
+              MANIFEST_FILE="$candidate"
+              break
+            fi
+          done
+
+          if [ -z "$MANIFEST_FILE" ]; then
+            echo "ERROR: MANIFEST_ARTIFACT provided but build-manifest.json not found in /var/workdir" >&2
+            exit 1
+          fi
+
+          python3 - "$MANIFEST_FILE" "$(params.PACKAGE)" > /var/workdir/manifest-args.txt <<'PY'
+          import json
+          import sys
+          from packaging.utils import canonicalize_name
+
+          manifest_file = sys.argv[1]
+          primary_pkg = canonicalize_name(sys.argv[2])
+
+          with open(manifest_file) as f:
+              manifest = json.load(f)
+
+          produced = manifest.get("produced", [])
+          cached = manifest.get("cached", [])
+
+          seen_produced = set()
+          for entry in produced:
+              raw_name = entry.get("name") or ""
+              ver = str(entry.get("version") or "").strip()
+              if not raw_name or not ver:
+                  continue
+              cname = canonicalize_name(raw_name)
+              if cname == primary_pkg:
+                  continue
+              purl = f"pkg:pypi/{cname}@{ver}"
+              if purl not in seen_produced:
+                  seen_produced.add(purl)
+                  print("--produced-purl")
+                  print(purl)
+
+          seen_cached = set()
+          for entry in cached:
+              raw_name = entry.get("name") or ""
+              ver = str(entry.get("version") or "").strip()
+              if not raw_name or not ver:
+                  continue
+              cname = canonicalize_name(raw_name)
+              if cname == primary_pkg:
+                  continue
+              purl = f"pkg:pypi/{cname}@{ver}"
+              if purl not in seen_cached:
+                  seen_cached.add(purl)
+                  print("--extra-purl")
+                  print(purl)
+        PY
+
+          while IFS= read -r line; do
+            [ -n "$line" ] && MANIFEST_ARGS+=("$line")
+          done < /var/workdir/manifest-args.txt
+          echo "Emitted ${#MANIFEST_ARGS[@]} manifest arguments from $MANIFEST_FILE"
+        else
+          echo "Notice: MANIFEST_ARTIFACT is empty; proceeding without companion produced or extra purls"
+        fi
+
         fath-cuan index create \
           --ecosystem pypi \
           --purl "$PURL" \
@@ -177,6 +270,7 @@ spec:
           --n "$N" \
           --git-dir "$SRC" \
           "${REQUIRE_VULN_ARGS[@]}" \
+          "${MANIFEST_ARGS[@]}" \
           --output /var/workdir/build-index.json
 
         echo "--- build-index.json ---"
