@@ -251,6 +251,8 @@ spec:
           value: $(params.VERSION)
         - name: COMPUTED_VERSION
           value: $(tasks.source-to-sdist.results.COMPUTED_VERSION)
+        - name: BUILD_TYPE
+          value: $(params.BUILD_TYPE)
         - name: IMAGE
           value: $(params.IMAGE)
         - name: IMAGE_EXPIRES_AFTER
@@ -317,6 +319,8 @@ spec:
           value: $(params.PACKAGE)
         - name: VERSION
           value: $(params.VERSION)
+        - name: BUILD_TYPE
+          value: $(params.BUILD_TYPE)
         - name: COMPUTED_VERSION
           value: $(tasks.source-to-sdist.results.COMPUTED_VERSION)
         - name: caTrustConfigMapName
