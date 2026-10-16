@@ -156,7 +156,7 @@ def test_request_identity_defaults_to_remediated_target():
         "namespace": "lightwell-python-tenant",
         "application": "remediated-build",
         "component": "remediated-build",
-        "pipeline": "python-remediated-build",
+        "pipeline": "python-build",
         "release_plan": "",
         "target": "REMEDIATED",
         "artifact": "foolib==0.4.0",
