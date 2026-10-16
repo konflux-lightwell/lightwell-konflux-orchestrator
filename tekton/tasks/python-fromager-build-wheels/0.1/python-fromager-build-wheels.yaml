@@ -413,13 +413,24 @@ spec:
                             if item_key not in seen_produced:
                                 seen_produced.add(item_key)
                                 produced.append({"name": dist, "version": entry_version})
-                        elif prebuilt or skipped:
+                        else:
                             item_key = (dist, entry_version)
                             if item_key not in seen_cached:
                                 seen_cached.add(item_key)
                                 cached.append({"name": dist, "version": entry_version})
             except Exception as e:
                 print(f"Warning: could not inspect {summary_path}: {e}", file=sys.stderr)
+
+        # A dist built from source in any bootstrap phase is produced, not
+        # cached: drop cached entries whose (name, version) was also produced,
+        # so the same purl never reaches fath-cuan as both --produced-purl
+        # and --extra-purl (BuildIndex requires purls/extraPurls disjoint).
+        # Applied post-loop because summary ordering must not decide the
+        # outcome when a dist appears as cached in one phase and produced
+        # in another.
+        cached = [
+            c for c in cached if (c["name"], c["version"]) not in seen_produced
+        ]
 
         if unapproved_builds:
             print(f"FATAL: Unauthorized package(s) built from source: {unapproved_builds}!", file=sys.stderr)
