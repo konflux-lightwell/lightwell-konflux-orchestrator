@@ -134,7 +134,7 @@ spec:
       # longer depend on the release toolchain's container lifecycle. Task-runner
       # based, so it still provides select-oci-auth + the oras CLI used below, plus
       # fath-cuan[oci]. Re-pin the digest when a new fath-cuan image is published.
-      image: quay.io/light-factory/fath-cuan@sha256:966468510b804093d4606c723b2e48152ed5e16d158e2f405e2e058e76bc16f5
+      image: quay.io/light-factory/fath-cuan@sha256:6378b568afb3f8754ed1f684069a5dc81962b1ff91dd41a8d66e87b628d21c12
       computeResources:
         limits:
           memory: 512Mi
