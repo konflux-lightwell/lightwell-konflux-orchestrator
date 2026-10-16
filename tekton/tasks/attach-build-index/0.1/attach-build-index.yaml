@@ -19,9 +19,11 @@ spec:
     The primary PURL, the remediated version, and the vulnerability IDs are
     derived from the ADR-0005 `Lightwell-Fix:` commit trailers on the checked-out
     lightwell-builds source (restored from SOURCE_ARTIFACT, whose HEAD is the
-    tagged cumulative-patch commit). The task fails closed (`--require-vuln`): a
-    remediated build with no resolvable vulnerability IDs is a hard error rather
-    than an index that silently ships `vulns: []`.
+    tagged cumulative-patch commit). Remediated builds (Backport/Novel) fail
+    closed (`--require-vuln`): a remediated build with no resolvable
+    vulnerability IDs is a hard error rather than an index that silently ships
+    `vulns: []`. Validated builds carry no vulns by definition and skip that
+    check.
   params:
     - name: SOURCE_ARTIFACT
       description: >-
@@ -31,6 +33,14 @@ spec:
         HEAD (tagged) commit — the same artifact source-to-sdist consumes for
         its `git archive`, so .git is guaranteed present.
       type: string
+    - name: MANIFEST_ARTIFACT
+      description: >-
+        Trusted Artifact URI containing build-manifest.json produced by
+        python-fromager-build-wheels. When non-empty, companion produced modules
+        and cached ride-along dependencies are read and passed to fath-cuan
+        index create via --produced-purl and --extra-purl.
+      type: string
+      default: ""
     - name: IMAGE_REF
       description: >-
         Digest-pinned reference (repo@sha256:...) of the wheels component image
@@ -53,6 +63,12 @@ spec:
         version.full and used as the PURL version, so primaryPurl matches
         version.full (enforced by the BuildIndex schema).
       type: string
+    - name: BUILD_TYPE
+      description: >-
+        Build mode: Backport, Novel, or Validated. Controls --require-vuln:
+        remediated builds fail closed when no vulnerability IDs resolve from
+        the Lightwell-Fix trailers; Validated builds carry no vulns.
+      type: string
     - name: caTrustConfigMapName
       description: The name of the ConfigMap to read CA bundle data from.
       type: string
@@ -66,6 +82,12 @@ spec:
       description: >-
         The component image reference the build-index referrer was attached to
         (repo@sha256:...). Empty if nothing was attached.
+    - name: BUILD_INDEX_DIGEST
+      description: >-
+        The sha256 content digest (sha256:...) of the attached build-index.json.
+        Recorded as a PipelineRun result so Tekton Chains attests it, letting
+        Enterprise Contract verify at release time that the publish manifest a
+        release consumed is exactly the one this build produced (LWLP-3276).
   stepTemplate:
     env:
       - name: IMAGE_REF
@@ -90,6 +112,21 @@ spec:
       args:
         - use
         - $(params.SOURCE_ARTIFACT)=/var/workdir/source
+    # ── Restore build-manifest.json (if provided) ─────────────────────────────
+    - name: use-manifest-artifact
+      image: quay.io/konflux-ci/build-trusted-artifacts:latest@sha256:9bd32f6bafb517b309e11a2d89365052b4ab3f1c9c23c4ffd45aff6f03960476
+      computeResources:
+        limits:
+          memory: 512Mi
+        requests:
+          cpu: 100m
+          memory: 512Mi
+      volumeMounts:
+        - mountPath: /var/workdir
+          name: workdir
+      args:
+        - use
+        - $(params.MANIFEST_ARTIFACT)=/var/workdir
     # ── Generate build-index.json from trailers and attach it as a referrer ───
     - name: create-and-attach
       # Dedicated fath-cuan build-side image (LWLP-1844), digest-pinned. Replaces
@@ -97,7 +134,7 @@ spec:
       # longer depend on the release toolchain's container lifecycle. Task-runner
       # based, so it still provides select-oci-auth + the oras CLI used below, plus
       # fath-cuan[oci]. Re-pin the digest when a new fath-cuan image is published.
-      image: quay.io/light-factory/fath-cuan@sha256:966468510b804093d4606c723b2e48152ed5e16d158e2f405e2e058e76bc16f5
+      image: quay.io/light-factory/fath-cuan@sha256:01d329ba8c39c2c53c8ba0b1f9a57b4cb62d525533526480477d1e249c8d1732
       computeResources:
         limits:
           memory: 512Mi
@@ -145,7 +182,88 @@ spec:
         # $SRC/.git and writes the document. It never touches the registry here, so
         # it needs no credentials — all registry auth is confined to the attach below.
         #
-        # --require-vuln: fail closed if no vuln IDs resolve from the trailers.
+        # --require-vuln is BUILD_TYPE-conditional: remediated builds (Backport/
+        # Novel) fail closed when no vulnerability IDs resolve from the trailers;
+        # Validated builds carry no vulns by definition and skip the check.
+        REQUIRE_VULN_ARGS=()
+        if [[ "$(params.BUILD_TYPE)" != "Validated" ]]; then
+          REQUIRE_VULN_ARGS+=(--require-vuln)
+        fi
+
+        MANIFEST_ARTIFACT="$(params.MANIFEST_ARTIFACT)"
+        MANIFEST_ARGS=()
+
+        if [ -n "$MANIFEST_ARTIFACT" ]; then
+          echo "Processing MANIFEST_ARTIFACT: $MANIFEST_ARTIFACT"
+          MANIFEST_FILE=""
+          for candidate in /var/workdir/build-manifest.json /var/workdir/manifest/build-manifest.json; do
+            if [ -f "$candidate" ]; then
+              MANIFEST_FILE="$candidate"
+              break
+            fi
+          done
+
+          if [ -z "$MANIFEST_FILE" ]; then
+            echo "ERROR: MANIFEST_ARTIFACT provided but build-manifest.json not found in /var/workdir" >&2
+            exit 1
+          fi
+
+          python3 - "$MANIFEST_FILE" "$(params.PACKAGE)" > /var/workdir/manifest-args.txt <<'PY'
+        import json
+        import sys
+        from packaging.utils import canonicalize_name
+
+        manifest_file = sys.argv[1]
+        primary_pkg = canonicalize_name(sys.argv[2])
+
+        with open(manifest_file) as f:
+            manifest = json.load(f)
+
+        produced = manifest.get("produced", [])
+        cached = manifest.get("cached", [])
+
+        seen_produced = set()
+        for entry in produced:
+            raw_name = entry.get("name") or ""
+            ver = str(entry.get("version") or "").strip()
+            if not raw_name or not ver:
+                continue
+            cname = canonicalize_name(raw_name)
+            if cname == primary_pkg:
+                continue
+            purl = f"pkg:pypi/{cname}@{ver}"
+            if purl not in seen_produced:
+                seen_produced.add(purl)
+                print("--produced-purl")
+                print(purl)
+
+        seen_cached = set()
+        for entry in cached:
+            raw_name = entry.get("name") or ""
+            ver = str(entry.get("version") or "").strip()
+            if not raw_name or not ver:
+                continue
+            cname = canonicalize_name(raw_name)
+            if cname == primary_pkg:
+                continue
+            purl = f"pkg:pypi/{cname}@{ver}"
+            # Produced wins over cached: fath-cuan requires purls and
+            # extraPurls to be disjoint, so never emit the same purl
+            # as both --produced-purl and --extra-purl.
+            if purl not in seen_cached and purl not in seen_produced:
+                seen_cached.add(purl)
+                print("--extra-purl")
+                print(purl)
+        PY
+
+          while IFS= read -r line; do
+            [ -n "$line" ] && MANIFEST_ARGS+=("$line")
+          done < /var/workdir/manifest-args.txt
+          echo "Emitted ${#MANIFEST_ARGS[@]} manifest arguments from $MANIFEST_FILE"
+        else
+          echo "Notice: MANIFEST_ARTIFACT is empty; proceeding without companion produced or extra purls"
+        fi
+
         fath-cuan index create \
           --ecosystem pypi \
           --purl "$PURL" \
@@ -154,6 +272,8 @@ spec:
           --b "$B" \
           --n "$N" \
           --git-dir "$SRC" \
+          "${REQUIRE_VULN_ARGS[@]}" \
+          "${MANIFEST_ARGS[@]}" \
           --output /var/workdir/build-index.json
 
         echo "--- build-index.json ---"
@@ -193,6 +313,12 @@ spec:
           "build-index.json:${BUILD_INDEX_MEDIA_TYPE}"
 
         echo -n "$IMAGE_REF" | tee "$(results.BUILD_INDEX_ATTACHED_REF.path)"
+
+        # Content digest of the attached manifest, emitted as a task result so
+        # Tekton Chains attests it; the release-side EC rule (LWLP-3276)
+        # verifies a release consumed exactly this digest.
+        INDEX_DIGEST="sha256:$(sha256sum /var/workdir/build-index.json | awk '{print $1}')"
+        echo -n "$INDEX_DIGEST" | tee "$(results.BUILD_INDEX_DIGEST.path)"
   volumes:
     - configMap:
         items:

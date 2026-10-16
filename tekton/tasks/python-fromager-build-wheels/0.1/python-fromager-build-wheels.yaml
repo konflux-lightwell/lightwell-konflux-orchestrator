@@ -35,11 +35,25 @@ spec:
         Produced by source-to-sdist. Used for wheel metadata verification and SBOM
         synchronization. Examples: 7.6.12+rhlw.1 (backport), 7.6.12+rhlw.1.n2 (novel).
       type: string
+    - name: BUILD_TYPE
+      description: >-
+        Build mode: Backport, Novel, or Validated. Validated builds construct
+        the full dependency closure from source (no wheel server), so the
+        allowed-artifacts provenance check applies to remediated builds only.
+      type: string
     - name: IMAGE
       description: Reference of the OCI artifact to produce (wheels image).
       type: string
     - name: IMAGE_EXPIRES_AFTER
       description: Delete image tag after specified time. Empty means keep.
+      type: string
+      default: ""
+    - name: ociStorage
+      description: The OCI repository to store the trusted artifact to.
+      type: string
+      default: ""
+    - name: ociArtifactExpiresAfter
+      description: The expiration time for the trusted artifact.
       type: string
       default: ""
     - name: WHEEL_SERVER_URL
@@ -68,6 +82,10 @@ spec:
       description: Full OCI reference (repo@digest) of the built wheels.
     - name: SBOM_BLOB_URL
       description: OCI reference for the attached SBOM blob.
+    - name: MANIFEST_ARTIFACT
+      description: >-
+        Trusted Artifact URI pointing to build-manifest.json produced by
+        verify-allowed-artifacts. Pass this to attach-build-index as MANIFEST_ARTIFACT.
 
   volumes:
     - name: trusted-ca
@@ -313,6 +331,8 @@ spec:
           value: $(params.VERSION)
         - name: COMPUTED_VERSION
           value: $(params.COMPUTED_VERSION)
+        - name: BUILD_TYPE
+          value: $(params.BUILD_TYPE)
       script: |
         #!/usr/bin/env python3
         import json
@@ -329,22 +349,40 @@ spec:
         package = os.environ["PACKAGE"]
         version = os.environ["VERSION"]
 
-        # 1. Resolve allowed artifacts
-        resolver_script = configs_dir / "scripts" / "get-allowed-artifacts.py"
-        if not resolver_script.is_file():
-            print(f"FATAL: allowed-artifact resolver missing from Trusted Artifact: {resolver_script}", file=sys.stderr)
-            sys.exit(1)
-        res = subprocess.run(
-            [sys.executable, str(resolver_script), "--packages-dir", str(configs_dir / "packages"), package, version],
-            capture_output=True, text=True, check=True,
-        )
-        allowed_packages = json.loads(res.stdout)
+        build_type = os.environ.get("BUILD_TYPE", "Backport")
 
-        print(f"Allowed packages for this build: {allowed_packages}")
+        allowed_packages = set()
+        if build_type == "Validated":
+            # Validated builds construct the full dependency closure from
+            # source by design (no validated wheel cache is consulted), so
+            # the remediated-only allowed-artifacts provenance checks do not
+            # apply. The primary wheel version verification below still runs.
+            print("Validated build: skipping allowed-artifacts provenance checks")
+        else:
+            # 1. Resolve allowed artifacts
+            resolver_script = configs_dir / "scripts" / "get-allowed-artifacts.py"
+            if not resolver_script.is_file():
+                print(f"FATAL: allowed-artifact resolver missing from Trusted Artifact: {resolver_script}", file=sys.stderr)
+                sys.exit(1)
+            res = subprocess.run(
+                [sys.executable, str(resolver_script), "--packages-dir", str(configs_dir / "packages"), package, version],
+                capture_output=True, text=True, check=True,
+            )
+            allowed_packages = set(json.loads(res.stdout))
 
-        # 2. Check build-sequence-summaries to ensure no unapproved package was built from source
+            print(f"Allowed packages for this build: {sorted(allowed_packages)}")
+
+        # 2. Inspect build-sequence-summaries to enumerate produced and cached
+        #    modules and, for remediated builds, ensure no unapproved package was
+        #    built from source. Which wheels get PUBLISHED is decided at release
+        #    time from the build-index (LWLP-3276), not by pruning the artifact here.
         unapproved_builds = []
-        for summary_path in output_dir.glob("build-sequence-summary-*.json"):
+        produced = []
+        cached = []
+        seen_produced = set()
+        seen_cached = set()
+
+        for summary_path in sorted(output_dir.glob("build-sequence-summary-*.json")):
             try:
                 with open(summary_path) as f:
                     entries = json.load(f)
@@ -353,21 +391,51 @@ spec:
                     if not raw_name:
                         continue
                     dist = canonicalize_name(raw_name)
+                    entry_version = str(entry.get("version") or entry.get("req_version") or "").strip()
                     skipped = entry.get("skipped", False)
                     prebuilt = entry.get("prebuilt", False)
-                    if not skipped and not prebuilt and dist not in allowed_packages:
+
+                    if build_type != "Validated" and not skipped and not prebuilt and dist not in allowed_packages:
                         unapproved_builds.append(dist)
+
+                    if build_type == "Validated":
+                        if not skipped:
+                            item_key = (dist, entry_version)
+                            if item_key not in seen_produced:
+                                seen_produced.add(item_key)
+                                produced.append({"name": dist, "version": entry_version})
+                    else:
+                        if not skipped and not prebuilt:
+                            item_key = (dist, entry_version)
+                            if item_key not in seen_produced:
+                                seen_produced.add(item_key)
+                                produced.append({"name": dist, "version": entry_version})
+                        else:
+                            item_key = (dist, entry_version)
+                            if item_key not in seen_cached:
+                                seen_cached.add(item_key)
+                                cached.append({"name": dist, "version": entry_version})
             except Exception as e:
                 print(f"Warning: could not inspect {summary_path}: {e}", file=sys.stderr)
 
+        # A dist built from source in any bootstrap phase is produced, not
+        # cached: drop cached entries whose (name, version) was also produced,
+        # so the same purl never reaches fath-cuan as both --produced-purl
+        # and --extra-purl (BuildIndex requires purls/extraPurls disjoint).
+        # Applied post-loop because summary ordering must not decide the
+        # outcome when a dist appears as cached in one phase and produced
+        # in another.
+        cached = [
+            c for c in cached if (c["name"], c["version"]) not in seen_produced
+        ]
+
         if unapproved_builds:
             print(f"FATAL: Unauthorized package(s) built from source: {unapproved_builds}!", file=sys.stderr)
-            print(f"       Only {allowed_packages} are permitted.", file=sys.stderr)
+            print(f"       Only {sorted(allowed_packages)} are permitted.", file=sys.stderr)
             print("       All dependencies must be pre-built in the validated wheel cache.", file=sys.stderr)
             sys.exit(1)
 
-        # 3. Clean artifact/ directory: remove any cached dependency artifacts not in allowed_packages
-        # Require the primary wheel's embedded metadata to match the computed
+        # 3. Require the primary wheel's embedded metadata to match the computed
         # remediation version; upstream-version fallback hid the NLTK failure.
         package_norm = canonicalize_name(package).replace("-", "_")
         primary_wheels = [p for p in artifact_dir.glob("*.whl") if p.name.lower().startswith(package_norm.lower() + "-")]
@@ -399,19 +467,32 @@ spec:
                         sys.exit(1)
                     print(f"Verified primary wheel SBOM version: {primary_wheel.name} -> {computed_version}")
 
-        # 4. Clean artifact/ directory: remove cached dependency artifacts not allowed.
+        # 4. Write /var/workdir/build-manifest.json for attach-build-index (LWLP-3276)
+        manifest_data = {
+            "produced": produced,
+            "cached": cached,
+        }
+        manifest_path = Path("/var/workdir/build-manifest.json")
+        manifest_path.write_text(json.dumps(manifest_data, indent=2))
+        manifest_path.chmod(0o644)
+        print(f"Wrote build manifest ({len(produced)} produced, {len(cached)} cached) to {manifest_path}")
+
+        # NOTE (LWLP-3276): the artifact is intentionally NOT pruned to the
+        # allow-list here anymore. The full closure (target + validated-cache
+        # dependency wheels) stays in the artifact so the offline
+        # integration-test wheel-checks can install it closed-world, and the
+        # release pipeline selects what gets published from the build-index
+        # attached to the image. The provenance guarantee -- nothing was
+        # built from source except the allowed targets -- is enforced above.
 
         for fpath in list(artifact_dir.glob("*.whl")) + list(artifact_dir.glob("*.tar.gz")):
             fname = fpath.name
             raw_pkg = fname.split("-")[0]
             canonical_pkg = canonicalize_name(raw_pkg)
-            if canonical_pkg not in allowed_packages:
-                print(f"Pruning cached dependency artifact from release bundle: {fname}")
-                fpath.unlink()
-            else:
-                print(f"Verified allowed artifact in release bundle: {fname}")
+            disposition = "allowed" if (build_type != "Validated" and canonical_pkg in allowed_packages) else "closure"
+            print(f"Artifact in release bundle ({disposition}): {fname}")
 
-        print("Artifact verification and pruning complete.")
+        print("Artifact verification complete (no pruning; release-time selection applies).")
       computeResources:
         requests:
           cpu: 100m
@@ -570,3 +651,26 @@ spec:
         requests:
           cpu: 100m
           memory: 128Mi
+
+    - name: create-manifest-artifact
+      image: quay.io/konflux-ci/build-trusted-artifacts:latest@sha256:2712c8a6453fc9db5fc4c2d9d952554a4eea46d2fdba47a272b79fa07f8c8c40
+      env:
+        - name: IMAGE_EXPIRES_AFTER
+          value: $(params.ociArtifactExpiresAfter)
+      args:
+        - create
+        - --store
+        - $(params.ociStorage)
+        - $(results.MANIFEST_ARTIFACT.path)=/var/workdir/build-manifest.json
+      volumeMounts:
+        - mountPath: /etc/pki/tls/certs/ca-custom-bundle.crt
+          name: trusted-ca
+          readOnly: true
+          subPath: ca-bundle.crt
+      computeResources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          cpu: "1"
+          memory: 256Mi
