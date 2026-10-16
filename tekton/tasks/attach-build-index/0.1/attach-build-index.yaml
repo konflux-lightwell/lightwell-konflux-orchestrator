@@ -209,48 +209,51 @@ spec:
           fi
 
           python3 - "$MANIFEST_FILE" "$(params.PACKAGE)" > /var/workdir/manifest-args.txt <<'PY'
-          import json
-          import sys
-          from packaging.utils import canonicalize_name
+        import json
+        import sys
+        from packaging.utils import canonicalize_name
 
-          manifest_file = sys.argv[1]
-          primary_pkg = canonicalize_name(sys.argv[2])
+        manifest_file = sys.argv[1]
+        primary_pkg = canonicalize_name(sys.argv[2])
 
-          with open(manifest_file) as f:
-              manifest = json.load(f)
+        with open(manifest_file) as f:
+            manifest = json.load(f)
 
-          produced = manifest.get("produced", [])
-          cached = manifest.get("cached", [])
+        produced = manifest.get("produced", [])
+        cached = manifest.get("cached", [])
 
-          seen_produced = set()
-          for entry in produced:
-              raw_name = entry.get("name") or ""
-              ver = str(entry.get("version") or "").strip()
-              if not raw_name or not ver:
-                  continue
-              cname = canonicalize_name(raw_name)
-              if cname == primary_pkg:
-                  continue
-              purl = f"pkg:pypi/{cname}@{ver}"
-              if purl not in seen_produced:
-                  seen_produced.add(purl)
-                  print("--produced-purl")
-                  print(purl)
+        seen_produced = set()
+        for entry in produced:
+            raw_name = entry.get("name") or ""
+            ver = str(entry.get("version") or "").strip()
+            if not raw_name or not ver:
+                continue
+            cname = canonicalize_name(raw_name)
+            if cname == primary_pkg:
+                continue
+            purl = f"pkg:pypi/{cname}@{ver}"
+            if purl not in seen_produced:
+                seen_produced.add(purl)
+                print("--produced-purl")
+                print(purl)
 
-          seen_cached = set()
-          for entry in cached:
-              raw_name = entry.get("name") or ""
-              ver = str(entry.get("version") or "").strip()
-              if not raw_name or not ver:
-                  continue
-              cname = canonicalize_name(raw_name)
-              if cname == primary_pkg:
-                  continue
-              purl = f"pkg:pypi/{cname}@{ver}"
-              if purl not in seen_cached:
-                  seen_cached.add(purl)
-                  print("--extra-purl")
-                  print(purl)
+        seen_cached = set()
+        for entry in cached:
+            raw_name = entry.get("name") or ""
+            ver = str(entry.get("version") or "").strip()
+            if not raw_name or not ver:
+                continue
+            cname = canonicalize_name(raw_name)
+            if cname == primary_pkg:
+                continue
+            purl = f"pkg:pypi/{cname}@{ver}"
+            # Produced wins over cached: fath-cuan requires purls and
+            # extraPurls to be disjoint, so never emit the same purl
+            # as both --produced-purl and --extra-purl.
+            if purl not in seen_cached and purl not in seen_produced:
+                seen_cached.add(purl)
+                print("--extra-purl")
+                print(purl)
         PY
 
           while IFS= read -r line; do
