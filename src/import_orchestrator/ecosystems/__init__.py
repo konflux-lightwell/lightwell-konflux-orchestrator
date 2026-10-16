@@ -18,7 +18,13 @@ from __future__ import annotations
 
 from import_orchestrator.ecosystems.base import Ecosystem
 from import_orchestrator.ecosystems.java.ecosystem import JavaEcosystem
+from import_orchestrator.ecosystems.javascript.ecosystem import JavaScriptEcosystem
 from import_orchestrator.ecosystems.python.ecosystem import PythonEcosystem
 from import_orchestrator.ecosystems.python_sdist.ecosystem import PythonSdistEcosystem
 
-ECOSYSTEMS: list[Ecosystem] = [JavaEcosystem(), PythonEcosystem(), PythonSdistEcosystem()]
+ECOSYSTEMS: list[Ecosystem] = [
+    JavaEcosystem(),
+    JavaScriptEcosystem(),
+    PythonEcosystem(),
+    PythonSdistEcosystem(),
+]
