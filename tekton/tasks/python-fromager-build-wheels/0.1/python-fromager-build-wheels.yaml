@@ -42,6 +42,9 @@ spec:
       description: Delete image tag after specified time. Empty means keep.
       type: string
       default: ""
+    - name: BUILD_TYPE
+      description: "Build mode. Accepted values: Backport, Novel, Validated."
+      type: string
     - name: WHEEL_SERVER_URL
       description: Wheel server URL for prebuilt wheel lookup during fromager dependency resolution.
       type: string
@@ -439,9 +442,14 @@ spec:
           value: $(params.VERSION)
         - name: COMPUTED_VERSION
           value: $(params.COMPUTED_VERSION)
+        - name: BUILD_TYPE
+          value: $(params.BUILD_TYPE)
       script: |
         #!/bin/bash
         set -euo pipefail
+
+        # Lowercase BUILD_TYPE (bash-only syntax, e.g. "Remediated" → "remediated")
+        DISTRIBUTION_TARGET="${BUILD_TYPE,,}"
 
         select-oci-auth "$IMAGE" > auth.json
         AUTHFILE="$(realpath auth.json)"
@@ -482,7 +490,8 @@ spec:
           --annotation "dev.lightwell.package=${PACKAGE}" \
           --annotation "dev.lightwell.version=${COMPUTED_VERSION:-$VERSION}" \
           --annotation "dev.lightwell.upstream-version=${VERSION}" \
-          --annotation "dev.lightwell.pipeline=python-remediated-build" \
+          --annotation "dev.lightwell.pipeline=python-build" \
+          --annotation "dev.lightwell.distribution-target=${DISTRIBUTION_TARGET}" \
           --artifact-type "application/vnd.python.wheels" \
           "${FILES[@]}"
         then
