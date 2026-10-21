@@ -48,9 +48,6 @@ spec:
       description: Delete image tag after specified time. Empty means keep.
       type: string
       default: ""
-    - name: BUILD_TYPE
-      description: "Build mode. Accepted values: Backport, Novel, Validated."
-      type: string
     - name: ociStorage
       description: The OCI repository to store the trusted artifact to.
       type: string
