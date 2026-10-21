@@ -59,7 +59,15 @@ def build_pipelinerun_manifest(
     prefix: str,
     verification_secret: str,
     namespace: str = NAMESPACE,
+    is_rebuild: bool = False,
 ) -> dict[str, Any]:
+    params: list[dict[str, str]] = [
+        {"name": "SOURCE_IMAGE", "value": source_image},
+        {"name": "IMAGE", "value": dest_image},
+        {"name": "VERIFICATION_PUBLIC_KEY_SECRET", "value": verification_secret},
+    ]
+    if is_rebuild:
+        params.append({"name": "IS_REBUILD", "value": "true"})
     return {
         "apiVersion": "tekton.dev/v1",
         "kind": "PipelineRun",
@@ -76,10 +84,6 @@ def build_pipelinerun_manifest(
         "spec": {
             "taskRunTemplate": {"serviceAccountName": service_account},
             "pipelineSpec": pipeline_spec,
-            "params": [
-                {"name": "SOURCE_IMAGE", "value": source_image},
-                {"name": "IMAGE", "value": dest_image},
-                {"name": "VERIFICATION_PUBLIC_KEY_SECRET", "value": verification_secret},
-            ],
+            "params": params,
         },
     }

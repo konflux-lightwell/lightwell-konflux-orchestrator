@@ -273,6 +273,12 @@ _blob_clean(_) := "{\"gavs\": [\"g:a:1\"], \"vulns\": []}"
 
 _blob_nogav(_) := "{\"gavs\": [], \"vulns\": [\"CVE-2021-37533\"]}"
 
+_blob_rebuild_no_cve(_) := "{\"gavs\": [\"g:a:1\"], \"vulns\": [], \"is_rebuild\": true}"
+
+_blob_rebuild_no_vuln(_) := "{\"gavs\": [\"g:a:1\"], \"vulns\": [], \"is_rebuild\": true}"
+
+_blob_rebuild_with_ltwl(_) := "{\"gavs\": [\"g:a:1\"], \"vulns\": [\"LW-2026-4260\"], \"is_rebuild\": true}"
+
 _novel_prefixes := ["LW-"]
 
 _cve_prefixes := ["CVE-"]
@@ -351,6 +357,42 @@ test_backport_rejects_no_cve if {
 		with data.rule_data_custom.oci_verify_import_novel_vuln_id_prefixes as _novel_prefixes
 		with data.rule_data_custom.oci_verify_import_cve_vuln_id_prefixes as _cve_prefixes
 	_has_code(deny, "pnc_import.backport_requires_cve")
+}
+
+# ---- rebuild exemption: backport with no CVE passes when is_rebuild=true in GAV index ----
+test_backport_rebuild_exempt_from_cve_requirement if {
+	deny := pnc_import.deny with input.image.ref as _image_ref
+		with ec.oci.image_referrers as _mock_gav_referrers
+		with ec.oci.image_manifest as _mock_gav_manifest
+		with ec.oci.blob as _blob_rebuild_no_cve
+		with data.rule_data_custom.oci_verify_import_stream as "backport"
+		with data.rule_data_custom.oci_verify_import_novel_vuln_id_prefixes as _novel_prefixes
+		with data.rule_data_custom.oci_verify_import_cve_vuln_id_prefixes as _cve_prefixes
+	not _has_code(deny, "pnc_import.backport_requires_cve")
+}
+
+# ---- rebuild exemption: predisclosure with no vulns passes when is_rebuild=true in GAV index ----
+test_predisclosure_rebuild_exempt_from_vuln_requirement if {
+	deny := pnc_import.deny with input.image.ref as _image_ref
+		with ec.oci.image_referrers as _mock_gav_referrers
+		with ec.oci.image_manifest as _mock_gav_manifest_predisclosed
+		with ec.oci.blob as _blob_rebuild_no_vuln
+		with data.rule_data_custom.oci_verify_import_stream as "predisclosure"
+		with data.rule_data_custom.oci_verify_import_novel_vuln_id_prefixes as _novel_prefixes
+		with data.rule_data_custom.oci_verify_import_cve_vuln_id_prefixes as _cve_prefixes
+	not _has_code(deny, "pnc_import.predisclosure_requires_vuln")
+}
+
+# ---- rebuild with LTWL still denied on backport stream (LTWL exclusion not relaxed) ----
+test_backport_rebuild_still_excludes_ltwl if {
+	deny := pnc_import.deny with input.image.ref as _image_ref
+		with ec.oci.image_referrers as _mock_gav_referrers
+		with ec.oci.image_manifest as _mock_gav_manifest
+		with ec.oci.blob as _blob_rebuild_with_ltwl
+		with data.rule_data_custom.oci_verify_import_stream as "backport"
+		with data.rule_data_custom.oci_verify_import_novel_vuln_id_prefixes as _novel_prefixes
+		with data.rule_data_custom.oci_verify_import_cve_vuln_id_prefixes as _cve_prefixes
+	_has_code(deny, "pnc_import.backport_excludes_ltwl")
 }
 
 # ---- predisclosure: one gate — >=1 vuln id ----

@@ -26,6 +26,12 @@ spec:
         Name of the Kubernetes Secret containing the cosign public key (cosign.pub)
         used to verify SOURCE_IMAGE. Must contain exactly one PEM-encoded public key.
       type: string
+    - name: IS_REBUILD
+      description: >-
+        When "true", marks the imported artifact as a rebuild in the GAV index.
+        Exempts the import from CVE/vuln policy requirements for rebuild CTs.
+      type: string
+      default: "false"
   results:
     - name: IMAGE_URL
       value: $(tasks.verify-and-mirror.results.IMAGE_URL)
@@ -54,6 +60,8 @@ spec:
           value: $(params.IMAGE).src
         - name: VERIFICATION_PUBLIC_KEY_SECRET
           value: $(params.VERIFICATION_PUBLIC_KEY_SECRET)
+        - name: IS_REBUILD
+          value: $(params.IS_REBUILD)
       taskRef:
         params:
           - name: name
