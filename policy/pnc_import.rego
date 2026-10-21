@@ -330,6 +330,8 @@ deny contains result if {
 #   The predisclosure (novel) stream must carry at least one vuln id. The fix may
 #   be a novel remediation of a known vulnerability, so a CVE is sufficient — an
 #   LTWL (LW-) id is not required, but some vuln id must be present.
+#   Rebuild artifacts (is_rebuild: true in the GAV index) are exempt: their
+#   vulnerability classification is inherited from the predecessor CT.
 # custom:
 #   short_name: predisclosure_requires_vuln
 #   failure_msg: 'predisclosure stream requires at least one vuln id (novel or CVE), found none'
@@ -339,6 +341,7 @@ deny contains result if {
 	_stream == "predisclosure"
 	count(_gav_index_referrers) > 0
 	not _has_vuln
+	not _is_rebuild
 	result := metadata.result_helper(rego.metadata.chain(), [])
 }
 
@@ -346,6 +349,8 @@ deny contains result if {
 # title: Backport requires a CVE vulnerability
 # description: >-
 #   The backport (remediated) stream must carry at least one CVE vuln id.
+#   Rebuild artifacts (is_rebuild: true in the GAV index) are exempt: their
+#   vulnerability classification is inherited from the predecessor CT.
 # custom:
 #   short_name: backport_requires_cve
 #   failure_msg: 'backport stream requires at least one CVE vuln id, found none'
@@ -355,6 +360,7 @@ deny contains result if {
 	_stream == "backport"
 	count(_gav_index_referrers) > 0
 	not _has_cve
+	not _is_rebuild
 	result := metadata.result_helper(rego.metadata.chain(), [])
 }
 
@@ -490,6 +496,15 @@ _has_cve if count(_cve_vulns) > 0
 _has_vuln if _has_ltwl
 
 _has_vuln if _has_cve
+
+# True when the GAV index blob for this image carries is_rebuild: true, signalling
+# that vulnerability metadata was intentionally inherited from the predecessor CT
+# rather than re-populated by PNC for this build.
+_is_rebuild if {
+	some r in _gav_index_referrers
+	doc := oci.parsed_blob_from_image(r.ref)
+	doc.is_rebuild == true
+}
 
 _novel_vuln_id_prefixes := rule_data.get("oci_verify_import_novel_vuln_id_prefixes")
 

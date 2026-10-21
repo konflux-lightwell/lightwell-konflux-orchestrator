@@ -44,6 +44,7 @@ class JavaEcosystem:
         source_image = digest_pin_image(ref)
         tag = getattr(args, "tag", None) or extract_tag_from_image(source_image)
         dest_image = f"{cfg['dest_repo']}:{tag}"
+        is_rebuild = getattr(args, "is_rebuild", False)
 
         pipeline_path = config.pipeline_definition_path()
         pipeline_spec = load_pipeline(pipeline_path)
@@ -56,6 +57,7 @@ class JavaEcosystem:
             prefix=self.pipelinerun_prefix,
             verification_secret=config.VERIFICATION_PUBLIC_KEY_SECRET,
             namespace=self.namespace,
+            is_rebuild=is_rebuild,
         )
         return apply_pipeline_overrides(manifest, pipeline_path)
 

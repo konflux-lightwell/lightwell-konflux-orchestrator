@@ -52,6 +52,13 @@ def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> No
         default=os.environ.get("LIGHTWELL_ARTIFACT_TYPE", "STAGE"),
         help="Artifact type (default: STAGE, or LIGHTWELL_ARTIFACT_TYPE env var)",
     )
+    parser.add_argument(
+        "--is-rebuild",
+        action="store_true",
+        default=False,
+        dest="is_rebuild",
+        help="Mark the imported artifact as a rebuild in the GAV index.",
+    )
 
     parser.set_defaults(func=run, ecosystem=ecosystem)
 

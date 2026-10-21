@@ -49,6 +49,14 @@ spec:
         Name of the Kubernetes Secret containing the cosign public key as
         cosign.pub. The secret must contain exactly one PEM-encoded public key.
       type: string
+    - name: IS_REBUILD
+      description: >-
+        When "true", marks the imported artifact as a rebuild in the attached
+        GAV index JSON by injecting is_rebuild=true before the referrer is
+        attached. Use for CTs that rebuild an existing fix without new
+        vulnerability metadata populated by PNC.
+      type: string
+      default: "false"
   results:
     - name: IMAGE_DIGEST
       description: Digest of the mirrored artifact.
@@ -76,6 +84,8 @@ spec:
         value: $(params.SOURCE_IMAGE)
       - name: IMAGE
         value: $(params.IMAGE)
+      - name: IS_REBUILD
+        value: $(params.IS_REBUILD)
     volumeMounts:
       - mountPath: /mnt/trusted-ca
         name: trusted-ca
@@ -305,6 +315,11 @@ spec:
           else
             ATTACHMENT_DIR=/var/workdir/index
             ARTIFACT=$(oras pull --no-tty --output "$ATTACHMENT_DIR" "$INDEX_IMAGE_REF" --format "go-template={{range .files}}{{.path}}{{\"\n\"}}{{end}}")
+            if [ "${IS_REBUILD}" == "true" ]; then
+              jq '. + {"is_rebuild": true}' "${ARTIFACT}" > "${ARTIFACT}.tmp"
+              mv "${ARTIFACT}.tmp" "${ARTIFACT}"
+              echo "Marked GAV index as rebuild artifact (is_rebuild: true)"
+            fi
             pushd "$(dirname ${ARTIFACT})" > /dev/null
             DOCKER_CONFIG=/tmp/dst-auth retry oras attach \
               --no-tty \
