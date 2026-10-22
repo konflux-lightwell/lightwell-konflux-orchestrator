@@ -63,6 +63,14 @@ def add_build_args(parser: argparse.ArgumentParser) -> None:
         ),
         help="Tekton bundle for assess-npm-compliance-oci-ta",
     )
+    parser.add_argument(
+        "--tl-npm-registry-url",
+        default=os.environ.get(
+            "LIGHTWELL_JAVASCRIPT_TL_NPM_REGISTRY_URL",
+            config.DEFAULT_TL_NPM_REGISTRY_URL,
+        ),
+        help="Registry URL for assess npm compliance (default: ${config.DEFAULT_TL_NPM_REGISTRY_URL})",
+    )
 
 
 def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> None:

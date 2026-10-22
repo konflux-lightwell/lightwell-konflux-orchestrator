@@ -59,6 +59,7 @@ class JavaScriptEcosystem:
                 "task_assess_npm_compliance_bundle",
                 config.DEFAULT_TASK_ASSESS_NPM_COMPLIANCE_BUNDLE,
             ),
+            tl_npm_registry_url=getattr(args, "tl_npm_registry_url", config.DEFAULT_TL_NPM_REGISTRY_URL),
         )
 
     def request_identity(self, ref: str, args: argparse.Namespace) -> dict[str, str]:

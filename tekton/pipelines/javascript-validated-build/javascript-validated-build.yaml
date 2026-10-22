@@ -54,6 +54,12 @@ spec:
       description: Pulp Stage npm registry URL (only when publish-to-pulp is true)
       type: string
       default: ""
+    - name: tl-npm-registry-url
+      description: >-
+        Read-only npm registry used by assess-npm-compliance to assess npm dependency closure compliance
+        (Lightwell validated Pulp content URL)
+      type: string
+      default: "https://packages.redhat.com/api/pulp-content/lightwell-stage/javascript/validated"
     - name: npm-publish-secret-name
       type: string
       default: rhtl-pulp-npm-stage-credentials
@@ -163,6 +169,8 @@ spec:
           value: has-packages
         - name: IMAGE_EXPIRES_AFTER
           value: $(params.image-expires-after)
+        - name: TL_NPM_REGISTRY_URL
+          value: $(params.tl-npm-registry-url)
       taskRef:
         resolver: bundles
         params:

@@ -46,6 +46,9 @@ IMAGE_REPO_BASE = "quay.io/redhat-user-workloads/lightwell-javascript-tenant"
 DEFAULT_SOURCE_GIT_URL = "https://github.com/calungaproject/npm-registry"
 DEFAULT_SOURCE_REVISION = "main"
 
+# Assess npm dependency closure compliance agisnt Lightwell validated Pulp.
+DEFAULT_TL_NPM_REGISTRY_URL = "https://packages.redhat.com/api/pulp-content/lightwell-stage/javascript/validated"
+
 # Pinned digests from the calunga npm PoC (reuse until lightwell npm-builder lands).
 DEFAULT_BUILDER_IMAGE = (
     "quay.io/redhat-user-workloads/calunga-tenant/npm-builder:"

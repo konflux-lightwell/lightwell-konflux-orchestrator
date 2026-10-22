@@ -77,6 +77,7 @@ def _manifest(**overrides):
         builder_image="quay.io/example/npm-builder@sha256:abc",
         task_build_npm_package_bundle="quay.io/example/task-build@sha256:def",
         task_assess_npm_compliance_bundle="quay.io/example/task-assess@sha256:ghi",
+        tl_npm_registry_url=("https://packages.redhat.com/api/pulp-content/lightwell-stage/javascript/validated"),
         service_account="build-pipeline-javascript-validated-build",
     )
     kwargs.update(overrides)
@@ -120,6 +121,9 @@ class TestBuildManifest:
         )
         assert params["output-image"] == expected_image
         assert params["builder-image"].startswith("quay.io/example/npm-builder")
+        assert params["tl-npm-registry-url"] == (
+            "https://packages.redhat.com/api/pulp-content/lightwell-stage/javascript/validated"
+        )
 
     def test_scoped_package_sanitizes_tag_and_label(self):
         """Scoped npm names keep the recipe path but sanitize tag and label."""
