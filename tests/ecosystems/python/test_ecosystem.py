@@ -17,10 +17,12 @@ limitations under the License.
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 
 import pytest
 
 from import_orchestrator.ecosystems.base import Ecosystem
+from import_orchestrator.ecosystems.python import config
 from import_orchestrator.ecosystems.python.ecosystem import PythonEcosystem
 from import_orchestrator.engine.errors import TriggerError
 
@@ -184,3 +186,22 @@ def test_request_identity_honours_target():
     assert identity["application"] == "scratch-build"
     assert identity["target"] == "SCRATCH"
     assert identity["artifact"] == "foolib==0.4.0"
+
+
+@pytest.mark.parametrize("target", ["VALIDATED", "VALIDATED-STAGE", "REMEDIATED", "SCRATCH"])
+def test_real_pipeline_preserves_service_account_auth_for_each_target(monkeypatch, target):
+    project_root = Path(__file__).resolve().parents[3]
+    monkeypatch.setenv("TEKTON_PIPELINE_DIR", str(project_root / "tekton"))
+    monkeypatch.setenv("BUILD_CONFIGS_REPO_URL", "https://example.test/build-configs.git")
+
+    manifest = PythonEcosystem().build_pipelinerun("foolib==0.4.0", argparse.Namespace(target=target))
+    spec = manifest["spec"]
+    bindings = {workspace["name"]: workspace["secret"]["secretName"] for workspace in spec["workspaces"]}
+    required = {workspace["name"] for workspace in spec["pipelineSpec"]["workspaces"]}
+    assert bindings.keys() == required
+    assert set(bindings) == {"git-auth"}
+    assert spec["taskRunTemplate"]["serviceAccountName"] == config.TARGET_CONFIGS[target]["service_account"]
+
+    supplied = {param["name"] for param in spec["params"]}
+    required_params = {param["name"] for param in spec["pipelineSpec"]["params"] if "default" not in param}
+    assert required_params <= supplied

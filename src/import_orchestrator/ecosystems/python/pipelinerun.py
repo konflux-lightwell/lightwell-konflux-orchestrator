@@ -77,8 +77,8 @@ def build_pipelinerun_manifest(
     # version are encoded in the tag rather than a per-package repo.
     image = f"{image_repo_base}/{application}/{component}:{package}-{version}"
     tag = builds_tag or f"{package}/{version}"
-    # Validated builds skip the prebuilt wheel server; pass empty string so the
-    # fromager task's [[ -n "$WHEEL_SERVER_URL" ]] guard disables it.
+    # Validated builds skip the prebuilt wheel server; the task CLI treats an
+    # empty URL as disabled.
     effective_wheel_server = "" if build_type == "Validated" else (wheel_server_url or config.WHEEL_SERVER_URL)
     spec: dict[str, Any] = {
         "pipelineSpec": pipeline_spec,
