@@ -127,7 +127,7 @@ spec:
           subPath: ca-bundle.crt
 
     - name: render-build-config-settings
-      image: quay.io/redhat-user-workloads/calunga-tenant/plumbing-builder@sha256:d8355de03d57adef033743da1f1a3bb2f0ff038192e3220b155e9dd7dba5d37c
+      image: quay.io/light-factory/python-builder@sha256:baa5683c1fcb3889e8ce76b88901172a3fa31b8f89a6adcc237a312f079f3651
       volumeMounts:
         - mountPath: /var/workdir
           name: workdir
@@ -229,7 +229,7 @@ spec:
           memory: 256Mi
 
     - name: build-wheels
-      image: quay.io/redhat-user-workloads/calunga-tenant/plumbing-builder@sha256:d8355de03d57adef033743da1f1a3bb2f0ff038192e3220b155e9dd7dba5d37c
+      image: quay.io/redhat-user-workloads/lightwell-python-tenant/python-builder/python-builder@sha256:4ee03aff76acfe22f3856e71d534e02bad76353c397666f497adbb1f3c5033ce
       workingDir: /var/workdir
       volumeMounts:
         - mountPath: /var/workdir
@@ -312,7 +312,7 @@ spec:
         done
 
     - name: collect-build-files
-      image: quay.io/redhat-user-workloads/calunga-tenant/plumbing-builder@sha256:d8355de03d57adef033743da1f1a3bb2f0ff038192e3220b155e9dd7dba5d37c
+      image: quay.io/redhat-user-workloads/lightwell-python-tenant/python-builder/python-builder@sha256:4ee03aff76acfe22f3856e71d534e02bad76353c397666f497adbb1f3c5033ce
       command:
         - collect-build-files
       args:
@@ -320,7 +320,7 @@ spec:
         - /var/workdir/artifact
 
     - name: verify-allowed-artifacts
-      image: quay.io/redhat-user-workloads/calunga-tenant/plumbing-builder@sha256:d8355de03d57adef033743da1f1a3bb2f0ff038192e3220b155e9dd7dba5d37c
+      image: quay.io/redhat-user-workloads/lightwell-python-tenant/python-builder/python-builder@sha256:4ee03aff76acfe22f3856e71d534e02bad76353c397666f497adbb1f3c5033ce
       volumeMounts:
         - mountPath: /var/workdir
           name: workdir
