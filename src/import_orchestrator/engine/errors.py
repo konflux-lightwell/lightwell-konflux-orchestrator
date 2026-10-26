@@ -22,7 +22,10 @@ class TriggerError(Exception):
 
 
 class PipelineRunReconciliationError(TriggerError):
-    """A PipelineRun may exist, so the current attempt must not be retried.
+    """A PipelineRun create result is unclear: the run may exist, so the current attempt must not be retried.
+
+    Raised only when the lookup that would confirm the PipelineRun failed. A PipelineRun owned by another import
+    raises a plain TriggerError instead, because a new attempt with a new name is safe then.
 
     Attributes:
         name: The deterministic PipelineRun name that could not be reconciled.

@@ -178,14 +178,17 @@ def _reconcile_pipelinerun(
 ) -> bool:
     """Check whether the named PipelineRun already belongs to this import.
 
-    Returns True for an owned object and False only for a confirmed 404. Any
-    other outcome raises, because the object may exist and retrying could
-    create a duplicate.
+    Returns True for an owned object and False only for a confirmed 404. A
+    failed lookup raises PipelineRunReconciliationError, because the object may
+    exist and retrying could create a duplicate. An object with a different
+    identity raises a plain TriggerError: our POST did not create that name, so
+    a new attempt with a new name is safe.
 
     Raises:
-        PipelineRunReconciliationError: If the lookup fails or the object belongs to another import.
+        PipelineRunReconciliationError: If the lookup itself fails.
+        TriggerError: If the object belongs to another import.
     """
-    from import_orchestrator.engine.errors import PipelineRunReconciliationError
+    from import_orchestrator.engine.errors import PipelineRunReconciliationError, TriggerError
 
     try:
         existing = api.get(api_path)
@@ -195,7 +198,7 @@ def _reconcile_pipelinerun(
         raise PipelineRunReconciliationError(name, _lookup_failure_message(name, error, failure)) from error
     if _has_matching_identity(existing, identity):
         return True
-    raise PipelineRunReconciliationError(name, _mismatch_message(name, failure)) from failure
+    raise TriggerError(_mismatch_message(name, failure)) from failure
 
 
 def _create_failed_error(failure: requests.RequestException) -> TriggerError:
@@ -344,8 +347,8 @@ def create_pipelinerun(api: KubeAPI, namespace: str, manifest: dict) -> str | No
     Raises:
         TriggerError: If the manifest is invalid, the API rejects the request,
             or retries end without a confirmed PipelineRun.
-        PipelineRunReconciliationError: If a PipelineRun may exist but cannot be
-            proven to belong to this import.
+        PipelineRunReconciliationError: If a PipelineRun may exist and the
+            lookup that would prove it belongs to this import failed.
     """
     collection_path = f"/apis/tekton.dev/v1/namespaces/{namespace}/pipelineruns"
     if _is_generate_name_manifest(manifest):

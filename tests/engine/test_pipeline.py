@@ -51,6 +51,20 @@ def _seed_running(db: WorkflowDatabase, ref: str, pr_name: str) -> Request:
     return request
 
 
+def _seed_pending(db: WorkflowDatabase, ref: str, pr_name: str) -> Request:
+    """Seed a Request whose latest attempt has an intake PENDING (create result unclear) with a reference."""
+    request, _ = db.get_or_create_request(**_identity(ref))
+    attempt = db.create_attempt(request.id)
+    db.upsert_phase(
+        attempt.id,
+        Phase.INTAKE,
+        PhaseStatus.PENDING,
+        reference_type=ClusterResource.PIPELINE_RUN,
+        reference_id=pr_name,
+    )
+    return request
+
+
 def _intake(db: WorkflowDatabase, request: Request):
     return db.latest_phase_map(request.id).get(Phase.INTAKE)
 
@@ -158,6 +172,64 @@ class TestUpdateStatuses:
         """When kube returns no status, the intake stays RUNNING."""
         request = _seed_running(db, "r1", "pnc-import-abc")
         mock_kube.get_pipelinerun_status.return_value = None
+
+        monitor.update_statuses()
+
+        assert _intake(db, request).status == PhaseStatus.RUNNING
+
+    @pytest.mark.parametrize(
+        ("pr_status", "expected"),
+        [
+            (None, PhaseStatus.PENDING),  # lookup unknown and not absent: keep waiting
+            (PipelineRunStatus(name="pnc-import-abc", status="Unknown"), PhaseStatus.RUNNING),
+            (PipelineRunStatus(name="pnc-import-abc", status="True"), PhaseStatus.SUCCESS),
+        ],
+        ids=["unknown", "running", "succeeded"],
+    )
+    def test_pending_intake_follows_the_run_once_seen(
+        self,
+        monitor: PipelineMonitor,
+        db: WorkflowDatabase,
+        mock_kube: MagicMock,
+        pr_status: PipelineRunStatus | None,
+        expected: PhaseStatus,
+    ):
+        """A PENDING intake is confirmed by the run's status; without a status it stays PENDING."""
+        request = _seed_pending(db, "r1", "pnc-import-abc")
+        mock_kube.get_pipelinerun_status.return_value = pr_status
+        mock_kube.pipelinerun_absent.return_value = False
+
+        monitor.update_statuses()
+
+        assert _intake(db, request).status == expected
+
+    def test_pending_intake_with_absent_run_fails_for_retry(
+        self, monitor: PipelineMonitor, db: WorkflowDatabase, mock_kube: MagicMock, capsys
+    ):
+        """A PENDING intake whose run is confirmed absent becomes a retriable FAILED with a clear reason."""
+        request = _seed_pending(db, "r1", "pnc-import-abc")
+        mock_kube.get_pipelinerun_status.return_value = None
+        mock_kube.pipelinerun_absent.return_value = True
+
+        monitor.update_statuses()
+
+        intake = _intake(db, request)
+        assert intake.status == PhaseStatus.FAILED
+        assert intake.reference_id == "pnc-import-abc"
+        assert intake.error_message == (
+            "PipelineRun pnc-import-abc was not created (create result was unclear and the run was not found)"
+        )
+        assert monitor.view.state(request) == RequestState.FAILED
+        assert "Not created" in capsys.readouterr().err
+
+    def test_running_intake_with_absent_run_stays_running(
+        self, monitor: PipelineMonitor, db: WorkflowDatabase, mock_kube: MagicMock
+    ):
+        """Characterization: only a PENDING intake is failed for an absent run. A RUNNING intake is left
+        alone, as before, even when the run is reported absent."""
+        request = _seed_running(db, "r1", "pnc-import-abc")
+        mock_kube.get_pipelinerun_status.return_value = None
+        mock_kube.pipelinerun_absent.return_value = True
 
         monitor.update_statuses()
 

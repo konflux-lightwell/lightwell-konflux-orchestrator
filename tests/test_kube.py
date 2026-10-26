@@ -853,15 +853,16 @@ class TestCreatePipelinerun:
         kube._mock_api.get.assert_called_once_with(f"{COLLECTION_PATH}/pnc-import-xyz")
         assert kube._mock_api.create.call_count == (0 if existing else 1)
 
-    def test_raises_on_mismatched_existing_identity(self, kube: KubeClient):
+    def test_raises_plain_trigger_error_on_mismatched_existing_identity(self, kube: KubeClient):
+        """A name owned by another import is not an unclear create, so a new attempt may use a new name."""
         kube._mock_api.get.return_value = {
             "metadata": {"annotations": {"lightwell.redhat.com/import-identity": "another"}}
         }
 
-        with pytest.raises(PipelineRunReconciliationError) as raised:
+        with pytest.raises(TriggerError, match="different import identity") as raised:
             kube.create_pipelinerun(_named_manifest())
 
-        assert raised.value.name == IMPORT_NAME
+        assert type(raised.value) is TriggerError
         kube._mock_api.create.assert_not_called()
 
     def test_raises_on_non_404_get_failure(self, kube: KubeClient):
@@ -917,14 +918,10 @@ class TestCreatePipelinerun:
         assert kube._mock_api.create.call_count == 3
         assert caplog.records[-1].getMessage().endswith("attempts=3")
 
-    @pytest.mark.parametrize("outcome", ["mismatch", "error"])
-    def test_raises_when_reconciliation_cannot_prove_ownership(self, kube: KubeClient, outcome):
+    def test_raises_reconciliation_error_when_ownership_lookup_fails(self, kube: KubeClient):
+        """A failed lookup after an ambiguous POST leaves the create result unclear."""
         manifest = _named_manifest()
-        reconciliation_result = (
-            {"metadata": {"annotations": {"lightwell.redhat.com/import-identity": "another"}}}
-            if outcome == "mismatch"
-            else _http_error(500)
-        )
+        reconciliation_result = _http_error(500)
         kube._mock_api.get.side_effect = [_http_error(404), reconciliation_result]
         failure = _http_error(503)
         kube._mock_api.create.side_effect = failure
@@ -933,10 +930,21 @@ class TestCreatePipelinerun:
             kube.create_pipelinerun(manifest)
 
         assert raised.value.name == IMPORT_NAME
-        if outcome == "error":
-            assert raised.value.__cause__ is reconciliation_result
-        else:
-            assert raised.value.__cause__ is failure
+        assert raised.value.__cause__ is reconciliation_result
+
+    def test_retry_resolving_to_other_identity_raises_plain_trigger_error(self, kube: KubeClient):
+        """Another import owns the name after our ambiguous POST, so the error is not an unclear create."""
+        manifest = _named_manifest()
+        other_owner = {"metadata": {"annotations": {"lightwell.redhat.com/import-identity": "another"}}}
+        kube._mock_api.get.side_effect = [_http_error(404), other_owner]
+        failure = _http_error(503)
+        kube._mock_api.create.side_effect = failure
+
+        with pytest.raises(TriggerError, match="different import identity") as raised:
+            kube.create_pipelinerun(manifest)
+
+        assert type(raised.value) is TriggerError
+        assert raised.value.__cause__ is failure
 
     @pytest.mark.parametrize(
         "manifest",
@@ -1007,6 +1015,54 @@ class TestCreatePipelinerun:
         assert raised.value.__cause__ is failure
         kube._mock_api.create.assert_called_once()
         assert no_wait == [0.1]
+
+
+LIVE_FOUND = {"metadata": {"name": IMPORT_NAME}}
+
+
+def _answer(mock, outcome):
+    """Make a GET mock raise ``outcome`` when it is an exception, or return it otherwise."""
+    if isinstance(outcome, Exception):
+        mock.side_effect = outcome
+    else:
+        mock.return_value = outcome
+
+
+class TestPipelinerunAbsent:
+    """Absence is confirmed only when every configured source answers 404."""
+
+    @pytest.mark.parametrize(
+        ("live", "expected"),
+        [
+            (_http_error(404), True),
+            (_http_error(500), False),
+            (_http_error(403, "forbidden"), False),
+            (requests.ConnectionError("refused"), False),
+            (LIVE_FOUND, False),
+        ],
+        ids=["live-404", "live-500", "live-403", "connection-error", "found"],
+    )
+    def test_without_archive_relies_on_live_lookup(self, kube: KubeClient, live, expected):
+        _answer(kube._mock_api.get, live)
+
+        assert kube.pipelinerun_absent(IMPORT_NAME) is expected
+
+    @pytest.mark.parametrize(
+        ("live", "archive", "expected"),
+        [
+            (_http_error(404), _http_error(404), True),
+            (_http_error(404), _http_error(500), False),
+            (_http_error(404), requests.ConnectionError("refused"), False),
+            (_http_error(404), LIVE_FOUND, False),
+            (_http_error(500), _http_error(404), False),
+        ],
+        ids=["archive-404", "archive-500", "archive-connection-error", "archive-found", "live-500"],
+    )
+    def test_with_archive_requires_both_sources_to_return_404(self, kube_with_ka: KubeClient, live, archive, expected):
+        _answer(kube_with_ka._mock_api.get, live)
+        _answer(kube_with_ka._mock_ka_api.get, archive)
+
+        assert kube_with_ka.pipelinerun_absent(IMPORT_NAME) is expected
 
 
 class TestCreateRelease:

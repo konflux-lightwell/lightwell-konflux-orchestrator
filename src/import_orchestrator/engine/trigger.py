@@ -20,7 +20,7 @@ import sys
 from collections.abc import Callable
 
 from import_orchestrator.clients.kube import KubeClient
-from import_orchestrator.engine.errors import TriggerError
+from import_orchestrator.engine.errors import PipelineRunReconciliationError, TriggerError
 from import_orchestrator.engine.request_view import RequestView
 from import_orchestrator.models import Attempt, ClusterResource, Phase, PhaseStatus, Request
 from import_orchestrator.utils import extract_tag
@@ -76,15 +76,19 @@ class ImportTrigger:
 
     def _trigger_single(self, request: Request) -> int:
         """Attempt to trigger (or resume) a single Request. Returns 1 if an intake
-        PipelineRun was submitted, 0 otherwise (resume or failure).
+        PipelineRun was submitted or may have been (it holds a slot), 0 otherwise
+        (resume or failure).
 
-        The intake phase is recorded (RUNNING or FAILED) before this returns on
-        the expected paths, so an Attempt is not left phase-less: an expected
-        build/submit failure (``TriggerError``) is caught and recorded as a
-        failed intake, which keeps one such failure from aborting the whole batch
+        The intake phase is recorded (RUNNING, PENDING or FAILED) before this
+        returns on the expected paths, so an Attempt is not left phase-less: an
+        expected build/submit failure (``TriggerError``) is caught and recorded as
+        a failed intake, which keeps one such failure from aborting the whole batch
         and keeps the Request retriable rather than wedged in a phase-less PENDING
-        state. Any other (unexpected) exception propagates so genuine programming
-        errors surface immediately instead of being retried every poll.
+        state. An unclear create result (``PipelineRunReconciliationError``) is
+        recorded as a PENDING intake that names the PipelineRun. The run may or may
+        not exist, so the monitor confirms it or fails the intake; no new attempt
+        starts meanwhile. Any other (unexpected) exception propagates so genuine
+        programming errors surface immediately instead of being retried every poll.
         """
         assert request.id is not None
         tag = extract_tag(request.artifact)  # used only for log messages
@@ -104,6 +108,19 @@ class ImportTrigger:
             pr_name = self.kube.create_pipelinerun(manifest)
             if pr_name is None:
                 raise TriggerError("PipelineRun creation failed (API returned no name)")
+        except PipelineRunReconciliationError as e:  # the run may exist; PENDING means "submitted, not confirmed"
+            self.db.upsert_phase(
+                attempt.id,
+                Phase.INTAKE,
+                PhaseStatus.PENDING,
+                reference_type=ClusterResource.PIPELINE_RUN,
+                reference_id=e.name,
+            )
+            print(
+                f"  WARNING: PipelineRun {e.name} create result unclear for {tag}; the monitor will confirm it: {e}",
+                file=sys.stderr,
+            )
+            return 1
         except TriggerError as e:  # an expected build/submit failure leaves a recorded, retriable FAILED intake
             self.db.upsert_phase(
                 attempt.id,

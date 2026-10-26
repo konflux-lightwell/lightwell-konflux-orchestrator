@@ -23,7 +23,7 @@ import requests
 
 from import_orchestrator.clients.kube_api import KubeAPI, KubeAuth, resolve_auth
 from import_orchestrator.models import PipelineRunStatus
-from import_orchestrator.pipelinerun_creator import _api_error_detail, create_pipelinerun
+from import_orchestrator.pipelinerun_creator import _api_error_detail, _http_status, create_pipelinerun
 
 
 class KubeClient:
@@ -114,6 +114,31 @@ class KubeClient:
                 self._log_api_error(f"get PipelineRun {name}", e, source="KubeArchive", ignore_not_found=True)
 
         return None
+
+    def pipelinerun_absent(self, name: str) -> bool:
+        """Return whether a PipelineRun is confirmed absent from the cluster.
+
+        Returns True only when the live GET answers 404 and, when KubeArchive is
+        configured, its GET also answers 404. Any other outcome (the object was
+        found, a non-404 error, or a connection failure) returns False, because
+        the run may still exist.
+        """
+        api_path = f"/apis/tekton.dev/v1/namespaces/{self.namespace}/pipelineruns/{name}"
+        try:
+            self._api.get(api_path)
+        except requests.RequestException as e:
+            if _http_status(e) != 404:
+                return False
+        else:
+            return False
+
+        if self._ka_api is None:
+            return True
+        try:
+            self._ka_api.get(api_path)
+        except requests.RequestException as e:
+            return _http_status(e) == 404
+        return False
 
     def get_pipelinerun_failure_detail(self, name: str) -> str | None:
         """Best-effort human-readable diagnostics for a failed PipelineRun.

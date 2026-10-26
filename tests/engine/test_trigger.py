@@ -22,6 +22,7 @@ import pytest
 from import_orchestrator.database import WorkflowDatabase
 from import_orchestrator.ecosystems.java.pipelinerun import TriggerError
 from import_orchestrator.engine import ImportTrigger, RequestView
+from import_orchestrator.engine.errors import PipelineRunReconciliationError
 from import_orchestrator.models import ClusterResource, Phase, PhaseStatus, Request, RequestState
 
 
@@ -146,6 +147,38 @@ class TestTriggerNextBatch:
         intake = db.latest_phase_map(request.id)[Phase.INTAKE]
         assert intake.status == PhaseStatus.FAILED
         assert "connection refused" in intake.error_message
+
+    def test_unclear_create_is_recorded_pending_and_holds_its_slot(
+        self, trigger: ImportTrigger, db: WorkflowDatabase, mock_kube: MagicMock, capsys
+    ):
+        """An unclear create leaves a PENDING intake naming the fixed run, so the next pass opens no new attempt."""
+        request = _seed_request(db, "tag-unclear")
+        mock_kube.create_pipelinerun.side_effect = PipelineRunReconciliationError(
+            "pnc-import-fixed", "PipelineRun pnc-import-fixed retry reconciliation failed: 500"
+        )
+
+        assert trigger.trigger_next_batch() == 1
+
+        intake = db.latest_phase_map(request.id)[Phase.INTAKE]
+        assert intake.status == PhaseStatus.PENDING
+        assert intake.reference_type == ClusterResource.PIPELINE_RUN
+        assert intake.reference_id == "pnc-import-fixed"
+        assert "WARNING: PipelineRun pnc-import-fixed create result unclear for tag-unclear" in capsys.readouterr().err
+
+        assert trigger.trigger_next_batch() == 0
+        assert db.attempt_count(request.id) == 1
+        assert trigger.view.state(request) == RequestState.RUNNING
+
+    def test_manifest_builder_receives_the_new_attempt_id(
+        self, trigger: ImportTrigger, db: WorkflowDatabase, mock_build: MagicMock
+    ):
+        """The builder gets the id of the Attempt the intake is recorded against, so names can be per attempt."""
+        request = _seed_request(db, "tag-builder")
+
+        assert trigger.trigger_next_batch() == 1
+
+        attempt = db.latest_attempt(request.id)
+        assert mock_build.call_args.args == (request.artifact, attempt.id)
 
     def test_logs_full_admission_webhook_error(
         self, trigger: ImportTrigger, db: WorkflowDatabase, mock_kube: MagicMock, capsys
