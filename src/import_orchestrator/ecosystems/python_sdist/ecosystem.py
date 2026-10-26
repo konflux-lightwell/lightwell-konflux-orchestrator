@@ -32,7 +32,7 @@ class PythonSdistEcosystem:
     pipelinerun_prefix = config.PIPELINERUN_PREFIX
     namespace = config.NAMESPACE
 
-    def build_pipelinerun(self, ref: str, args: argparse.Namespace) -> dict:
+    def build_pipelinerun(self, ref: str, args: argparse.Namespace, *, attempt: int | None = None) -> dict:
         package, version = parse_ref(ref)
         target = getattr(args, "target", config.DEFAULT_TARGET)
         cfg = config.TARGET_CONFIGS[target]
@@ -52,6 +52,7 @@ class PythonSdistEcosystem:
             source_registries=source_registries,
             pipeline_git_url=pipeline_git_url,
             pipeline_revision=pipeline_revision,
+            attempt=attempt,
         )
 
     def request_identity(self, ref: str, args: argparse.Namespace) -> dict[str, str]:

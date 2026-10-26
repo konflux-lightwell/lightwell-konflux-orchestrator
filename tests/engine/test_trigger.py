@@ -269,7 +269,7 @@ class TestTriggerNextBatch:
         bad = _seed_request(db, "bad-ref")
         good = _seed_request(db, "good-ref")
 
-        def build(ref: str) -> dict:
+        def build(ref: str, attempt: int) -> dict:
             if ref == "bad-ref":
                 raise TriggerError("malformed ref")
             return {"kind": "PipelineRun"}

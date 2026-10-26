@@ -32,7 +32,7 @@ class JavaScriptEcosystem:
     pipelinerun_prefix = config.PIPELINERUN_PREFIX
     namespace = config.NAMESPACE
 
-    def build_pipelinerun(self, ref: str, args: argparse.Namespace) -> dict:
+    def build_pipelinerun(self, ref: str, args: argparse.Namespace, *, attempt: int | None = None) -> dict:
         """Build a PipelineRun manifest for one ``package==version`` reference."""
         package, version = parse_ref(ref)
         target = getattr(args, "target", config.DEFAULT_TARGET)
@@ -61,6 +61,7 @@ class JavaScriptEcosystem:
             ),
             tl_npm_registry_url=getattr(args, "tl_npm_registry_url", config.DEFAULT_TL_NPM_REGISTRY_URL),
             pulp_read_secret_name=getattr(args, "pulp_read_secret_name", config.DEFAULT_PULP_READ_SECRET_NAME),
+            attempt=attempt,
         )
 
     def request_identity(self, ref: str, args: argparse.Namespace) -> dict[str, str]:

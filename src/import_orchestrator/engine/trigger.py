@@ -43,7 +43,7 @@ class ImportTrigger:
         self,
         view: RequestView,
         kube: KubeClient,
-        build_pipelinerun: Callable[[str], dict],
+        build_pipelinerun: Callable[[str, int], dict],
         max_parallel: int,
         max_retries: int,
     ):
@@ -100,7 +100,7 @@ class ImportTrigger:
             return 0
 
         try:
-            manifest = self.build_pipelinerun(request.artifact)
+            manifest = self.build_pipelinerun(request.artifact, attempt.id)
             pr_name = self.kube.create_pipelinerun(manifest)
             if pr_name is None:
                 raise TriggerError("PipelineRun creation failed (API returned no name)")

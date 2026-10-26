@@ -69,8 +69,12 @@ class Ecosystem(Protocol):
     pipelinerun_prefix: str
     namespace: str
 
-    def build_pipelinerun(self, ref: str, args: argparse.Namespace) -> dict:
-        """Build a PipelineRun manifest dict for one import item (by its ref)."""
+    def build_pipelinerun(self, ref: str, args: argparse.Namespace, *, attempt: int | None = None) -> dict:
+        """Build a PipelineRun manifest dict for one import item (by its ref).
+
+        Pass the DB Attempt id as ``attempt`` to get a deterministic name and identity
+        annotation. ``None`` keeps the ``generateName`` form for callers without an Attempt.
+        """
         ...
 
     def request_identity(self, ref: str, args: argparse.Namespace) -> dict[str, str]:

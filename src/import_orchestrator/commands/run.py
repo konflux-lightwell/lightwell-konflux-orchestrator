@@ -144,7 +144,7 @@ def run_single(args: argparse.Namespace, ref: str) -> int:
             trigger = ImportTrigger(
                 view=view,
                 kube=kube,
-                build_pipelinerun=lambda r: eco.build_pipelinerun(r, args),
+                build_pipelinerun=lambda ref, attempt: eco.build_pipelinerun(ref, args, attempt=attempt),
                 max_parallel=1,
                 max_retries=args.max_retries,
             )
