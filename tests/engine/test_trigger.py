@@ -147,6 +147,32 @@ class TestTriggerNextBatch:
         assert intake.status == PhaseStatus.FAILED
         assert "connection refused" in intake.error_message
 
+    def test_logs_full_admission_webhook_error(
+        self, trigger: ImportTrigger, db: WorkflowDatabase, mock_kube: MagicMock, capsys
+    ):
+        """Validation details after the API URL must remain visible in batch logs."""
+        request = _seed_request(db, "vcrpy==9.0.0")
+        details = (
+            'admission webhook "pipelinerun-kueue-defaulter.tekton-kueue.io" denied the request: '
+            'parameter names must be unique: "BUILD_TYPE", pipelineSpec.tasks[4].params[8].name\n'
+            'parameter names must be unique: "MANIFEST_ARTIFACT", pipelineSpec.tasks[4].params[4].name\n'
+            'parameter names must be unique: "ociArtifactExpiresAfter", pipelineSpec.tasks[2].params[9].name\n'
+            'parameter names must be unique: "ociStorage", pipelineSpec.tasks[2].params[8].name'
+        )
+        message = (
+            "failed to create PipelineRun: 400 Client Error: Bad Request for url: "
+            "https://api.stone-prod-p01.wcfb.p1.openshiftapps.com:6443/apis/tekton.dev/v1/"
+            f"namespaces/lightwell-python-tenant/pipelineruns: {details}"
+        )
+        mock_kube.create_pipelinerun.side_effect = TriggerError(message)
+
+        assert trigger.trigger_next_batch() == 0
+
+        assert f"ERROR: Failed to trigger vcrpy==9.0.0: {message}" in capsys.readouterr().err
+        intake = db.latest_phase_map(request.id)[Phase.INTAKE]
+        assert intake.status == PhaseStatus.FAILED
+        assert intake.error_message == f"PipelineRun trigger failed: {message}"
+
     def test_records_failure_when_kube_returns_no_name(
         self, trigger: ImportTrigger, db: WorkflowDatabase, mock_kube: MagicMock
     ):

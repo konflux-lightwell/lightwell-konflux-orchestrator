@@ -111,7 +111,7 @@ class ImportTrigger:
                 PhaseStatus.FAILED,
                 error_message=f"PipelineRun trigger failed: {e}",
             )
-            print(f"  ERROR: Failed to trigger {tag}: {str(e)[:100]}", file=sys.stderr)
+            print(f"  ERROR: Failed to trigger {tag}: {e}", file=sys.stderr)
             return 0
 
         self.db.upsert_phase(

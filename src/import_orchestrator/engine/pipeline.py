@@ -84,4 +84,4 @@ class PipelineMonitor:
                 )
                 print(f"  ✗ Failed: {tag}", file=sys.stderr)
                 if detail:
-                    print(f"    {detail.splitlines()[0]}", file=sys.stderr)
+                    print(f"    {detail}", file=sys.stderr)

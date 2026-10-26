@@ -14,6 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -60,6 +61,98 @@ def kube(monkeypatch):
 def kube_with_ka(monkeypatch):
     """Create a KubeClient with KubeArchive API configured."""
     return _make_kube_client(monkeypatch, kubearchive_api="https://kubearchive.example.com")
+
+
+class TestApiErrorLogging:
+    @pytest.mark.parametrize("status_code", [403, 500])
+    @pytest.mark.parametrize(
+        "method,args,api_method,context,expected",
+        [
+            ("get_running_pipelineruns", (), "list", "list PipelineRuns", []),
+            ("get_pipelinerun_status", ("pr-1",), "get", "get PipelineRun pr-1", None),
+            ("_fetch_resource", ("/taskruns/tr-1",), "get", "get resource /taskruns/tr-1", None),
+            ("_pod_log_tail", ("pod-1", "step-build"), "get_text", "pod pod-1, container step-build", None),
+            ("find_snapshot_by_pipelinerun", ("pr-1",), "list", "find Snapshot for PipelineRun pr-1", None),
+            ("find_release_plan_for_snapshot", ("snap-1",), "get", "get Snapshot snap-1", None),
+            ("find_release_plan_for_snapshot", ("snap-1",), "list", "list ReleasePlans for Snapshot snap-1", None),
+            ("create_release", ("snap-1", "plan-1", "release-"), "create", "ReleasePlan plan-1", None),
+            ("find_release_for_snapshot", ("snap-1",), "list", "find Release for Snapshot snap-1", None),
+            ("get_release_status", ("release-1",), "get", "get Release release-1 status", None),
+        ],
+    )
+    def test_logs_api_message_with_operation_and_namespace(
+        self, kube, capsys, status_code, method, args, api_method, context, expected
+    ):
+        response = requests.Response()
+        response.status_code = status_code
+        detail = "API rejected the operation\nAdditional server diagnostic"
+        response._content = json.dumps({"kind": "Status", "message": detail}).encode()
+        kube._mock_api.get.return_value = {"metadata": {"labels": {"appstudio.openshift.io/application": "app-1"}}}
+        getattr(kube._mock_api, api_method).side_effect = requests.HTTPError(
+            f"{status_code} API error", response=response
+        )
+
+        assert getattr(kube, method)(*args) == expected
+
+        stderr = capsys.readouterr().err
+        assert detail in stderr
+        assert context in stderr
+        assert "namespace test-ns" in stderr
+
+    @pytest.mark.parametrize(
+        "method,args,api_method",
+        [
+            ("get_pipelinerun_status", ("pr-1",), "get"),
+            ("_fetch_resource", ("/taskruns/tr-1",), "get"),
+            ("_pod_log_tail", ("pod-1", "step-build"), "get_text"),
+            ("find_release_plan_for_snapshot", ("snap-1",), "get"),
+            ("get_release_status", ("release-1",), "get"),
+        ],
+    )
+    def test_expected_missing_resources_remain_quiet(self, kube, capsys, method, args, api_method):
+        response = requests.Response()
+        response.status_code = 404
+        getattr(kube._mock_api, api_method).side_effect = requests.HTTPError("404 Not Found", response=response)
+
+        assert getattr(kube, method)(*args) is None
+
+        assert capsys.readouterr().err == ""
+
+    @pytest.mark.parametrize("method", ["get_pipelinerun_status", "_fetch_resource"])
+    def test_archive_failure_is_identified_after_quiet_cluster_404(self, kube_with_ka, capsys, method):
+        missing = requests.Response()
+        missing.status_code = 404
+        kube_with_ka._mock_api.get.side_effect = requests.HTTPError("404 Not Found", response=missing)
+        failure = requests.Response()
+        failure.status_code = 503
+        failure._content = b'{"message": "Archive temporarily unavailable"}'
+        kube_with_ka._mock_ka_api.get.side_effect = requests.HTTPError("503 Unavailable", response=failure)
+
+        assert getattr(kube_with_ka, method)("pr-1") is None
+
+        stderr = capsys.readouterr().err
+        assert "KubeArchive" in stderr
+        assert "Archive temporarily unavailable" in stderr
+        assert "404" not in stderr
+
+    def test_release_creation_logs_non_json_response_body(self, kube, capsys):
+        response = requests.Response()
+        response.status_code = 502
+        response._content = b"Upstream proxy unavailable"
+        kube._mock_api.create.side_effect = requests.HTTPError("502 Bad Gateway", response=response)
+
+        assert kube.create_release("snap-1", "plan-1", "release-") is None
+
+        assert "Upstream proxy unavailable" in capsys.readouterr().err
+
+    def test_release_status_logs_connection_error(self, kube, capsys):
+        kube._mock_api.get.side_effect = requests.ConnectionError("Connection refused")
+
+        assert kube.get_release_status("release-1") is None
+
+        stderr = capsys.readouterr().err
+        assert "release-1" in stderr
+        assert "Connection refused" in stderr
 
 
 class TestKubeClientInit:

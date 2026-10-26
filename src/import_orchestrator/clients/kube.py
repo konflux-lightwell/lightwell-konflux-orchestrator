@@ -66,6 +66,23 @@ class KubeClient:
             ka_auth = KubeAuth(server=kubearchive_api, token=auth.token, ca_cert=auth.ca_cert)
             self._ka_api = KubeAPI(ka_auth)
 
+    def _log_api_error(
+        self,
+        operation: str,
+        exc: requests.RequestException,
+        *,
+        source: str = "cluster",
+        ignore_not_found: bool = False,
+    ) -> None:
+        """Log response details, keeping expected missing-resource lookups quiet."""
+        response = getattr(exc, "response", None)
+        if ignore_not_found and response is not None and response.status_code == 404:
+            return
+        print(
+            f"ERROR: Failed to {operation} ({source}, namespace {self.namespace}): {_api_error_detail(exc)}",
+            file=sys.stderr,
+        )
+
     def get_running_pipelineruns(self) -> list[PipelineRunStatus]:
         """Get all PipelineRuns with status 'Unknown' (i.e. still running)."""
         try:
@@ -82,7 +99,7 @@ class KubeClient:
                         pipelineruns.append(pr_status)
             return pipelineruns
         except requests.RequestException as e:
-            print(f"ERROR: Failed to get PipelineRuns: {e}", file=sys.stderr)
+            self._log_api_error("list PipelineRuns", e)
             return []
 
     def get_pipelinerun_status(self, name: str) -> PipelineRunStatus | None:
@@ -99,8 +116,8 @@ class KubeClient:
             status = conditions[0].get("status", "") if conditions else ""
             if pr_status := PipelineRunStatus.from_str(name, status):
                 return pr_status
-        except requests.RequestException:
-            pass
+        except requests.RequestException as e:
+            self._log_api_error(f"get PipelineRun {name}", e, ignore_not_found=True)
 
         if self._ka_api is not None:
             try:
@@ -112,8 +129,8 @@ class KubeClient:
                         status = cond.get("status", "")
                         if pr_status := PipelineRunStatus.from_str(name, status):
                             return pr_status
-            except requests.RequestException:
-                pass
+            except requests.RequestException as e:
+                self._log_api_error(f"get PipelineRun {name}", e, source="KubeArchive", ignore_not_found=True)
 
         return None
 
@@ -201,7 +218,8 @@ class KubeClient:
                 container=container,
                 tailLines=self._MAX_LOG_LINES,
             )
-        except requests.RequestException:
+        except requests.RequestException as e:
+            self._log_api_error(f"get logs for pod {pod_name}, container {container}", e, ignore_not_found=True)
             return None
         stripped = text.strip()
         return stripped or None
@@ -210,13 +228,13 @@ class KubeClient:
         """GET a resource from the live cluster, falling back to KubeArchive."""
         try:
             return self._api.get(api_path)
-        except requests.RequestException:
-            pass
+        except requests.RequestException as e:
+            self._log_api_error(f"get resource {api_path}", e, ignore_not_found=True)
         if self._ka_api is not None:
             try:
                 return self._ka_api.get(api_path)
-            except requests.RequestException:
-                pass
+            except requests.RequestException as e:
+                self._log_api_error(f"get resource {api_path}", e, source="KubeArchive", ignore_not_found=True)
         return None
 
     @staticmethod
@@ -242,7 +260,10 @@ class KubeClient:
             )
             items = result.get("items", [])
             return items[0]["metadata"]["name"] if items else None
-        except (requests.RequestException, KeyError, IndexError):
+        except requests.RequestException as e:
+            self._log_api_error(f"find Snapshot for PipelineRun {pr_name}", e)
+            return None
+        except (KeyError, IndexError):
             return None
 
     def find_release_plan_for_snapshot(self, snapshot_name: str) -> str | None:
@@ -257,14 +278,18 @@ class KubeClient:
         would mean guessing where content gets published. Callers that know which plan
         they want should pass it explicitly rather than relying on this lookup.
         """
+        operation = f"get Snapshot {snapshot_name} for ReleasePlan lookup"
+        fetching_snapshot = True
         try:
             snap = self._api.get(
                 f"/apis/appstudio.redhat.com/v1alpha1/namespaces/{self.namespace}/snapshots/{snapshot_name}",
             )
+            fetching_snapshot = False
             application = (snap.get("metadata", {}).get("labels") or {}).get("appstudio.openshift.io/application", "")
             if not application:
                 return None
 
+            operation = f"list ReleasePlans for Snapshot {snapshot_name}, application {application}"
             plans = self._api.list(
                 f"/apis/appstudio.redhat.com/v1alpha1/namespaces/{self.namespace}/releaseplans",
             )
@@ -285,7 +310,10 @@ class KubeClient:
                     file=sys.stderr,
                 )
             return None
-        except (requests.RequestException, KeyError):
+        except requests.RequestException as e:
+            self._log_api_error(operation, e, ignore_not_found=fetching_snapshot)
+            return None
+        except KeyError:
             return None
 
     def create_release(self, snapshot_name: str, release_plan: str, prefix: str) -> str | None:
@@ -308,8 +336,11 @@ class KubeClient:
                 manifest,
             )
             return result["metadata"]["name"]
-        except (requests.RequestException, KeyError) as e:
-            print(f"ERROR: Failed to create release for {snapshot_name}: {e}", file=sys.stderr)
+        except requests.RequestException as e:
+            self._log_api_error(f"create Release for Snapshot {snapshot_name}, ReleasePlan {release_plan}", e)
+            return None
+        except KeyError as e:
+            print(f"ERROR: Invalid create Release response for Snapshot {snapshot_name}: missing {e}", file=sys.stderr)
             return None
 
     def create_pipelinerun(self, manifest: dict) -> str | None:
@@ -380,7 +411,10 @@ class KubeClient:
                 return None
             newest = max(candidates, key=lambda item: item.get("metadata", {}).get("creationTimestamp", ""))
             return newest["metadata"]["name"]
-        except (requests.RequestException, KeyError):
+        except requests.RequestException as e:
+            self._log_api_error(f"find Release for Snapshot {snapshot_name}, ReleasePlan {release_plan or 'any'}", e)
+            return None
+        except KeyError:
             return None
 
     def get_release_status(self, release_name: str) -> Literal["True", "False", "Unknown"] | None:
@@ -409,5 +443,6 @@ class KubeClient:
             if status == "False" and reason != "Progressing":
                 return "False"
             return "Unknown"
-        except requests.RequestException:
+        except requests.RequestException as e:
+            self._log_api_error(f"get Release {release_name} status", e, ignore_not_found=True)
             return None

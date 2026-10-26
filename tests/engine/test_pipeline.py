@@ -115,7 +115,7 @@ class TestUpdateStatuses:
         assert _intake(db, request).status == PhaseStatus.FAILED
 
     def test_failure_captures_diagnostics_in_error_message(
-        self, monitor: PipelineMonitor, db: WorkflowDatabase, mock_kube: MagicMock
+        self, monitor: PipelineMonitor, db: WorkflowDatabase, mock_kube: MagicMock, capsys
     ):
         """Verify that the captured failure detail is stored as the error message."""
         request = _seed_running(db, "r1", "pnc-import-abc")
@@ -129,6 +129,7 @@ class TestUpdateStatuses:
         intake = _intake(db, request)
         assert intake.status == PhaseStatus.FAILED
         assert "exitCode=1" in intake.error_message
+        assert mock_kube.get_pipelinerun_failure_detail.return_value in capsys.readouterr().err
         mock_kube.get_pipelinerun_failure_detail.assert_called_once_with("pnc-import-abc")
 
     def test_failure_falls_back_to_generic_message(
