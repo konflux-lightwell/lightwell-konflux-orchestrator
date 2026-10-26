@@ -23,7 +23,7 @@ import requests
 
 from import_orchestrator.clients.kube_api import KubeAPI, KubeAuth, resolve_auth
 from import_orchestrator.models import PipelineRunStatus
-from import_orchestrator.pipelinerun_creator import _api_error_detail, _http_status, create_pipelinerun
+from import_orchestrator.pipelinerun_creator import api_error_detail, create_pipelinerun, http_status
 
 
 class KubeClient:
@@ -60,7 +60,7 @@ class KubeClient:
         if ignore_not_found and response is not None and response.status_code == 404:
             return
         print(
-            f"ERROR: Failed to {operation} ({source}, namespace {self.namespace}): {_api_error_detail(exc)}",
+            f"ERROR: Failed to {operation} ({source}, namespace {self.namespace}): {api_error_detail(exc)}",
             file=sys.stderr,
         )
 
@@ -127,7 +127,7 @@ class KubeClient:
         try:
             self._api.get(api_path)
         except requests.RequestException as e:
-            if _http_status(e) != 404:
+            if http_status(e) != 404:
                 return False
         else:
             return False
@@ -137,7 +137,7 @@ class KubeClient:
         try:
             self._ka_api.get(api_path)
         except requests.RequestException as e:
-            return _http_status(e) == 404
+            return http_status(e) == 404
         return False
 
     def get_pipelinerun_failure_detail(self, name: str) -> str | None:

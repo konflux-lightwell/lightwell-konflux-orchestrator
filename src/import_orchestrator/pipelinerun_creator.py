@@ -1,4 +1,6 @@
 """
+PipelineRun creation that reconciles by deterministic name and retries only when safe.
+
 Copyright (C) 2026 Lightwell
 
 Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,20 +35,13 @@ if TYPE_CHECKING:
 # engine.errors is imported inside functions only. The engine package imports clients, and clients imports this
 # module, so a module-level import would create a cycle.
 
-# Keep the established logger name while the implementation lives outside the client adapter.
-_LOGGER = logging.getLogger("import_orchestrator.clients.kube")
+_LOGGER = logging.getLogger(__name__)
 _RETRYABLE_HTTP_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 _PIPELINERUN_CREATE_MAX_ATTEMPTS = 3
-_PIPELINERUN_CREATE_DEADLINE_SECONDS = 60.0
 _PIPELINERUN_RETRY_BASE_DELAY_SECONDS = 0.5
 
 
 # The seams below are looked up at call time, so tests can replace them with module-level patches.
-def _monotonic() -> float:
-    """Return the monotonic clock reading that bounds PipelineRun creation."""
-    return time.monotonic()
-
-
 def _sleep(delay: float) -> None:
     """Pause for ``delay`` seconds before the next creation attempt."""
     time.sleep(delay)
@@ -57,7 +52,7 @@ def _jitter(low: float, high: float) -> float:
     return random.uniform(low, high)
 
 
-def _api_error_detail(exc: requests.RequestException) -> str:
+def api_error_detail(exc: requests.RequestException) -> str:
     """Extract a human-readable message from a failed Kubernetes API response.
 
     Kubernetes returns a Status object whose ``message`` field explains why a
@@ -77,36 +72,24 @@ def _api_error_detail(exc: requests.RequestException) -> str:
     return f"{exc}: {text}" if text else str(exc)
 
 
-def _http_status(exc: requests.RequestException) -> int | None:
+def http_status(exc: requests.RequestException) -> int | None:
     """Return the HTTP status code attached to ``exc``, or None for transport errors."""
     response = getattr(exc, "response", None)
     status_code = getattr(response, "status_code", None)
     return status_code if isinstance(status_code, int) else None
 
 
-def _is_ambiguous_timeout(exc: requests.RequestException) -> bool:
-    """Return whether a timeout may have hidden a request the server already processed."""
-    timeout_types = (requests.ConnectTimeout, requests.ReadTimeout)
-    causes = (getattr(exc, "__cause__", None), getattr(exc, "__context__", None))
-    return isinstance(exc, timeout_types) or any(isinstance(cause, timeout_types) for cause in causes)
-
-
-def _is_connection_failure(exc: requests.RequestException) -> bool:
-    """Return whether a connection failure may be retried after reconciliation."""
-    causes = (getattr(exc, "__cause__", None), getattr(exc, "__context__", None))
-    return isinstance(exc, requests.ConnectionError) or any(
-        isinstance(cause, requests.ConnectionError) for cause in causes
-    )
-
-
 def _is_retryable_create_failure(exc: requests.RequestException) -> bool:
-    """Return whether a failed POST may be retried after reconciliation."""
-    return (
-        _is_ambiguous_timeout(exc)
-        or _is_connection_failure(exc)
-        or _http_status(exc) == 409
-        or _http_status(exc) in _RETRYABLE_HTTP_STATUS_CODES
-    )
+    """Return whether a failed POST may be retried after reconciliation.
+
+    Timeouts and connection errors may hide a POST the server already processed,
+    so the caller checks for the object before any retry. A 409 and the retryable
+    429 and 5xx statuses get the same treatment.
+    """
+    if isinstance(exc, (requests.ConnectionError, requests.Timeout)):
+        return True
+    status = http_status(exc)
+    return status == 409 or status in _RETRYABLE_HTTP_STATUS_CODES
 
 
 def _is_generate_name_manifest(manifest: dict) -> bool:
@@ -146,27 +129,11 @@ def _lookup_failure_message(
     lookup_error: requests.RequestException,
     failure: requests.RequestException | None,
 ) -> str:
-    """Describe a failed reconciliation GET, including the POST failure that triggered it."""
+    """Describe a failed ownership GET, adding the POST failure that prompted it when there was one."""
+    message = f"PipelineRun {name} may exist; ownership lookup failed: {api_error_detail(lookup_error)}"
     if failure is None:
-        return f"failed to check PipelineRun {name}: {_api_error_detail(lookup_error)}"
-    if _http_status(failure) == 409:
-        return (
-            f"PipelineRun {name} creation conflicted and reconciliation failed: "
-            f"{_api_error_detail(lookup_error)}; original conflict: {_api_error_detail(failure)}"
-        )
-    return (
-        f"PipelineRun {name} retry reconciliation failed: "
-        f"{_api_error_detail(lookup_error)}; original failure: {_api_error_detail(failure)}"
-    )
-
-
-def _mismatch_message(name: str, failure: requests.RequestException | None) -> str:
-    """Describe an existing PipelineRun owned by a different import."""
-    if failure is None:
-        return f"PipelineRun {name} exists but has a different import identity"
-    if _http_status(failure) == 409:
-        return f"PipelineRun {name} conflict resolved to a different import identity"
-    return f"PipelineRun {name} retry reconciliation resolved to a different import identity"
+        return message
+    return f"{message}; create failure: {api_error_detail(failure)}"
 
 
 def _reconcile_pipelinerun(
@@ -193,56 +160,52 @@ def _reconcile_pipelinerun(
     try:
         existing = api.get(api_path)
     except requests.RequestException as error:
-        if _http_status(error) == 404:
+        if http_status(error) == 404:
             return False
         raise PipelineRunReconciliationError(name, _lookup_failure_message(name, error, failure)) from error
     if _has_matching_identity(existing, identity):
         return True
-    raise TriggerError(_mismatch_message(name, failure)) from failure
+    raise TriggerError(f"PipelineRun {name} exists with a different import identity") from failure
 
 
 def _create_failed_error(failure: requests.RequestException) -> TriggerError:
     """Build the TriggerError for a POST that must not be retried."""
     from import_orchestrator.engine.errors import TriggerError
 
-    return TriggerError(f"failed to create PipelineRun: {_api_error_detail(failure)}")
+    return TriggerError(f"failed to create PipelineRun: {api_error_detail(failure)}")
 
 
-def _retry_delay(attempt: int, deadline: float) -> float | None:
-    """Return a bounded full-jitter delay, or None when another POST is unsafe.
+def _retry_delay(attempt: int) -> float | None:
+    """Return a full-jitter delay before the next POST, or None when the attempt budget is spent.
 
-    The delay must end before the deadline. Otherwise the next POST would start too late.
+    The jitter ceiling doubles after each failed attempt, starting at the base delay.
     """
     if attempt >= _PIPELINERUN_CREATE_MAX_ATTEMPTS:
         return None
-    remaining = deadline - _monotonic()
-    if remaining <= 0:
-        return None
     ceiling = _PIPELINERUN_RETRY_BASE_DELAY_SECONDS * (2 ** (attempt - 1))
-    delay = min(ceiling, max(0.0, _jitter(0.0, ceiling)))
-    return delay if delay < remaining else None
+    return min(ceiling, max(0.0, _jitter(0.0, ceiling)))
 
 
-def _retry_termination_reason(attempt: int) -> str:
-    """Name why retries stopped after ``attempt`` POSTs."""
-    return "retry budget exhausted" if attempt >= _PIPELINERUN_CREATE_MAX_ATTEMPTS else "retry deadline exceeded"
+def _raise_retry_budget_exhausted(name: str, failure: requests.RequestException) -> NoReturn:
+    """Log and raise the PipelineRunReconciliationError that ends a retry sequence.
 
-
-def _raise_create_retry_termination(
-    name: str,
-    attempt: int,
-    reason: str,
-    failure: requests.RequestException | None,
-) -> NoReturn:
-    """Log and raise the TriggerError that ends a retry sequence.
-
-    The last API failure, when there is one, is both the exception cause and part of the message.
+    The last POST failed with a retryable error, and that POST may still land after
+    the final lookup returned 404. So the create result is unclear, not failed. The
+    caller records the attempt as PENDING, and the monitor confirms absence before
+    any new attempt. The last API failure is both the exception cause and part of the message.
     """
-    from import_orchestrator.engine.errors import TriggerError
+    from import_orchestrator.engine.errors import PipelineRunReconciliationError
 
-    _LOGGER.warning("PipelineRun creation terminated name=%s reason=%s attempts=%d", name, reason, attempt)
-    detail = f": {_api_error_detail(failure)}" if failure is not None else ""
-    raise TriggerError(f"PipelineRun {name} creation {reason} after {attempt} POST attempts{detail}") from failure
+    _LOGGER.warning(
+        "PipelineRun creation terminated name=%s reason=retry budget exhausted attempts=%d",
+        name,
+        _PIPELINERUN_CREATE_MAX_ATTEMPTS,
+    )
+    raise PipelineRunReconciliationError(
+        name,
+        f"PipelineRun {name} create retry budget exhausted after {_PIPELINERUN_CREATE_MAX_ATTEMPTS} POST attempts; "
+        f"the run may still be created: {api_error_detail(failure)}",
+    ) from failure
 
 
 def _post_manifest(
@@ -264,24 +227,6 @@ def _post_manifest(
         return None, None
 
 
-def _post_before_deadline(
-    api: KubeAPI,
-    collection_path: str,
-    manifest: dict,
-    name: str,
-    attempt: int,
-    deadline: float,
-    last_failure: requests.RequestException | None,
-) -> tuple[str | None, requests.RequestException | None]:
-    """Check the deadline, then submit one POST.
-
-    The deadline is checked right before the POST, so a long sleep cannot push a request past it.
-    """
-    if _monotonic() >= deadline:
-        _raise_create_retry_termination(name, attempt - 1, "retry deadline exceeded", last_failure)
-    return _post_manifest(api, collection_path, manifest)
-
-
 def _create_once(api: KubeAPI, collection_path: str, manifest: dict) -> str | None:
     """Submit a generateName manifest once. Retrying it could create a second PipelineRun."""
     name, failure = _post_manifest(api, collection_path, manifest)
@@ -297,35 +242,28 @@ def _create_or_reconcile_pipelinerun(
     manifest: dict,
     name: str,
     identity: str,
-    deadline: float,
-) -> str | None:
+) -> str:
     """POST a named PipelineRun, reconciling by name after each retryable failure.
 
     Non-retryable failures raise at once. Retryable failures first check whether the
-    object exists with this import's identity, then wait and try again while the
-    attempt budget and deadline allow.
+    object exists with this import's identity, then wait and POST again while the
+    attempt budget allows.
+
+    Returns:
+        The PipelineRun name. A response without ``metadata.name`` still returns
+        ``name``, because the manifest fixes it.
     """
-    last_failure: requests.RequestException | None = None
     for attempt in range(1, _PIPELINERUN_CREATE_MAX_ATTEMPTS + 1):
-        result, failure = _post_before_deadline(
-            api,
-            collection_path,
-            manifest,
-            name,
-            attempt,
-            deadline,
-            last_failure,
-        )
+        result, failure = _post_manifest(api, collection_path, manifest)
         if failure is None:
-            return result
-        last_failure = failure
+            return result or name
         if not _is_retryable_create_failure(failure):
             raise _create_failed_error(failure) from failure
         if _reconcile_pipelinerun(api, api_path, name, identity, failure):
             return name
-        delay = _retry_delay(attempt, deadline)
+        delay = _retry_delay(attempt)
         if delay is None:
-            _raise_create_retry_termination(name, attempt, _retry_termination_reason(attempt), failure)
+            _raise_retry_budget_exhausted(name, failure)
         _LOGGER.warning(
             "Retrying PipelineRun creation name=%s retry=%d/%d delay=%.3fs",
             name,
@@ -341,21 +279,22 @@ def create_pipelinerun(api: KubeAPI, namespace: str, manifest: dict) -> str | No
     """Create a PipelineRun, reusing or retrying its deterministic name when safe.
 
     A manifest with ``metadata.generateName`` has no name to reconcile, so it gets
-    one POST and no retries. A manifest with ``metadata.name`` must also carry the
-    import identity annotation. Returns None only when the response has no name.
+    one POST and no retries. It returns None when the response has no name. A
+    manifest with ``metadata.name`` must also carry the import identity annotation,
+    and it always returns that name.
 
     Raises:
         TriggerError: If the manifest is invalid, the API rejects the request,
-            or retries end without a confirmed PipelineRun.
-        PipelineRunReconciliationError: If a PipelineRun may exist and the
-            lookup that would prove it belongs to this import failed.
+            or the PipelineRun is confirmed to belong to another import.
+        PipelineRunReconciliationError: If a PipelineRun may exist and either the
+            ownership lookup failed or the retry budget ran out after a retryable
+            POST failure.
     """
     collection_path = f"/apis/tekton.dev/v1/namespaces/{namespace}/pipelineruns"
     if _is_generate_name_manifest(manifest):
         return _create_once(api, collection_path, manifest)
     name, identity = _manifest_identity(manifest)
     api_path = f"{collection_path}/{name}"
-    deadline = _monotonic() + _PIPELINERUN_CREATE_DEADLINE_SECONDS
     if _reconcile_pipelinerun(api, api_path, name, identity):
         return name
-    return _create_or_reconcile_pipelinerun(api, collection_path, api_path, manifest, name, identity, deadline)
+    return _create_or_reconcile_pipelinerun(api, collection_path, api_path, manifest, name, identity)

@@ -777,12 +777,6 @@ def no_wait(monkeypatch):
     return sleeps
 
 
-def _script_clock(monkeypatch, readings):
-    """Make the creator's monotonic clock return ``readings`` in order."""
-    values = iter(readings)
-    monkeypatch.setattr(pipelinerun_creator, "_monotonic", lambda: next(values))
-
-
 class TestCreatePipelinerun:
     """Test the create_pipelinerun method."""
 
@@ -853,6 +847,13 @@ class TestCreatePipelinerun:
         kube._mock_api.get.assert_called_once_with(f"{COLLECTION_PATH}/pnc-import-xyz")
         assert kube._mock_api.create.call_count == (0 if existing else 1)
 
+    def test_named_create_without_name_in_response_returns_manifest_name(self, kube: KubeClient):
+        """The manifest fixes the name, so a response without metadata.name must not turn into a failure."""
+        kube._mock_api.get.side_effect = _http_error(404)
+        kube._mock_api.create.return_value = {}
+
+        assert kube.create_pipelinerun(_named_manifest()) == IMPORT_NAME
+
     def test_raises_plain_trigger_error_on_mismatched_existing_identity(self, kube: KubeClient):
         """A name owned by another import is not an unclear create, so a new attempt may use a new name."""
         kube._mock_api.get.return_value = {
@@ -868,7 +869,7 @@ class TestCreatePipelinerun:
     def test_raises_on_non_404_get_failure(self, kube: KubeClient):
         kube._mock_api.get.side_effect = _http_error(403, "forbidden")
 
-        with pytest.raises(PipelineRunReconciliationError, match="failed to check PipelineRun") as raised:
+        with pytest.raises(PipelineRunReconciliationError, match="ownership lookup failed") as raised:
             kube.create_pipelinerun(_named_manifest())
 
         assert raised.value.name == IMPORT_NAME
@@ -905,15 +906,18 @@ class TestCreatePipelinerun:
         assert len(no_wait) == (0 if reconciles else 1)
 
     @pytest.mark.parametrize("failure_kind", ["connect", "read", "503"])
-    def test_stops_after_three_posts(self, kube: KubeClient, no_wait, failure_kind, caplog):
+    def test_stops_after_three_posts_with_unclear_create(self, kube: KubeClient, no_wait, failure_kind, caplog):
+        """Budget exhaustion after a retryable failure is unclear, because the last POST may still land."""
         failure = _failure(failure_kind)
         kube._mock_api.get.side_effect = _http_error(404)
         kube._mock_api.create.side_effect = failure
 
-        with caplog.at_level("WARNING", logger="import_orchestrator.clients.kube"):
-            with pytest.raises(TriggerError, match="retry budget exhausted") as raised:
+        with caplog.at_level("WARNING", logger="import_orchestrator.pipelinerun_creator"):
+            with pytest.raises(PipelineRunReconciliationError, match="retry budget exhausted") as raised:
                 kube.create_pipelinerun(_named_manifest())
 
+        assert type(raised.value) is PipelineRunReconciliationError
+        assert raised.value.name == IMPORT_NAME
         assert raised.value.__cause__ is failure
         assert kube._mock_api.create.call_count == 3
         assert caplog.records[-1].getMessage().endswith("attempts=3")
@@ -981,7 +985,7 @@ class TestCreatePipelinerun:
         ]
         monkeypatch.setattr(pipelinerun_creator, "_jitter", lambda _low, _high: 0.25)
 
-        with caplog.at_level("WARNING", logger="import_orchestrator.clients.kube"):
+        with caplog.at_level("WARNING", logger="import_orchestrator.pipelinerun_creator"):
             kube.create_pipelinerun(_named_manifest())
 
         messages = [record.getMessage() for record in caplog.records]
@@ -989,32 +993,6 @@ class TestCreatePipelinerun:
             "Retrying PipelineRun creation name=pnc-import-abcde retry=1/2 delay=0.250s",
             "Retrying PipelineRun creation name=pnc-import-abcde retry=2/2 delay=0.250s",
         ]
-
-    def test_stops_retrying_at_fixed_deadline(self, kube: KubeClient, monkeypatch):
-        """Once the 60 second deadline passes, no further POST is made."""
-        kube._mock_api.get.side_effect = _http_error(404)
-        kube._mock_api.create.side_effect = _http_error(503)
-        _script_clock(monkeypatch, [0.0, 61.0])
-
-        with pytest.raises(TriggerError, match="deadline exceeded"):
-            kube.create_pipelinerun(_named_manifest())
-
-        kube._mock_api.create.assert_not_called()
-
-    def test_does_not_post_when_sleep_races_past_deadline(self, kube: KubeClient, no_wait, monkeypatch):
-        """The deadline is checked again right before the POST, so a late retry never starts."""
-        kube._mock_api.get.side_effect = _http_error(404)
-        failure = _http_error(503)
-        kube._mock_api.create.side_effect = failure
-        _script_clock(monkeypatch, [0.0, 0.0, 0.0, 61.0])
-        monkeypatch.setattr(pipelinerun_creator, "_jitter", lambda _low, _high: 0.1)
-
-        with pytest.raises(TriggerError, match="deadline exceeded") as raised:
-            kube.create_pipelinerun(_named_manifest())
-
-        assert raised.value.__cause__ is failure
-        kube._mock_api.create.assert_called_once()
-        assert no_wait == [0.1]
 
 
 LIVE_FOUND = {"metadata": {"name": IMPORT_NAME}}
