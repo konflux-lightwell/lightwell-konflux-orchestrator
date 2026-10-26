@@ -72,6 +72,14 @@ spec:
       description: Key in ConfigMap for CA bundle.
       type: string
       default: ca-bundle.crt
+    - name: AI_ASSISTED
+      description: Set to true to add AI attribution to the SBOM.
+      type: string
+      default: "false"
+    - name: AI_MODELS
+      description: Comma-separated AI model IDs, used when AI_ASSISTED is true.
+      type: string
+      default: ""
 
   results:
     - name: IMAGE_DIGEST
@@ -609,6 +617,10 @@ spec:
           value: $(params.VERSION)
         - name: COMPUTED_VERSION
           value: $(params.COMPUTED_VERSION)
+        - name: AI_ASSISTED
+          value: $(params.AI_ASSISTED)
+        - name: AI_MODELS
+          value: $(params.AI_MODELS)
       script: |
         #!/bin/bash
         set -euo pipefail
@@ -641,6 +653,33 @@ spec:
           "import zipfile,sys,pathlib; \
            pathlib.Path(sys.argv[3]).write_bytes(zipfile.ZipFile(sys.argv[1]).read(sys.argv[2]))" \
           "$PRIMARY_WHEEL" "$SBOM_MEMBER" "$SBOM_FILE"
+
+        # Add AI attribution to the copy that gets attached to the image. The wheel
+        # and its embedded SBOM are never modified. This runs before cosign attach
+        # and the digest below, so SBOM_BLOB_URL hashes the annotated file.
+        python3 - "$SBOM_FILE" <<'PY'
+        import json
+        import os
+        import sys
+        from datetime import datetime, timezone
+        from pathlib import Path
+
+        if os.environ.get("AI_ASSISTED", "false").strip().lower() != "true":
+            print("not AI-assisted; SBOM left unchanged")
+            sys.exit(0)
+
+        path = Path(sys.argv[1])
+        models = os.environ.get("AI_MODELS", "")
+        annotation = {
+            "annotationType": "OTHER",
+            "annotator": "Organization: Red Hat Lightwell",
+            "annotationDate": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "comment": f"lightwell:aiAssisted=true; lightwell:aiModels={models}; lightwell:aiSource=Red Hat Lightwell",
+        }
+        sbom = json.loads(path.read_bytes())
+        sbom.setdefault("annotations", []).append(annotation)
+        path.write_text(json.dumps(sbom, indent=2) + "\n")
+        PY
 
         mkdir -p /tmp/cosign-auth
         select-oci-auth "$IMAGE_REF" > /tmp/cosign-auth/config.json
