@@ -304,7 +304,7 @@ spec:
         EOF
 
     - name: resolve-version-overrides
-      image: quay.io/redhat-user-workloads/calunga-tenant/plumbing-builder@sha256:d8355de03d57adef033743da1f1a3bb2f0ff038192e3220b155e9dd7dba5d37c
+      image: quay.io/light-factory/python-builder@sha256:baa5683c1fcb3889e8ce76b88901172a3fa31b8f89a6adcc237a312f079f3651
       volumeMounts:
         - mountPath: /mnt/trusted-ca
           name: trusted-ca

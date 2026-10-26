@@ -156,7 +156,7 @@ spec:
 
     - name: normalize-sdist
       # The task name and this exact digest are the implementation identity recorded below.
-      image: quay.io/redhat-user-workloads/calunga-tenant/plumbing-builder@sha256:d8355de03d57adef033743da1f1a3bb2f0ff038192e3220b155e9dd7dba5d37c
+      image: quay.io/light-factory/python-builder@sha256:baa5683c1fcb3889e8ce76b88901172a3fa31b8f89a6adcc237a312f079f3651
       workingDir: /var/workdir
       volumeMounts:
         - mountPath: /mnt/trusted-ca
@@ -168,7 +168,7 @@ spec:
         - name: VERSION
           value: $(params.VERSION)
         - name: IMPLEMENTATION_IMAGE_DIGEST
-          value: sha256:d8355de03d57adef033743da1f1a3bb2f0ff038192e3220b155e9dd7dba5d37c
+          value: sha256:4ee03aff76acfe22f3856e71d534e02bad76353c397666f497adbb1f3c5033ce
       script: |
         #!/bin/bash
         set -euo pipefail
