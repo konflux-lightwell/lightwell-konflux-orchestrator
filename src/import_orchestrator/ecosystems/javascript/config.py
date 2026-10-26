@@ -48,19 +48,19 @@ DEFAULT_SOURCE_REVISION = "main"
 
 # Pinned digests from the calunga npm PoC (reuse until lightwell npm-builder lands).
 DEFAULT_BUILDER_IMAGE = (
-    "quay.io/redhat-user-workloads/calunga-tenant/npm-builder:"
-    "08a6938c365048b96c53fd8e916e881f5c90328f@"
-    "sha256:3539a958acc996451a5d3e2bd16e0ce4bd95350677743f4f2315be320f0a54a7"
+    "quay.io/light-factory/npm-builder:"
+    "91876b128455dd30d6482620464e89387140f641@"
+    "sha256:f6ae58c4c98d1d88a9224e205a2c59f31a6dc132c6e67b7fedbbdd938ab17eb4"
 )
 DEFAULT_TASK_BUILD_NPM_PACKAGE_BUNDLE = (
-    "quay.io/redhat-user-workloads/calunga-tenant/task-build-npm-package:"
-    "8efe12cc3fe2cd0825888ec5a198cc55871320cb@"
-    "sha256:89d5c491ef5efe3aaebae9182a190a9eeb5352fd6b549d1855ad38c6ca549cf7"
+    "quay.io/konflux-ci/tekton-catalog/task-build-npm-package:"
+    "0.1-1793012480@"
+    "sha256:bba20255f99b0f4e76d3e40a286721fd663758053aa3b8a78bf6f8ce8c1273a2"
 )
 DEFAULT_TASK_ASSESS_NPM_COMPLIANCE_BUNDLE = (
-    "quay.io/redhat-user-workloads/calunga-tenant/task-promote-npm-oci:"
-    "08a6938c365048b96c53fd8e916e881f5c90328f@"
-    "sha256:3ad13b74eea30075fb3aea431de87312427aa37ef035f2f807bd6a6af5ed19f2"
+    "quay.io/konflux-ci/tekton-catalog/task-assess-npm-compliance:"
+    "0.1-1793012461@"
+    "sha256:08786871676181177e136089f6420a11309971364e81b4c49dd7db193227d6a2"
 )
 
 # Assess npm dependency-closure compliance against Lightwell stage validated Pulp.
