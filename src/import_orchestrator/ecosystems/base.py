@@ -17,12 +17,34 @@ limitations under the License.
 from __future__ import annotations
 
 import argparse
+import os
 from typing import Protocol, runtime_checkable
 
 DEFAULT_PIPELINERUN_ANNOTATIONS: dict[str, str] = {
     # Ensures each snapshot gets its own release even when a newer one arrives concurrently.
     "test.appstudio.openshift.io/ignore-supersession": "true",
 }
+
+
+def ai_attribution_params() -> list[dict[str, str]]:
+    """Return the AI_ASSISTED and AI_MODELS PipelineRun params read from the environment.
+
+    Shared by every ecosystem so the env contract stays the same everywhere.
+    Tekton Chains records these params in SLSA provenance once the Pipeline
+    declares them.
+
+    AI_ASSISTED is "true" only when the env var is "true" (any case). AI_MODELS is
+    a comma-separated list of model names with blanks dropped, or "" when unknown.
+
+    Returns:
+        The two PipelineRun param entries, AI_ASSISTED first.
+    """
+    assisted = os.environ.get("AI_ASSISTED", "").strip().lower() == "true"
+    models = (model.strip() for model in os.environ.get("AI_MODELS", "").split(","))
+    return [
+        {"name": "AI_ASSISTED", "value": "true" if assisted else "false"},
+        {"name": "AI_MODELS", "value": ",".join(model for model in models if model)},
+    ]
 
 
 def build_request_identity(
