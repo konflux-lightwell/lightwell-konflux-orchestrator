@@ -20,9 +20,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 
+from import_orchestrator import pipelinerun_creator
 from import_orchestrator.clients import KubeClient
 from import_orchestrator.clients.kube_api import KubeAuth
-from import_orchestrator.engine.errors import TriggerError
+from import_orchestrator.engine.errors import PipelineRunReconciliationError, TriggerError
 
 
 def _make_kube_client(monkeypatch, token=None, kubearchive_api=""):
@@ -724,53 +725,288 @@ class TestFindReleasePlanForSnapshot:
         assert "my-app" in stderr
 
 
+COLLECTION_PATH = "/apis/tekton.dev/v1/namespaces/test-ns/pipelineruns"
+IMPORT_NAME = "pnc-import-abcde"
+IMPORT_IDENTITY = '{"import":"one"}'
+
+
+def _named_manifest(name=IMPORT_NAME, identity=IMPORT_IDENTITY):
+    """Return a PipelineRun manifest with a deterministic name and import identity."""
+    return {
+        "apiVersion": "tekton.dev/v1",
+        "kind": "PipelineRun",
+        "metadata": {
+            "name": name,
+            "annotations": {"lightwell.redhat.com/import-identity": identity},
+        },
+    }
+
+
+def _generate_name_manifest():
+    """Return a PipelineRun manifest whose name the cluster chooses."""
+    return {"apiVersion": "tekton.dev/v1", "kind": "PipelineRun", "metadata": {"generateName": "pnc-import-"}}
+
+
+def _http_error(status_code, message=None):
+    """Return an HTTPError with a real response, optionally carrying a Status message."""
+    response = requests.Response()
+    response.status_code = status_code
+    if message is not None:
+        response._content = json.dumps({"kind": "Status", "message": message}).encode()
+    return requests.HTTPError(f"{status_code} error", response=response)
+
+
+def _failure(kind):
+    """Return a retryable or non-retryable POST failure named by kind."""
+    transport_errors = {
+        "connect": requests.ConnectTimeout,
+        "read": requests.ReadTimeout,
+        "connection": requests.ConnectionError,
+    }
+    if kind in transport_errors:
+        return transport_errors[kind](kind)
+    return _http_error(int(kind))
+
+
+@pytest.fixture
+def no_wait(monkeypatch):
+    """Make retry sleeps instant and jitter zero. Returns the list of requested sleeps."""
+    sleeps: list[float] = []
+    monkeypatch.setattr(pipelinerun_creator, "_sleep", sleeps.append)
+    monkeypatch.setattr(pipelinerun_creator, "_jitter", lambda _low, _high: 0.0)
+    return sleeps
+
+
+def _script_clock(monkeypatch, readings):
+    """Make the creator's monotonic clock return ``readings`` in order."""
+    values = iter(readings)
+    monkeypatch.setattr(pipelinerun_creator, "_monotonic", lambda: next(values))
+
+
 class TestCreatePipelinerun:
     """Test the create_pipelinerun method."""
 
     def test_returns_generated_name(self, kube: KubeClient):
+        """A generateName manifest is created with one POST and returns the server's name."""
         kube._mock_api.create.return_value = {"metadata": {"name": "pnc-import-abcde"}}
 
-        result = kube.create_pipelinerun({"apiVersion": "tekton.dev/v1", "kind": "PipelineRun"})
-        assert result == "pnc-import-abcde"
+        assert kube.create_pipelinerun(_generate_name_manifest()) == "pnc-import-abcde"
 
     def test_passes_manifest_as_body(self, kube: KubeClient):
         kube._mock_api.create.return_value = {"metadata": {"name": "pnc-import-xyz"}}
+        manifest = _generate_name_manifest()
 
-        manifest = {"apiVersion": "tekton.dev/v1", "kind": "PipelineRun"}
         kube.create_pipelinerun(manifest)
 
-        kube._mock_api.create.assert_called_once_with(
-            "/apis/tekton.dev/v1/namespaces/test-ns/pipelineruns",
-            manifest,
-        )
+        kube._mock_api.create.assert_called_once_with(COLLECTION_PATH, manifest)
 
     def test_raises_trigger_error_on_http_error(self, kube: KubeClient):
         kube._mock_api.create.side_effect = requests.HTTPError("403 Forbidden")
 
         with pytest.raises(TriggerError):
-            kube.create_pipelinerun({"kind": "PipelineRun"})
+            kube.create_pipelinerun(_generate_name_manifest())
 
-    def test_http_error_surfaces_api_message(self, kube: KubeClient):
-        response = MagicMock()
-        response.json.return_value = {"kind": "Status", "message": "non-existent variable in value"}
-        kube._mock_api.create.side_effect = requests.HTTPError("400 Bad Request", response=response)
+    @pytest.mark.parametrize("manifest", [_generate_name_manifest(), _named_manifest()], ids=["generate-name", "named"])
+    def test_http_error_surfaces_api_message(self, kube: KubeClient, manifest):
+        """The cluster's rejection reason reaches the TriggerError message for both manifest kinds."""
+        kube._mock_api.get.side_effect = _http_error(404)
+        kube._mock_api.create.side_effect = _http_error(400, "non-existent variable in value")
 
         with pytest.raises(TriggerError, match="non-existent variable in value"):
-            kube.create_pipelinerun({"kind": "PipelineRun"})
+            kube.create_pipelinerun(manifest)
 
     def test_returns_none_when_name_missing(self, kube: KubeClient):
         kube._mock_api.create.return_value = {"metadata": {}}
 
-        result = kube.create_pipelinerun({"kind": "PipelineRun"})
-        assert result is None
+        assert kube.create_pipelinerun(_generate_name_manifest()) is None
 
     def test_uses_correct_namespace_in_path(self, kube: KubeClient):
         kube._mock_api.create.return_value = {"metadata": {"name": "pnc-import-ns"}}
 
-        kube.create_pipelinerun({"kind": "PipelineRun"})
+        kube.create_pipelinerun(_generate_name_manifest())
 
         api_path = kube._mock_api.create.call_args[0][0]
         assert "/namespaces/test-ns/" in api_path
+
+    @pytest.mark.parametrize("failure_kind", ["connect", "503"])
+    def test_generate_name_manifest_is_never_retried(self, kube: KubeClient, no_wait, failure_kind):
+        """Retrying a generateName POST could create a second PipelineRun, so it gets one attempt."""
+        kube._mock_api.create.side_effect = _failure(failure_kind)
+
+        with pytest.raises(TriggerError, match="failed to create PipelineRun"):
+            kube.create_pipelinerun(_generate_name_manifest())
+
+        kube._mock_api.create.assert_called_once()
+        kube._mock_api.get.assert_not_called()
+        assert no_wait == []
+
+    @pytest.mark.parametrize("existing", [True, False])
+    def test_reuses_or_creates_after_exact_name_lookup(self, kube: KubeClient, existing):
+        manifest = _named_manifest(name="pnc-import-xyz")
+        if existing:
+            kube._mock_api.get.return_value = {"metadata": manifest["metadata"]}
+        else:
+            kube._mock_api.get.side_effect = _http_error(404)
+        kube._mock_api.create.return_value = {"metadata": {"name": "pnc-import-xyz"}}
+
+        assert kube.create_pipelinerun(manifest) == "pnc-import-xyz"
+        kube._mock_api.get.assert_called_once_with(f"{COLLECTION_PATH}/pnc-import-xyz")
+        assert kube._mock_api.create.call_count == (0 if existing else 1)
+
+    def test_raises_on_mismatched_existing_identity(self, kube: KubeClient):
+        kube._mock_api.get.return_value = {
+            "metadata": {"annotations": {"lightwell.redhat.com/import-identity": "another"}}
+        }
+
+        with pytest.raises(PipelineRunReconciliationError) as raised:
+            kube.create_pipelinerun(_named_manifest())
+
+        assert raised.value.name == IMPORT_NAME
+        kube._mock_api.create.assert_not_called()
+
+    def test_raises_on_non_404_get_failure(self, kube: KubeClient):
+        kube._mock_api.get.side_effect = _http_error(403, "forbidden")
+
+        with pytest.raises(PipelineRunReconciliationError, match="failed to check PipelineRun") as raised:
+            kube.create_pipelinerun(_named_manifest())
+
+        assert raised.value.name == IMPORT_NAME
+        assert "forbidden" in str(raised.value)
+        kube._mock_api.create.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("failure_kind", "reconciles"),
+        [
+            ("connect", True),
+            ("read", True),
+            ("connection", True),
+            ("409", True),
+            ("429", False),
+            ("500", False),
+            ("502", False),
+            ("503", False),
+            ("504", False),
+        ],
+    )
+    def test_reconciles_or_retries_retryable_create_failure(self, kube: KubeClient, no_wait, failure_kind, reconciles):
+        """A retryable POST failure either reuses the object that now exists or retries the same name."""
+        manifest = _named_manifest()
+        failure = _failure(failure_kind)
+        if reconciles:
+            kube._mock_api.get.side_effect = [_http_error(404), {"metadata": manifest["metadata"]}]
+            kube._mock_api.create.side_effect = failure
+        else:
+            kube._mock_api.get.side_effect = _http_error(404)
+            kube._mock_api.create.side_effect = [failure, {"metadata": {"name": IMPORT_NAME}}]
+
+        assert kube.create_pipelinerun(manifest) == IMPORT_NAME
+        assert kube._mock_api.create.call_count == (1 if reconciles else 2)
+        assert len(no_wait) == (0 if reconciles else 1)
+
+    @pytest.mark.parametrize("failure_kind", ["connect", "read", "503"])
+    def test_stops_after_three_posts(self, kube: KubeClient, no_wait, failure_kind, caplog):
+        failure = _failure(failure_kind)
+        kube._mock_api.get.side_effect = _http_error(404)
+        kube._mock_api.create.side_effect = failure
+
+        with caplog.at_level("WARNING", logger="import_orchestrator.clients.kube"):
+            with pytest.raises(TriggerError, match="retry budget exhausted") as raised:
+                kube.create_pipelinerun(_named_manifest())
+
+        assert raised.value.__cause__ is failure
+        assert kube._mock_api.create.call_count == 3
+        assert caplog.records[-1].getMessage().endswith("attempts=3")
+
+    @pytest.mark.parametrize("outcome", ["mismatch", "error"])
+    def test_raises_when_reconciliation_cannot_prove_ownership(self, kube: KubeClient, outcome):
+        manifest = _named_manifest()
+        reconciliation_result = (
+            {"metadata": {"annotations": {"lightwell.redhat.com/import-identity": "another"}}}
+            if outcome == "mismatch"
+            else _http_error(500)
+        )
+        kube._mock_api.get.side_effect = [_http_error(404), reconciliation_result]
+        failure = _http_error(503)
+        kube._mock_api.create.side_effect = failure
+
+        with pytest.raises(PipelineRunReconciliationError) as raised:
+            kube.create_pipelinerun(manifest)
+
+        assert raised.value.name == IMPORT_NAME
+        if outcome == "error":
+            assert raised.value.__cause__ is reconciliation_result
+        else:
+            assert raised.value.__cause__ is failure
+
+    @pytest.mark.parametrize(
+        "manifest",
+        [
+            {"kind": "PipelineRun"},
+            {"metadata": {"name": IMPORT_NAME}},
+            {"metadata": {"annotations": {"lightwell.redhat.com/import-identity": IMPORT_IDENTITY}}},
+        ],
+        ids=["no-metadata", "name-without-identity", "identity-without-name"],
+    )
+    def test_raises_when_manifest_identity_is_missing(self, kube: KubeClient, manifest):
+        with pytest.raises(TriggerError, match="metadata|identity"):
+            kube.create_pipelinerun(manifest)
+
+        kube._mock_api.create.assert_not_called()
+
+    @pytest.mark.parametrize("status_code", [401, 400, 422])
+    def test_does_not_retry_nonretryable_http_failure(self, kube: KubeClient, no_wait, status_code):
+        kube._mock_api.get.side_effect = _http_error(404)
+        kube._mock_api.create.side_effect = _http_error(status_code, "rejected by cluster")
+
+        with pytest.raises(TriggerError, match="rejected by cluster"):
+            kube.create_pipelinerun(_named_manifest())
+
+        kube._mock_api.create.assert_called_once()
+        assert no_wait == []
+
+    def test_logs_retry_count_delay_and_deterministic_name(self, kube: KubeClient, no_wait, monkeypatch, caplog):
+        kube._mock_api.get.side_effect = _http_error(404)
+        kube._mock_api.create.side_effect = [
+            _http_error(500),
+            _http_error(500),
+            {"metadata": {"name": IMPORT_NAME}},
+        ]
+        monkeypatch.setattr(pipelinerun_creator, "_jitter", lambda _low, _high: 0.25)
+
+        with caplog.at_level("WARNING", logger="import_orchestrator.clients.kube"):
+            kube.create_pipelinerun(_named_manifest())
+
+        messages = [record.getMessage() for record in caplog.records]
+        assert messages == [
+            "Retrying PipelineRun creation name=pnc-import-abcde retry=1/2 delay=0.250s",
+            "Retrying PipelineRun creation name=pnc-import-abcde retry=2/2 delay=0.250s",
+        ]
+
+    def test_stops_retrying_at_fixed_deadline(self, kube: KubeClient, monkeypatch):
+        """Once the 60 second deadline passes, no further POST is made."""
+        kube._mock_api.get.side_effect = _http_error(404)
+        kube._mock_api.create.side_effect = _http_error(503)
+        _script_clock(monkeypatch, [0.0, 61.0])
+
+        with pytest.raises(TriggerError, match="deadline exceeded"):
+            kube.create_pipelinerun(_named_manifest())
+
+        kube._mock_api.create.assert_not_called()
+
+    def test_does_not_post_when_sleep_races_past_deadline(self, kube: KubeClient, no_wait, monkeypatch):
+        """The deadline is checked again right before the POST, so a late retry never starts."""
+        kube._mock_api.get.side_effect = _http_error(404)
+        failure = _http_error(503)
+        kube._mock_api.create.side_effect = failure
+        _script_clock(monkeypatch, [0.0, 0.0, 0.0, 61.0])
+        monkeypatch.setattr(pipelinerun_creator, "_jitter", lambda _low, _high: 0.1)
+
+        with pytest.raises(TriggerError, match="deadline exceeded") as raised:
+            kube.create_pipelinerun(_named_manifest())
+
+        assert raised.value.__cause__ is failure
+        kube._mock_api.create.assert_called_once()
+        assert no_wait == [0.1]
 
 
 class TestCreateRelease:
