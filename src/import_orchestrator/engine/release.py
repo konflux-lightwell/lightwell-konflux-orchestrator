@@ -19,6 +19,7 @@ from __future__ import annotations
 import sys
 
 from import_orchestrator.clients import KubeClient
+from import_orchestrator.engine.errors import ReleaseError
 from import_orchestrator.engine.request_view import RequestView
 from import_orchestrator.models import AttemptPhase, ClusterResource, Phase, PhaseStatus
 from import_orchestrator.utils import extract_tag
@@ -171,7 +172,24 @@ class ReleaseMonitor:
             f"  No release found for {snapshot_name}, creating via {release_plan} ({tag})...",
             file=sys.stderr,
         )
-        release_name = self.kube.create_release(snapshot_name, release_plan, self.prefix)
+        try:
+            release_name = self.kube.create_release(snapshot_name, release_plan, self.prefix)
+        except ReleaseError as e:
+            # A rejected create call (e.g. a permissions gap) will not resolve
+            # itself by retrying the identical request next poll. Record a
+            # FAILED release phase -- bounded by max_retries, like a failed
+            # intake trigger -- instead of returning None forever with no
+            # phase ever recorded, which left the request stuck in
+            # AWAITING_RELEASE indefinitely (LWLP-3937).
+            self.db.upsert_phase(
+                attempt_id,
+                Phase.RELEASE,
+                PhaseStatus.FAILED,
+                error_message=f"Release creation failed: {e}",
+            )
+            print(f"  ✗ Failed to create release for {snapshot_name} ({tag}): {e}", file=sys.stderr)
+            return None
+
         if not release_name:
             print(f"  Failed to create release for {snapshot_name} ({tag}), will retry", file=sys.stderr)
             return None

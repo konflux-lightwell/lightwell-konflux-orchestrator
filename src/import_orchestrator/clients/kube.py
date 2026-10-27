@@ -317,7 +317,16 @@ class KubeClient:
             return None
 
     def create_release(self, snapshot_name: str, release_plan: str, prefix: str) -> str | None:
-        """Create a Release for the given snapshot and return its name."""
+        """Create a Release for the given snapshot and return its name.
+
+        Raises ReleaseError if the API rejects the request (e.g. a permissions
+        gap or an invalid releasePlan reference), mirroring create_pipelinerun's
+        TriggerError -- a rejected create call will not resolve itself by
+        retrying the identical request on the next poll, so the caller should
+        record a failed release phase instead of looping forever with no state
+        change (LWLP-3937). Returns None only if the Release was created but
+        its name is absent from the response.
+        """
         manifest = {
             "apiVersion": "appstudio.redhat.com/v1alpha1",
             "kind": "Release",
@@ -335,10 +344,17 @@ class KubeClient:
                 f"/apis/appstudio.redhat.com/v1alpha1/namespaces/{self.namespace}/releases",
                 manifest,
             )
-            return result["metadata"]["name"]
         except requests.RequestException as e:
-            self._log_api_error(f"create Release for Snapshot {snapshot_name}, ReleasePlan {release_plan}", e)
-            return None
+            # Imported lazily: engine.errors pulls in the engine package, which
+            # imports clients, so a module-level import would be circular.
+            from import_orchestrator.engine.errors import ReleaseError
+
+            raise ReleaseError(
+                f"failed to create Release for Snapshot {snapshot_name}: {_api_error_detail(e)}"
+            ) from e
+
+        try:
+            return result["metadata"]["name"]
         except KeyError as e:
             print(f"ERROR: Invalid create Release response for Snapshot {snapshot_name}: missing {e}", file=sys.stderr)
             return None
