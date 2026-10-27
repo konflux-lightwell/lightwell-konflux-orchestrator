@@ -526,8 +526,21 @@ spec:
         #!/bin/bash
         set -euo pipefail
 
-        # Lowercase BUILD_TYPE (bash-only syntax, e.g. "Remediated" → "remediated")
-        DISTRIBUTION_TARGET="${BUILD_TYPE,,}"
+        # Backport and Novel both ship to the "remediated" repo/stream; Validated is its
+        # own distribution target. The vuln-class (CVE vs LW-) stream is derived
+        # separately from the vuln-id prefix, not from this annotation. See LWLP-3930.
+        case "${BUILD_TYPE}" in
+          Backport|Novel)
+            DISTRIBUTION_TARGET="remediated"
+            ;;
+          Validated)
+            DISTRIBUTION_TARGET="validated"
+            ;;
+          *)
+            echo "ERROR: BUILD_TYPE must be Backport, Novel, or Validated (got: ${BUILD_TYPE})" >&2
+            exit 1
+            ;;
+        esac
 
         select-oci-auth "$IMAGE" > auth.json
         AUTHFILE="$(realpath auth.json)"
