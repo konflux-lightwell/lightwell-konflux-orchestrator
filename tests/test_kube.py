@@ -22,7 +22,7 @@ import requests
 
 from import_orchestrator.clients import KubeClient
 from import_orchestrator.clients.kube_api import KubeAuth
-from import_orchestrator.engine.errors import TriggerError
+from import_orchestrator.engine.errors import ReleaseError, TriggerError
 
 
 def _make_kube_client(monkeypatch, token=None, kubearchive_api=""):
@@ -75,7 +75,6 @@ class TestApiErrorLogging:
             ("find_snapshot_by_pipelinerun", ("pr-1",), "list", "find Snapshot for PipelineRun pr-1", None),
             ("find_release_plan_for_snapshot", ("snap-1",), "get", "get Snapshot snap-1", None),
             ("find_release_plan_for_snapshot", ("snap-1",), "list", "list ReleasePlans for Snapshot snap-1", None),
-            ("create_release", ("snap-1", "plan-1", "release-"), "create", "ReleasePlan plan-1", None),
             ("find_release_for_snapshot", ("snap-1",), "list", "find Release for Snapshot snap-1", None),
             ("get_release_status", ("release-1",), "get", "get Release release-1 status", None),
         ],
@@ -135,15 +134,14 @@ class TestApiErrorLogging:
         assert "Archive temporarily unavailable" in stderr
         assert "404" not in stderr
 
-    def test_release_creation_logs_non_json_response_body(self, kube, capsys):
+    def test_release_creation_surfaces_non_json_response_body(self, kube):
         response = requests.Response()
         response.status_code = 502
         response._content = b"Upstream proxy unavailable"
         kube._mock_api.create.side_effect = requests.HTTPError("502 Bad Gateway", response=response)
 
-        assert kube.create_release("snap-1", "plan-1", "release-") is None
-
-        assert "Upstream proxy unavailable" in capsys.readouterr().err
+        with pytest.raises(ReleaseError, match="Upstream proxy unavailable"):
+            kube.create_release("snap-1", "plan-1", "release-")
 
     def test_release_status_logs_connection_error(self, kube, capsys):
         kube._mock_api.get.side_effect = requests.ConnectionError("Connection refused")
@@ -795,11 +793,19 @@ class TestCreateRelease:
             },
         )
 
-    def test_returns_none_on_http_error(self, kube: KubeClient):
+    def test_raises_release_error_on_http_error(self, kube: KubeClient):
         kube._mock_api.create.side_effect = requests.HTTPError("403 Forbidden")
 
-        result = kube.create_release("snap-1", "plan-1", "pnc-import-")
-        assert result is None
+        with pytest.raises(ReleaseError):
+            kube.create_release("snap-1", "plan-1", "pnc-import-")
+
+    def test_http_error_surfaces_api_message(self, kube: KubeClient):
+        response = MagicMock()
+        response.json.return_value = {"kind": "Status", "message": "releaseplans.appstudio.redhat.com is forbidden"}
+        kube._mock_api.create.side_effect = requests.HTTPError("403 Forbidden", response=response)
+
+        with pytest.raises(ReleaseError, match="releaseplans.appstudio.redhat.com is forbidden"):
+            kube.create_release("snap-1", "plan-1", "pnc-import-")
 
     def test_returns_none_when_name_missing(self, kube: KubeClient):
         kube._mock_api.create.return_value = {"metadata": {}}

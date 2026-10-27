@@ -22,6 +22,7 @@ import pytest
 from import_orchestrator.clients import KubeClient
 from import_orchestrator.database import WorkflowDatabase
 from import_orchestrator.engine import ReleaseMonitor, RequestView
+from import_orchestrator.engine.errors import ReleaseError
 from import_orchestrator.models import ClusterResource, Phase, PhaseStatus, Request, RequestState
 
 
@@ -202,6 +203,24 @@ class TestFindOrCreateRelease:
         monitor.update_statuses()
 
         assert _phase(db, request, Phase.RELEASE) is None
+
+    def test_records_failed_phase_when_release_creation_raises(
+        self, monitor: ReleaseMonitor, db: WorkflowDatabase, mock_kube: MagicMock
+    ):
+        """A rejected create call (e.g. a permissions gap) records a bounded,
+        retriable FAILED release phase instead of leaving the request stuck in
+        AWAITING_RELEASE forever with no state change (LWLP-3937)."""
+        request = _seed(db, "r1", snapshot="snapshot-123")
+        mock_kube.find_release_for_snapshot.return_value = None
+        mock_kube.find_release_plan_for_snapshot.return_value = "release-plan-default"
+        mock_kube.create_release.side_effect = ReleaseError("403 Forbidden")
+
+        monitor.update_statuses()
+
+        release = _phase(db, request, Phase.RELEASE)
+        assert release is not None
+        assert release.status == PhaseStatus.FAILED
+        assert "403 Forbidden" in release.error_message
 
 
 class TestReleasePlanOverride:
