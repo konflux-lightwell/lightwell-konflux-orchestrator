@@ -32,7 +32,7 @@ class PythonEcosystem:
     pipelinerun_prefix = config.PIPELINERUN_PREFIX
     namespace = config.NAMESPACE
 
-    def build_pipelinerun(self, ref: str, args: argparse.Namespace) -> dict:
+    def build_pipelinerun(self, ref: str, args: argparse.Namespace, *, attempt: int | None = None) -> dict:
         package, version = parse_ref(ref)
         target = getattr(args, "target", config.DEFAULT_TARGET)
         builds_tag = getattr(args, "builds_tag", None)
@@ -61,6 +61,7 @@ class PythonEcosystem:
             builds_tag=builds_tag,
             build_type=build_type,
             wheel_server_url=getattr(args, "wheel_server_url", None),
+            attempt=attempt,
         )
         return apply_pipeline_overrides(manifest, pipeline_path)
 

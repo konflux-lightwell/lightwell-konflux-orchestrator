@@ -20,6 +20,12 @@ from typing import Any
 
 from import_orchestrator.ecosystems.base import DEFAULT_PIPELINERUN_ANNOTATIONS
 from import_orchestrator.engine.errors import TriggerError
+from import_orchestrator.pipelinerun import (
+    IMPORT_IDENTITY_ANNOTATION,
+    build_execution_spec_fingerprint,
+    build_import_identity,
+    build_pipelinerun_name,
+)
 
 __all__ = ["TriggerError", "build_pipelinerun_manifest", "parse_ref"]
 
@@ -49,11 +55,15 @@ def build_pipelinerun_manifest(
     source_registries: str = "rhtl",
     pipeline_git_url: str | None = None,
     pipeline_revision: str | None = None,
+    attempt: int | None = None,
 ) -> dict[str, Any]:
     """Build a python-sdist-ingest PipelineRun manifest for one package/version.
 
     ``pipeline_git_url`` and ``pipeline_revision`` identify the repository and
     immutable commit that supplied this inline pipeline definition to Chains.
+
+    When ``attempt`` is None the manifest uses ``generateName``. When it is the
+    DB Attempt id, the name and identity annotation come from the import identity.
     """
     if bool(pipeline_git_url) != bool(pipeline_revision):
         raise TriggerError("inline pipeline Git URL and revision must be supplied together")
@@ -81,13 +91,29 @@ def build_pipelinerun_manifest(
     if service_account:
         spec["taskRunTemplate"] = {"serviceAccountName": service_account}
 
+    metadata_name: dict[str, str] = {"generateName": prefix}
+    annotations: dict[str, str] = DEFAULT_PIPELINERUN_ANNOTATIONS
+    if attempt is not None:
+        identity = build_import_identity(
+            "python-sdist",
+            package=package,
+            version=version,
+            destination_image=image,
+            attempt=attempt,
+            execution_spec_fingerprint=build_execution_spec_fingerprint(
+                {"spec": spec, "application": application, "component": component}
+            ),
+        )
+        metadata_name = {"name": build_pipelinerun_name(prefix, identity)}
+        annotations = {**DEFAULT_PIPELINERUN_ANNOTATIONS, IMPORT_IDENTITY_ANNOTATION: identity}
+
     return {
         "apiVersion": "tekton.dev/v1",
         "kind": "PipelineRun",
         "metadata": {
-            "generateName": prefix,
+            **metadata_name,
             "namespace": namespace,
-            "annotations": DEFAULT_PIPELINERUN_ANNOTATIONS,
+            "annotations": annotations,
             "labels": {
                 "appstudio.openshift.io/application": application,
                 "appstudio.openshift.io/component": component,

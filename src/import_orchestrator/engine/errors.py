@@ -19,3 +19,18 @@ from __future__ import annotations
 
 class TriggerError(Exception):
     """Non-recoverable error during the PipelineRun trigger process."""
+
+
+class PipelineRunReconciliationError(TriggerError):
+    """A PipelineRun create result is unclear: the run may exist, so the current attempt must not be retried.
+
+    Raised only when the lookup that would confirm the PipelineRun failed. A PipelineRun owned by another import
+    raises a plain TriggerError instead, because a new attempt with a new name is safe then.
+
+    Attributes:
+        name: The deterministic PipelineRun name that could not be reconciled.
+    """
+
+    def __init__(self, name: str, message: str):
+        super().__init__(message)
+        self.name = name

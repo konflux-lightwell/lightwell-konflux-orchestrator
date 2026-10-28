@@ -37,7 +37,7 @@ class JavaEcosystem:
     pipelinerun_prefix = config.PIPELINERUN_PREFIX
     namespace = NAMESPACE
 
-    def build_pipelinerun(self, ref: str, args: argparse.Namespace) -> dict:
+    def build_pipelinerun(self, ref: str, args: argparse.Namespace, *, attempt: int | None = None) -> dict:
         artifact_type = getattr(args, "artifact_type", "STAGE")
         cfg = config.ARTIFACT_CONFIGS[artifact_type]
 
@@ -56,6 +56,7 @@ class JavaEcosystem:
             prefix=self.pipelinerun_prefix,
             verification_secret=config.VERIFICATION_PUBLIC_KEY_SECRET,
             namespace=self.namespace,
+            attempt=attempt,
         )
         return apply_pipeline_overrides(manifest, pipeline_path)
 
