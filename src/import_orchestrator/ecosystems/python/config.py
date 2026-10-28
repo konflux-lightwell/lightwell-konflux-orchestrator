@@ -47,6 +47,10 @@ TARGET_CONFIGS: dict[str, dict] = {
         "component": "scratch-build",
         "service_account": "build-pipeline-scratch-build",
         "skip_release": True,
+        # Scratch builds exercise reversioning without the lightwell-builds lineage
+        # tags: source-to-sdist applies a fixed +rhlw.0 suffix and fails if the
+        # version rewrite changes nothing. Used to validate build-config changes.
+        "build_type": "Scratch",
     },
 }
 DEFAULT_TARGET = "REMEDIATED"

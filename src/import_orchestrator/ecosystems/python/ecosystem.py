@@ -36,11 +36,14 @@ class PythonEcosystem:
         package, version = parse_ref(ref)
         target = getattr(args, "target", config.DEFAULT_TARGET)
         builds_tag = getattr(args, "builds_tag", None)
-        # Default build_type based on target: Validated targets ship upstream versions,
-        # everything else defaults to a Backport remediated build.
-        default_build_type = "Validated" if target in ("VALIDATED", "VALIDATED-STAGE") else "Backport"
-        build_type = getattr(args, "build_type", None) or default_build_type
         cfg = config.TARGET_CONFIGS[target]
+        # Default build_type from the target config when it pins one (e.g. SCRATCH),
+        # else Validated targets ship upstream versions and everything else defaults
+        # to a Backport remediated build. An explicit --build-type always wins.
+        default_build_type = cfg.get("build_type") or (
+            "Validated" if target in ("VALIDATED", "VALIDATED-STAGE") else "Backport"
+        )
+        build_type = getattr(args, "build_type", None) or default_build_type
         pipeline_path = config.pipeline_definition_path()
         pipeline_spec = load_pipeline(pipeline_path)
         manifest = build_pipelinerun_manifest(
