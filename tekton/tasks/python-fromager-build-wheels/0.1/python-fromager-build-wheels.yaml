@@ -526,12 +526,20 @@ spec:
         #!/bin/bash
         set -euo pipefail
 
-        # Backport and Novel both ship to the "remediated" repo/stream; Validated is its
-        # own distribution target. The vuln-class (CVE vs LW-) stream is derived
-        # separately from the vuln-id prefix, not from this annotation. See LWLP-3930.
+        # Backport ships to the "remediated" repo/stream, the only target
+        # registry-lightwell-python-remediated-stage's lightwell_allowed_distribution_targets
+        # policy currently permits. Novel intentionally gets its own "novel" target, which
+        # that policy does NOT yet allow: the novel-fix workflow isn't live, so Novel builds
+        # should fail closed at Enterprise Contract release validation rather than silently
+        # ship under the remediated target. Once the policy recognizes "novel", those builds
+        # will pass without a further change here. Validated is its own distribution target.
+        # See LWLP-3930.
         case "${BUILD_TYPE}" in
-          Backport|Novel)
+          Backport)
             DISTRIBUTION_TARGET="remediated"
+            ;;
+          Novel)
+            DISTRIBUTION_TARGET="novel"
             ;;
           Validated)
             DISTRIBUTION_TARGET="validated"
