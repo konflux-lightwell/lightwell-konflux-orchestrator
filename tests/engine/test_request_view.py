@@ -124,16 +124,28 @@ class TestIsComplete:
 
 
 class TestSkipRelease:
-    def test_intake_success_is_terminal_when_skip_release(self, db):
-        view = RequestView(db, skip_release=True)
-        request = _pending(db, "r1")
+    def _seed_intake_success(self, db: WorkflowDatabase, ref: str) -> tuple[Request, int]:
+        request = _pending(db, ref)
         attempt = db.create_attempt(request.id)
         db.upsert_phase(
             attempt.id,
             Phase.INTAKE,
             PhaseStatus.SUCCESS,
             reference_type=ClusterResource.PIPELINE_RUN,
-            reference_id="pr-1",
+            reference_id=f"pr-{ref}",
         )
+        return request, attempt.id
+
+    def test_intake_success_awaits_integration_tests(self, db):
+        """A skip_release request is not terminal at intake -- ITS still has to run."""
+        view = RequestView(db, skip_release=True)
+        request, _ = self._seed_intake_success(db, "r1")
+        assert view.state(request) == RequestState.RUNNING
+        assert view.is_complete(max_retries=3) is False
+
+    def test_integration_tests_pass_is_terminal_when_skip_release(self, db):
+        view = RequestView(db, skip_release=True)
+        request, attempt_id = self._seed_intake_success(db, "r1")
+        db.upsert_phase(attempt_id, Phase.INTEGRATION_TESTS, PhaseStatus.SUCCESS)
         assert view.state(request) == RequestState.SUCCESS
         assert view.is_complete(max_retries=3) is True

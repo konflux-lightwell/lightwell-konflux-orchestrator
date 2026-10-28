@@ -88,7 +88,12 @@ def db(tmp_path: Path):
 
 @pytest.fixture
 def mock_kube():
-    return MagicMock(spec=KubeClient)
+    m = MagicMock(spec=KubeClient)
+    # Default to passing integration tests so release-path tests exercise the
+    # release logic; the ITS gate itself is covered by TestIntegrationTestGate.
+    m.get_snapshot_test_status.return_value = "passed"
+    m.get_snapshot_test_failure_detail.return_value = None
+    return m
 
 
 @pytest.fixture
@@ -124,11 +129,13 @@ class TestDiscoverSnapshot:
 class TestFindOrCreateRelease:
     """Test release finding/creation phase."""
 
-    def test_records_integration_tests_as_skipped(
+    def test_records_integration_tests_as_skipped_when_no_scenario(
         self, monitor: ReleaseMonitor, db: WorkflowDatabase, mock_kube: MagicMock
     ):
-        """Once the snapshot is known, the integration-tests phase is represented as SKIPPED."""
+        """When no scenario applies, the integration-tests phase is SKIPPED and the
+        workflow still proceeds to release (preserving pre-gate behaviour)."""
         request = _seed(db, "r1", snapshot="snapshot-123")
+        mock_kube.get_snapshot_test_status.return_value = "none"
         mock_kube.find_release_for_snapshot.return_value = "release-456"
 
         monitor.update_statuses()
@@ -136,6 +143,7 @@ class TestFindOrCreateRelease:
         it = _phase(db, request, Phase.INTEGRATION_TESTS)
         assert it is not None
         assert it.status == PhaseStatus.SKIPPED
+        assert _phase(db, request, Phase.RELEASE).reference_id == "release-456"
 
     def test_finds_existing_release(self, monitor: ReleaseMonitor, db: WorkflowDatabase, mock_kube: MagicMock):
         """Verify that an existing release is adopted and tracked."""
@@ -332,15 +340,126 @@ class TestCheckReleaseCompletion:
 
         assert _phase(db, request, Phase.RELEASE).status == PhaseStatus.RUNNING
 
-    def test_skip_release_is_noop(self, db: WorkflowDatabase, mock_kube: MagicMock):
-        """A skip_release monitor does nothing even for a request past intake."""
+    def test_skip_release_never_creates_release(self, db: WorkflowDatabase, mock_kube: MagicMock):
+        """A skip_release monitor runs snapshot + ITS but never creates a Release."""
         monitor = ReleaseMonitor(RequestView(db, skip_release=True), mock_kube, max_parallel=5, prefix="pnc-import-")
-        request = _seed(db, "r1")
+        request = _seed(db, "r1", snapshot="snapshot-123")
+        mock_kube.get_snapshot_test_status.return_value = "passed"
 
         monitor.update_statuses()
 
-        mock_kube.find_snapshot_by_pipelinerun.assert_not_called()
-        assert _phase(db, request, Phase.SNAPSHOT) is None
+        assert _phase(db, request, Phase.INTEGRATION_TESTS).status == PhaseStatus.SUCCESS
+        assert _phase(db, request, Phase.RELEASE) is None
+        mock_kube.find_release_for_snapshot.assert_not_called()
+        mock_kube.create_release.assert_not_called()
+
+
+class TestIntegrationTestGate:
+    """Test the integration-tests gate between snapshot and release."""
+
+    def test_pending_tests_block_release(self, monitor: ReleaseMonitor, db: WorkflowDatabase, mock_kube: MagicMock):
+        """While tests are pending the ITS phase is RUNNING and no release is created."""
+        request = _seed(db, "r1", snapshot="snapshot-123")
+        mock_kube.get_snapshot_test_status.return_value = "pending"
+
+        monitor.update_statuses()
+
+        assert _phase(db, request, Phase.INTEGRATION_TESTS).status == PhaseStatus.RUNNING
+        assert _phase(db, request, Phase.RELEASE) is None
+        mock_kube.find_release_for_snapshot.assert_not_called()
+        mock_kube.create_release.assert_not_called()
+
+    def test_failed_tests_block_release(self, monitor: ReleaseMonitor, db: WorkflowDatabase, mock_kube: MagicMock):
+        """A test failure fails the ITS phase (and the request) and blocks release."""
+        request = _seed(db, "r1", snapshot="snapshot-123")
+        mock_kube.get_snapshot_test_status.return_value = "failed"
+
+        monitor.update_statuses()
+
+        its = _phase(db, request, Phase.INTEGRATION_TESTS)
+        assert its.status == PhaseStatus.FAILED
+        assert its.error_message
+        assert _phase(db, request, Phase.RELEASE) is None
+        assert monitor.view.state(request) == RequestState.FAILED
+        mock_kube.create_release.assert_not_called()
+
+    def test_failure_detail_is_recorded_on_the_phase(
+        self, monitor: ReleaseMonitor, db: WorkflowDatabase, mock_kube: MagicMock
+    ):
+        """When the kube client can summarise the failure, it is stored as the phase error."""
+        request = _seed(db, "r1", snapshot="snapshot-123")
+        mock_kube.get_snapshot_test_status.return_value = "failed"
+        mock_kube.get_snapshot_test_failure_detail.return_value = "ec: TestFail - boom (ec-plr-1)"
+
+        monitor.update_statuses()
+
+        assert _phase(db, request, Phase.INTEGRATION_TESTS).error_message == "ec: TestFail - boom (ec-plr-1)"
+
+    def test_passed_tests_allow_release(self, monitor: ReleaseMonitor, db: WorkflowDatabase, mock_kube: MagicMock):
+        """Passing tests record ITS SUCCESS and let the release be created."""
+        request = _seed(db, "r1", snapshot="snapshot-123")
+        mock_kube.get_snapshot_test_status.return_value = "passed"
+        mock_kube.find_release_for_snapshot.return_value = "release-456"
+
+        monitor.update_statuses()
+
+        assert _phase(db, request, Phase.INTEGRATION_TESTS).status == PhaseStatus.SUCCESS
+        assert _phase(db, request, Phase.RELEASE).reference_id == "release-456"
+
+    def test_unreadable_status_blocks_and_does_not_record(
+        self, monitor: ReleaseMonitor, db: WorkflowDatabase, mock_kube: MagicMock
+    ):
+        """If the Snapshot can't be read this cycle, nothing is recorded and we retry."""
+        request = _seed(db, "r1", snapshot="snapshot-123")
+        mock_kube.get_snapshot_test_status.return_value = None
+
+        monitor.update_statuses()
+
+        assert _phase(db, request, Phase.INTEGRATION_TESTS) is None
+        assert _phase(db, request, Phase.RELEASE) is None
+        mock_kube.create_release.assert_not_called()
+
+    def test_scratch_flow_passes_and_is_terminal(self, db: WorkflowDatabase, mock_kube: MagicMock):
+        """Scratch (skip_release) build: snapshot -> ITS pass -> terminal SUCCESS, no release."""
+        monitor = ReleaseMonitor(RequestView(db, skip_release=True), mock_kube, max_parallel=5, prefix="pnc-import-")
+        request = _seed(db, "r1")
+        mock_kube.find_snapshot_by_pipelinerun.return_value = "snapshot-123"
+        mock_kube.get_snapshot_test_status.return_value = "passed"
+
+        monitor.update_statuses()  # discover snapshot
+        monitor.update_statuses()  # run ITS gate
+
+        assert _phase(db, request, Phase.INTEGRATION_TESTS).status == PhaseStatus.SUCCESS
+        assert _phase(db, request, Phase.RELEASE) is None
+        assert monitor.view.state(request) == RequestState.SUCCESS
+
+    def test_failed_its_is_terminal_for_releasing_target(
+        self, monitor: ReleaseMonitor, db: WorkflowDatabase, mock_kube: MagicMock
+    ):
+        """A non-skip request whose ITS already FAILED is terminal: not re-polled, no release."""
+        request = _seed(db, "r1", snapshot="snapshot-123")
+        attempt = db.latest_attempt(request.id)
+        db.upsert_phase(attempt.id, Phase.INTEGRATION_TESTS, PhaseStatus.FAILED, error_message="tests failed")
+
+        monitor.update_statuses()
+
+        # Terminal, so the gate never re-reads status and no release is attempted.
+        mock_kube.get_snapshot_test_status.assert_not_called()
+        mock_kube.create_release.assert_not_called()
+        assert _phase(db, request, Phase.RELEASE) is None
+        assert monitor.view.state(request) == RequestState.FAILED
+
+    def test_scratch_flow_failure_is_terminal(self, db: WorkflowDatabase, mock_kube: MagicMock):
+        """Scratch build whose ITS fails ends FAILED, with no release."""
+        monitor = ReleaseMonitor(RequestView(db, skip_release=True), mock_kube, max_parallel=5, prefix="pnc-import-")
+        request = _seed(db, "r1", snapshot="snapshot-123")
+        mock_kube.get_snapshot_test_status.return_value = "failed"
+
+        monitor.update_statuses()
+
+        assert _phase(db, request, Phase.INTEGRATION_TESTS).status == PhaseStatus.FAILED
+        assert _phase(db, request, Phase.RELEASE) is None
+        assert monitor.view.state(request) == RequestState.FAILED
 
 
 class TestIntegration:

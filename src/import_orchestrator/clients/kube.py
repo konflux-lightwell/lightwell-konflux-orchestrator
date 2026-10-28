@@ -16,6 +16,7 @@ limitations under the License.
 
 from __future__ import annotations
 
+import json
 import sys
 from typing import Literal
 
@@ -430,6 +431,116 @@ class KubeClient:
             return None
         except KeyError:
             return None
+
+    # Konflux's Integration Service records the *overall* test outcome of a Snapshot in
+    # this status condition (set once the required, context-matching scenarios finish --
+    # or immediately, True, when none are required). It is the authoritative gate signal.
+    # The per-scenario annotation below is only used to describe a failure.
+    _KONFLUX_TEST_SUCCEEDED_CONDITION = "AppStudioTestSucceeded"
+    # The per-scenario results annotation (a JSON array, one entry per scenario).
+    _KONFLUX_ITS_RESULTS_ANNOTATION = "test.appstudio.openshift.io/status"
+    # Per-scenario statuses that are terminal-and-passing / still-running, used only when
+    # summarising a failure so passing or in-flight scenarios are left out of the message.
+    _KONFLUX_ITS_PASSING_STATUSES = frozenset({"TestPassed", "TestWarning"})
+    _KONFLUX_ITS_PENDING_STATUSES = frozenset({"Pending", "InProgress"})
+
+    def get_snapshot_test_status(self, snapshot_name: str) -> Literal["passed", "failed", "pending", "none"] | None:
+        """Return the overall IntegrationTestScenario verdict for a Snapshot.
+
+        Konflux auto-runs the scenarios that apply to the Snapshot and records the
+        aggregate result in the ``AppStudioTestSucceeded`` status condition -- honouring
+        scenario contexts and optional scenarios, and setting it True right away when no
+        required scenario applies. Reading that condition (rather than re-deriving a
+        verdict from the per-scenario annotation) is what keeps this in step with
+        Konflux's own release decision:
+
+        - ``"failed"`` if the condition is False (required tests failed),
+        - ``"passed"`` if the condition is True and scenarios actually ran,
+        - ``"none"`` if the condition is True but nothing ran (no required scenario),
+        - ``"pending"`` if the condition is not set yet (tests still in flight).
+
+        Returns None only if the Snapshot itself cannot be fetched, so the caller can
+        retry rather than mistake a transient API error for a verdict.
+        """
+        snap = self._get_snapshot(snapshot_name, "test status")
+        if snap is None:
+            return None
+
+        condition = next(
+            (
+                c
+                for c in snap.get("status", {}).get("conditions", [])
+                if c.get("type") == self._KONFLUX_TEST_SUCCEEDED_CONDITION
+            ),
+            None,
+        )
+        if condition is None:
+            return "pending"  # Not evaluated yet; tests are still running.
+        status = condition.get("status")
+        if status == "False":
+            return "failed"
+        if status == "True":
+            # The condition is True both when required tests passed and when none were
+            # required. A populated results annotation means scenarios actually ran.
+            return "passed" if self._snapshot_has_test_results(snap) else "none"
+        return "pending"  # "Unknown" or anything unexpected: wait.
+
+    def get_snapshot_test_failure_detail(self, snapshot_name: str) -> str | None:
+        """Summarise the failing scenarios from the Snapshot's results annotation.
+
+        Used to enrich the integration-tests phase error with the scenario name, status,
+        details and test PipelineRun. Optional scenarios and passing/in-flight scenarios
+        are skipped (they do not drive the failure). Returns None when no detail is
+        available (annotation absent, unparseable, or nothing to report).
+        """
+        snap = self._get_snapshot(snapshot_name, "test failure detail")
+        if snap is None:
+            return None
+        results = self._parse_test_results(snap, snapshot_name)
+        if not results:
+            return None
+
+        parts = []
+        for entry in results:
+            if not isinstance(entry, dict) or entry.get("isOptionalScenario"):
+                continue
+            status = str(entry.get("status", ""))
+            if status in self._KONFLUX_ITS_PASSING_STATUSES or status in self._KONFLUX_ITS_PENDING_STATUSES:
+                continue
+            line = f"{entry.get('scenario', '?')}: {status or 'unknown'}"
+            if entry.get("details"):
+                line += f" - {entry['details']}"
+            if entry.get("testPipelineRunName"):
+                line += f" ({entry['testPipelineRunName']})"
+            parts.append(line)
+        return "; ".join(parts) if parts else None
+
+    def _get_snapshot(self, snapshot_name: str, purpose: str) -> dict | None:
+        """Fetch a Snapshot, or None (logged) if it cannot be read."""
+        try:
+            return self._api.get(
+                f"/apis/appstudio.redhat.com/v1alpha1/namespaces/{self.namespace}/snapshots/{snapshot_name}",
+            )
+        except requests.RequestException as e:
+            self._log_api_error(f"get Snapshot {snapshot_name} {purpose}", e, ignore_not_found=True)
+            return None
+
+    def _parse_test_results(self, snap: dict, snapshot_name: str) -> list | None:
+        """Parse the per-scenario results annotation into a list, or None if absent/invalid."""
+        raw = (snap.get("metadata", {}).get("annotations") or {}).get(self._KONFLUX_ITS_RESULTS_ANNOTATION)
+        if not raw:
+            return None
+        try:
+            results = json.loads(raw)
+        except (ValueError, TypeError):
+            print(f"  Unparseable test status on snapshot {snapshot_name}", file=sys.stderr)
+            return None
+        return results if isinstance(results, list) else None
+
+    def _snapshot_has_test_results(self, snap: dict) -> bool:
+        """Whether the Snapshot's results annotation reports at least one scenario."""
+        results = self._parse_test_results(snap, snap.get("metadata", {}).get("name", "?"))
+        return bool(results)
 
     def get_release_status(self, release_name: str) -> Literal["True", "False", "Unknown"] | None:
         """Get the effective status of the 'Released' condition.

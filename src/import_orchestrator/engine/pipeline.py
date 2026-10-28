@@ -29,9 +29,8 @@ class PipelineMonitor:
 
     Polls Kubernetes for the intake PipelineRun of each Request's latest Attempt
     and advances its intake :class:`AttemptPhase` RUNNING -> SUCCESS/FAILED. When
-    the run succeeds, the release monitor takes over (via the snapshot phase);
-    when ``skip_release`` is set the successful intake is the terminal state and
-    nothing further happens.
+    the run succeeds, the release monitor takes over (via the snapshot phase) to run
+    the integration-tests gate and, unless ``skip_release`` is set, the release.
     """
 
     def __init__(self, view: RequestView, kube: KubeClient):
@@ -69,7 +68,7 @@ class PipelineMonitor:
                     reference_id=intake.reference_id,
                 )
                 if self.skip_release:
-                    print(f"  ✓ Build done (scratch, no release): {tag}", file=sys.stderr)
+                    print(f"  Build done (scratch), awaiting integration tests: {tag}", file=sys.stderr)
                 else:
                     print(f"  Pipeline done, awaiting release: {tag}", file=sys.stderr)
             elif pr_status.is_failed:

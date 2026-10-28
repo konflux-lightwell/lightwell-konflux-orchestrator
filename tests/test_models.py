@@ -301,9 +301,36 @@ class TestDeriveState:
         phases = {Phase.INTAKE: _phase(Phase.INTAKE, PhaseStatus.SUCCESS)}
         assert derive_state(phases, skip_release=False) is RequestState.AWAITING_RELEASE
 
-    def test_intake_success_skip_release_is_success(self):
+    def test_intake_success_skip_release_awaits_integration_tests(self):
+        # A skip_release target is no longer terminal at intake: the integration
+        # tests still have to run, so a bare successful intake is RUNNING.
         phases = {Phase.INTAKE: _phase(Phase.INTAKE, PhaseStatus.SUCCESS)}
+        assert derive_state(phases, skip_release=True) is RequestState.RUNNING
+
+    def test_integration_tests_pass_skip_release_is_success(self):
+        phases = {
+            Phase.INTAKE: _phase(Phase.INTAKE, PhaseStatus.SUCCESS),
+            Phase.SNAPSHOT: _phase(Phase.SNAPSHOT, PhaseStatus.SUCCESS),
+            Phase.INTEGRATION_TESTS: _phase(Phase.INTEGRATION_TESTS, PhaseStatus.SUCCESS),
+        }
         assert derive_state(phases, skip_release=True) is RequestState.SUCCESS
+
+    def test_integration_tests_skipped_skip_release_is_success(self):
+        # No scenario applied (SKIPPED) is still terminal success for skip_release.
+        phases = {
+            Phase.INTAKE: _phase(Phase.INTAKE, PhaseStatus.SUCCESS),
+            Phase.SNAPSHOT: _phase(Phase.SNAPSHOT, PhaseStatus.SUCCESS),
+            Phase.INTEGRATION_TESTS: _phase(Phase.INTEGRATION_TESTS, PhaseStatus.SKIPPED),
+        }
+        assert derive_state(phases, skip_release=True) is RequestState.SUCCESS
+
+    def test_integration_tests_fail_skip_release_is_failed(self):
+        phases = {
+            Phase.INTAKE: _phase(Phase.INTAKE, PhaseStatus.SUCCESS),
+            Phase.SNAPSHOT: _phase(Phase.SNAPSHOT, PhaseStatus.SUCCESS),
+            Phase.INTEGRATION_TESTS: _phase(Phase.INTEGRATION_TESTS, PhaseStatus.FAILED),
+        }
+        assert derive_state(phases, skip_release=True) is RequestState.FAILED
 
     def test_release_success_is_success(self):
         phases = {

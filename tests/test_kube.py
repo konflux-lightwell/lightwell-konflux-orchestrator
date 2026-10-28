@@ -625,6 +625,108 @@ class TestGetReleaseStatus:
         assert kube.get_release_status("rel-1") is None
 
 
+class TestGetSnapshotTestStatus:
+    _ANNOTATION = "test.appstudio.openshift.io/status"
+    _CONDITION = "AppStudioTestSucceeded"
+
+    def _snap(self, *, condition=None, results=None) -> dict:
+        annotations = {} if results is None else {self._ANNOTATION: json.dumps(results)}
+        status = {} if condition is None else {"conditions": [{"type": self._CONDITION, "status": condition}]}
+        return {"metadata": {"name": "snap-1", "annotations": annotations}, "status": status}
+
+    def test_pending_when_condition_absent(self, kube: KubeClient):
+        """No AppStudioTestSucceeded condition yet means tests are still running."""
+        kube._mock_api.get.return_value = self._snap(results=[{"scenario": "a", "status": "InProgress"}])
+        assert kube.get_snapshot_test_status("snap-1") == "pending"
+
+    def test_pending_when_condition_unknown(self, kube: KubeClient):
+        kube._mock_api.get.return_value = self._snap(condition="Unknown")
+        assert kube.get_snapshot_test_status("snap-1") == "pending"
+
+    def test_failed_when_condition_false(self, kube: KubeClient):
+        kube._mock_api.get.return_value = self._snap(
+            condition="False", results=[{"scenario": "a", "status": "TestFail"}]
+        )
+        assert kube.get_snapshot_test_status("snap-1") == "failed"
+
+    def test_passed_when_condition_true_and_scenarios_ran(self, kube: KubeClient):
+        kube._mock_api.get.return_value = self._snap(
+            condition="True", results=[{"scenario": "a", "status": "TestPassed"}]
+        )
+        assert kube.get_snapshot_test_status("snap-1") == "passed"
+
+    def test_passed_when_condition_true_with_terminal_warning(self, kube: KubeClient):
+        """A TestWarning is a pass upstream; the condition being True reflects that."""
+        kube._mock_api.get.return_value = self._snap(
+            condition="True", results=[{"scenario": "a", "status": "TestWarning"}]
+        )
+        assert kube.get_snapshot_test_status("snap-1") == "passed"
+
+    def test_none_when_condition_true_but_no_annotation(self, kube: KubeClient):
+        """Condition True with no results = no required scenario ran (skipped testing)."""
+        kube._mock_api.get.return_value = self._snap(condition="True")
+        assert kube.get_snapshot_test_status("snap-1") == "none"
+
+    def test_none_when_condition_true_but_empty_results(self, kube: KubeClient):
+        kube._mock_api.get.return_value = self._snap(condition="True", results=[])
+        assert kube.get_snapshot_test_status("snap-1") == "none"
+
+    def test_none_when_condition_true_but_annotation_unparseable(self, kube: KubeClient):
+        snap = self._snap(condition="True")
+        snap["metadata"]["annotations"] = {self._ANNOTATION: "not-json"}
+        kube._mock_api.get.return_value = snap
+        assert kube.get_snapshot_test_status("snap-1") == "none"
+
+    def test_none_on_http_error(self, kube: KubeClient):
+        kube._mock_api.get.side_effect = requests.HTTPError("404")
+        assert kube.get_snapshot_test_status("snap-1") is None
+
+
+class TestGetSnapshotTestFailureDetail:
+    _ANNOTATION = "test.appstudio.openshift.io/status"
+
+    def _snap(self, results=None) -> dict:
+        annotations = {} if results is None else {self._ANNOTATION: json.dumps(results)}
+        return {"metadata": {"name": "snap-1", "annotations": annotations}}
+
+    def test_summarises_failing_required_scenario(self, kube: KubeClient):
+        kube._mock_api.get.return_value = self._snap(
+            [
+                {"scenario": "pass-one", "status": "TestPassed"},
+                {
+                    "scenario": "ec",
+                    "status": "TestFail",
+                    "details": "boom",
+                    "testPipelineRunName": "ec-plr-1",
+                },
+            ]
+        )
+        detail = kube.get_snapshot_test_failure_detail("snap-1")
+        assert detail == "ec: TestFail - boom (ec-plr-1)"
+
+    def test_skips_optional_passing_and_pending_scenarios(self, kube: KubeClient):
+        kube._mock_api.get.return_value = self._snap(
+            [
+                {"scenario": "opt", "status": "TestFail", "isOptionalScenario": True},
+                {"scenario": "passing", "status": "TestPassed"},
+                {"scenario": "running", "status": "InProgress"},
+            ]
+        )
+        assert kube.get_snapshot_test_failure_detail("snap-1") is None
+
+    def test_none_when_annotation_absent(self, kube: KubeClient):
+        kube._mock_api.get.return_value = self._snap()
+        assert kube.get_snapshot_test_failure_detail("snap-1") is None
+
+    def test_none_when_unparseable(self, kube: KubeClient):
+        kube._mock_api.get.return_value = {"metadata": {"annotations": {self._ANNOTATION: "not-json"}}}
+        assert kube.get_snapshot_test_failure_detail("snap-1") is None
+
+    def test_none_on_http_error(self, kube: KubeClient):
+        kube._mock_api.get.side_effect = requests.HTTPError("404")
+        assert kube.get_snapshot_test_failure_detail("snap-1") is None
+
+
 class TestFindReleasePlanForSnapshot:
     def test_finds_matching_plan(self, kube: KubeClient):
         kube._mock_api.get.return_value = {"metadata": {"labels": {"appstudio.openshift.io/application": "my-app"}}}

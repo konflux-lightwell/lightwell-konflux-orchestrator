@@ -101,6 +101,10 @@ def db(tmp_path: Path):
 @pytest.fixture
 def mock_kube():
     kube = MagicMock(spec=KubeClient)
+    # Integration tests pass by default so the release path is exercised; tests that
+    # care about the ITS gate override this explicitly.
+    kube.get_snapshot_test_status.return_value = "passed"
+    kube.get_snapshot_test_failure_detail.return_value = None
     return kube
 
 
