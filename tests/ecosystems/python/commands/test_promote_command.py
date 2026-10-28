@@ -28,6 +28,7 @@ from import_orchestrator.ecosystems.python.commands.promote import (
     EXIT_TIMEOUT,
     promote,
 )
+from import_orchestrator.engine.errors import ReleaseError
 
 
 class TestPromoteArgParsing:
@@ -154,9 +155,24 @@ class TestPromoteCommand:
         assert payload["status"] == "False"
 
     def test_reports_failure_when_create_fails(self):
+        """Covers the Release-created-but-name-missing-from-response path."""
         kube = MagicMock()
         kube.find_release_for_snapshot_and_plan.return_value = None
         kube.create_release.return_value = None
+
+        rc, payload = _run(kube)
+
+        assert rc == EXIT_FAILED
+        assert payload["release_name"] is None
+        assert payload["status"] == "CreateFailed"
+        kube.get_release_status.assert_not_called()
+
+    def test_reports_failure_when_create_raises_release_error(self):
+        """Covers the API-rejected-the-request path (e.g. a 403), which create_release
+        now raises ReleaseError for instead of returning None (LWLP-3937)."""
+        kube = MagicMock()
+        kube.find_release_for_snapshot_and_plan.return_value = None
+        kube.create_release.side_effect = ReleaseError("failed to create Release for Snapshot x: 403 Forbidden")
 
         rc, payload = _run(kube)
 

@@ -185,7 +185,7 @@ class ReleaseMonitor:
                 attempt_id,
                 Phase.RELEASE,
                 PhaseStatus.FAILED,
-                error_message=f"Release creation failed: {e}",
+                error_message=str(e),
             )
             print(f"  ✗ Failed to create release for {snapshot_name} ({tag}): {e}", file=sys.stderr)
             return None
