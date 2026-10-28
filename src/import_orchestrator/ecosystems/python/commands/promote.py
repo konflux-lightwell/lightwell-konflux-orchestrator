@@ -24,6 +24,7 @@ from import_orchestrator.clients import KubeClient
 from import_orchestrator.commands.run import _emit_result
 from import_orchestrator.constants import CLUSTER_API, DEFAULT_POLL_INTERVAL, KUBEARCHIVE_API
 from import_orchestrator.ecosystems.base import Ecosystem
+from import_orchestrator.engine.errors import ReleaseError
 
 EXIT_OK = 0
 EXIT_FAILED = 1
@@ -119,7 +120,18 @@ def promote(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
     else:
-        release_name = kube.create_release(args.snapshot, args.release_plan, eco.pipelinerun_prefix)
+        try:
+            release_name = kube.create_release(args.snapshot, args.release_plan, eco.pipelinerun_prefix)
+        except ReleaseError as e:
+            print(
+                f"ERROR: failed to create a Release for {args.snapshot} against {args.release_plan}: {e}",
+                file=sys.stderr,
+            )
+            _emit_result(
+                _payload(args.snapshot, args.release_plan, None, "CreateFailed", False),
+                args.output_json,
+            )
+            return EXIT_FAILED
         if not release_name:
             print(
                 f"ERROR: failed to create a Release for {args.snapshot} against {args.release_plan}.",
