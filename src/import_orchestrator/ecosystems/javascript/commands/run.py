@@ -1,0 +1,80 @@
+"""
+Copyright (C) 2026 Lightwell
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+         http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+"""
+
+from __future__ import annotations
+
+import argparse
+
+from import_orchestrator.commands.run import run_single
+from import_orchestrator.constants import DEFAULT_MAX_RETRIES, DEFAULT_POLL_INTERVAL
+from import_orchestrator.ecosystems.base import Ecosystem
+from import_orchestrator.ecosystems.javascript.commands.trigger import add_build_args
+
+
+def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> None:
+    """Register the 'run' subcommand with the given subparsers."""
+    parser = subparsers.add_parser(
+        "run",
+        help="Orchestrate a single javascript-validated-build PipelineRun end-to-end",
+        description=(
+            "Trigger a javascript-validated-build PipelineRun for a single "
+            "package==version reference and monitor it end-to-end, with state "
+            "tracking and retries. Like 'trigger', but synchronous: it waits for "
+            "the import to reach a terminal state instead of returning immediately. "
+            "By default it uses an ephemeral, isolated state database; pass a "
+            "top-level --db to persist state for resume or inspection."
+        ),
+    )
+
+    parser.add_argument(
+        "ref",
+        help="Package reference to build, in the form package==version (e.g. bluebird==3.7.2)",
+    )
+    add_build_args(parser)
+    parser.add_argument(
+        "--release-plan",
+        default=None,
+        metavar="NAME",
+        help=(
+            "Create the Release against this specific ReleasePlan instead of "
+            "resolving one from the snapshot's application."
+        ),
+    )
+    parser.add_argument(
+        "--poll-interval",
+        type=int,
+        default=DEFAULT_POLL_INTERVAL,
+        help=f"Seconds between status checks (default: {DEFAULT_POLL_INTERVAL})",
+    )
+    parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=DEFAULT_MAX_RETRIES,
+        help=f"Max retry attempts for a failed import (default: {DEFAULT_MAX_RETRIES})",
+    )
+    parser.add_argument(
+        "--output-json",
+        default=None,
+        metavar="PATH",
+        help="Also write the final result payload as JSON to PATH (in addition to stdout)",
+    )
+
+    parser.set_defaults(func=run, ecosystem=ecosystem)
+
+
+def run(args: argparse.Namespace) -> int:
+    """Execute the run subcommand."""
+    return run_single(args, args.ref)
