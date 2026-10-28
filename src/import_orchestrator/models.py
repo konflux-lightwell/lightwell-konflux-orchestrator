@@ -215,9 +215,9 @@ def derive_state(phases: dict[Phase, AttemptPhase], skip_release: bool) -> Reque
     ``phases`` maps each recorded :class:`Phase` to its :class:`AttemptPhase` for
     the request's latest attempt (as returned by
     :meth:`WorkflowDatabase.latest_phase_map`); an empty map means no attempt has
-    started yet. ``skip_release`` is True for targets whose workflow ends at a
-    successful build (no Release CR is produced), so a successful intake is the
-    terminal success state.
+    started yet. ``skip_release`` is True for targets whose workflow ends at the
+    integration tests (no Release CR is produced), so a passed (or skipped) ITS phase
+    is the terminal success state; otherwise a successful Release is.
 
     A FAILED phase anywhere in the latest attempt makes the whole request FAILED
     (the attempt is retried by starting a new Attempt, not by mutating this one).
@@ -231,7 +231,14 @@ def derive_state(phases: dict[Phase, AttemptPhase], skip_release: bool) -> Reque
         return RequestState.RUNNING
     # Intake succeeded.
     if skip_release:
-        return RequestState.SUCCESS
+        # No Release CR is produced; the integration-tests result is terminal. Success
+        # requires the ITS phase to have completed (passed, or skipped when no scenario
+        # applies). Until then the post-build flow (snapshot/ITS) is still running. An
+        # ITS failure is already handled by the FAILED check above.
+        its = phases.get(Phase.INTEGRATION_TESTS)
+        if its is not None and its.status in (PhaseStatus.SUCCESS, PhaseStatus.SKIPPED):
+            return RequestState.SUCCESS
+        return RequestState.RUNNING
     release = phases.get(Phase.RELEASE)
     if release is not None and release.status == PhaseStatus.SUCCESS:
         return RequestState.SUCCESS

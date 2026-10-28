@@ -27,9 +27,9 @@ class RequestView:
     column.
 
     ``skip_release`` is a run-level flag (true for targets whose workflow ends at
-    a successful build, producing no Release CR); it is fed to
-    :func:`derive_state` so a successful intake counts as terminal success for
-    those targets.
+    the integration tests, producing no Release CR); it is fed to
+    :func:`derive_state` so a passed (or skipped) ITS phase counts as terminal
+    success for those targets.
 
     Retry eligibility matches the legacy flat model: with N attempts recorded, a
     failed Request is retriable while ``attempt_count <= max_retries`` (i.e. up to

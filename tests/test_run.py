@@ -76,6 +76,9 @@ def _record_phases(
         db.upsert_phase(attempt.id, Phase.INTAKE, status, error_message=error)
     if snapshot:
         db.upsert_phase(attempt.id, Phase.SNAPSHOT, PhaseStatus.SUCCESS, ClusterResource.SNAPSHOT, snapshot)
+        # The integration-tests gate runs after the snapshot; a completed run has it
+        # SUCCESS. For skip_release targets this is what makes the request terminal.
+        db.upsert_phase(attempt.id, Phase.INTEGRATION_TESTS, PhaseStatus.SUCCESS)
     if release:
         db.upsert_phase(attempt.id, Phase.RELEASE, PhaseStatus.SUCCESS, ClusterResource.RELEASE, release)
 

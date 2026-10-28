@@ -30,11 +30,18 @@ class ReleaseMonitor:
     and release.
 
     For every Request whose latest Attempt has a successful intake and no terminal
-    release yet, this discovers the Snapshot, represents the integration-tests
-    phase (not live-monitored in this iteration -- recorded SKIPPED pending the
-    reconciliation work in LWLP-2512), then finds or creates the Release and tracks
-    it to completion, advancing the AttemptPhase RUNNING -> SUCCESS/FAILED. No-op
-    when ``skip_release`` is set (those targets produce no Release CR).
+    outcome yet, this discovers the Snapshot, then gates on the Snapshot's
+    IntegrationTestScenario results (read from the Konflux-managed test-status
+    annotation): the integration-tests phase advances RUNNING -> SUCCESS/FAILED, and
+    a release is only created once the tests pass. Scenarios are auto-run by Konflux
+    when the Snapshot appears, so this monitors their result rather than triggering
+    them. An Attempt with no applicable scenario records the phase SKIPPED and
+    proceeds, preserving the prior behaviour for applications without an ITS.
+
+    When ``skip_release`` is set (e.g. scratch builds that validate reversioning but
+    produce no Release CR) the integration-tests result is the terminal outcome: the
+    workflow still runs snapshot discovery and the ITS gate, then stops -- no Release
+    is ever created.
     """
 
     def __init__(
@@ -54,10 +61,7 @@ class ReleaseMonitor:
         self.release_plan = release_plan
 
     def update_statuses(self) -> None:
-        """For Requests past a successful intake, drive snapshot -> release."""
-        if self.skip_release:
-            return
-
+        """For Requests past a successful intake, drive snapshot -> ITS -> release."""
         eligible: list[tuple[int, str, dict[Phase, AttemptPhase]]] = []
         for request in self.db.list_requests():
             assert request.id is not None
@@ -65,8 +69,7 @@ class ReleaseMonitor:
             intake = phases.get(Phase.INTAKE)
             if intake is None or intake.status != PhaseStatus.SUCCESS or intake.attempt_id is None:
                 continue
-            release = phases.get(Phase.RELEASE)
-            if release is not None and release.status in (PhaseStatus.SUCCESS, PhaseStatus.FAILED):
+            if self._is_terminal(phases):
                 continue
             eligible.append((intake.attempt_id, extract_tag(request.artifact), phases))
 
@@ -87,25 +90,89 @@ class ReleaseMonitor:
                 self._discover_snapshot(attempt_id, intake.reference_id, tag)
                 continue
 
-            # The integration-tests phase is represented but not monitored here
-            # (SKIPPED); live detection is reconciliation work (LWLP-2512).
-            if phases.get(Phase.INTEGRATION_TESTS) is None:
-                self.db.upsert_phase(attempt_id, Phase.INTEGRATION_TESTS, PhaseStatus.SKIPPED)
+            # Step 2: gate on the snapshot's IntegrationTestScenario results. Only a
+            # pass (or no applicable scenario) lets the workflow proceed to release.
+            if not self._check_integration_tests(attempt_id, snapshot.reference_id, tag, phases):
+                continue
 
-            # Step 2: find or create a release if not yet tracked.
+            # Scratch/skip-release targets stop here: the ITS result is their terminal
+            # outcome and no Release CR is produced.
+            if self.skip_release:
+                continue
+
+            # Step 3: find or create a release if not yet tracked.
             release = phases.get(Phase.RELEASE)
             if not self._has_reference(release):
                 if self._find_or_create_release(attempt_id, snapshot.reference_id, tag, active_releases):
                     active_releases += 1
                 continue
 
-            # Step 3: poll the tracked release for completion.
+            # Step 4: poll the tracked release for completion.
             assert release is not None and release.reference_id is not None
             self._check_release_completion(attempt_id, release.reference_id, tag)
 
     @staticmethod
     def _has_reference(phase: AttemptPhase | None) -> bool:
         return phase is not None and phase.reference_id is not None
+
+    def _is_terminal(self, phases: dict[Phase, AttemptPhase]) -> bool:
+        """Whether the latest Attempt has reached a terminal post-build state.
+
+        A failed integration-tests phase is terminal for every target: it blocks the
+        release, so there is nothing further to poll. Otherwise, for skip-release
+        targets the integration-tests phase is terminal (no Release is produced, so a
+        pass/skip ends the workflow); for releasing targets the release phase is.
+        """
+        its = phases.get(Phase.INTEGRATION_TESTS)
+        if its is not None and its.status == PhaseStatus.FAILED:
+            return True
+        if self.skip_release:
+            return its is not None and its.status in (PhaseStatus.SUCCESS, PhaseStatus.SKIPPED)
+        release = phases.get(Phase.RELEASE)
+        return release is not None and release.status in (PhaseStatus.SUCCESS, PhaseStatus.FAILED)
+
+    def _check_integration_tests(
+        self, attempt_id: int, snapshot_name: str, tag: str, phases: dict[Phase, AttemptPhase]
+    ) -> bool:
+        """Advance the integration-tests phase from the Snapshot's test results.
+
+        Returns True when the workflow may proceed past the ITS gate -- the tests
+        passed, or no scenario applies (recorded SKIPPED) -- and False when it must
+        wait (tests pending, recorded RUNNING) or stop (tests failed, recorded
+        FAILED; or the Snapshot could not be read this cycle).
+        """
+        existing = phases.get(Phase.INTEGRATION_TESTS)
+        if existing is not None and existing.status in (PhaseStatus.SUCCESS, PhaseStatus.SKIPPED):
+            return True
+        if existing is not None and existing.status == PhaseStatus.FAILED:
+            return False
+
+        status = self.kube.get_snapshot_test_status(snapshot_name)
+        if status is None:
+            print(f"  Waiting to read integration-test status for {tag}...", file=sys.stderr)
+            return False
+        if status == "none":
+            self.db.upsert_phase(attempt_id, Phase.INTEGRATION_TESTS, PhaseStatus.SKIPPED)
+            return True
+        if status == "pending":
+            self.db.upsert_phase(attempt_id, Phase.INTEGRATION_TESTS, PhaseStatus.RUNNING)
+            print(f"  Waiting for integration tests for {tag}...", file=sys.stderr)
+            return False
+        if status == "passed":
+            self.db.upsert_phase(attempt_id, Phase.INTEGRATION_TESTS, PhaseStatus.SUCCESS)
+            print(f"  ✓ Integration tests passed for {tag}", file=sys.stderr)
+            return True
+        detail = self.kube.get_snapshot_test_failure_detail(snapshot_name)
+        self.db.upsert_phase(
+            attempt_id,
+            Phase.INTEGRATION_TESTS,
+            PhaseStatus.FAILED,
+            error_message=detail or f"Integration tests failed for snapshot {snapshot_name}",
+        )
+        print(f"  ✗ Integration tests failed for {tag} (snapshot {snapshot_name})", file=sys.stderr)
+        if detail:
+            print(f"    {detail}", file=sys.stderr)
+        return False
 
     def _discover_snapshot(self, attempt_id: int, pipelinerun_name: str, tag: str) -> bool:
         """Discover and record the snapshot for an intake PipelineRun.
@@ -126,7 +193,7 @@ class ReleaseMonitor:
             reference_id=snapshot_name,
         )
         print(
-            f"  Found snapshot {snapshot_name} for {tag}, checking for release next poll",
+            f"  Found snapshot {snapshot_name} for {tag}, checking integration tests next poll",
             file=sys.stderr,
         )
         return True

@@ -163,17 +163,22 @@ class TestUpdateStatuses:
 
         assert _intake(db, request).status == PhaseStatus.RUNNING
 
-    def test_skip_release_success_is_terminal(
+    def test_skip_release_success_awaits_integration_tests(
         self, scratch_monitor: PipelineMonitor, db: WorkflowDatabase, mock_kube: MagicMock
     ):
-        """With skip_release=True a successful pipeline is terminal SUCCESS."""
+        """With skip_release=True a successful build is RUNNING until the ITS gate runs.
+
+        The pipeline monitor only advances the intake phase; the integration-tests gate
+        (and the terminal verdict) is the ReleaseMonitor's job, so the request is not
+        yet terminal here.
+        """
         request = _seed_running(db, "scratch", "scratch-abc")
         mock_kube.get_pipelinerun_status.return_value = PipelineRunStatus(name="scratch-abc", status="True")
 
         scratch_monitor.update_statuses()
 
         assert _intake(db, request).status == PhaseStatus.SUCCESS
-        assert scratch_monitor.view.state(request) == RequestState.SUCCESS
+        assert scratch_monitor.view.state(request) == RequestState.RUNNING
 
     def test_processes_multiple_imports(self, monitor: PipelineMonitor, db: WorkflowDatabase, mock_kube: MagicMock):
         """Verify that multiple imports are processed correctly."""
