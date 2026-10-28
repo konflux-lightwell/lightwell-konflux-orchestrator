@@ -44,12 +44,13 @@ def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> No
     )
     parser.add_argument(
         "--build-type",
-        choices=("Backport", "Novel", "Validated"),
+        choices=("Backport", "Novel", "Validated", "Scratch"),
         default=None,
         help=(
-            "Build type passed to the Pipeline (Backport, Novel, or Validated). "
-            "When omitted, defaults to Validated for VALIDATED/VALIDATED-STAGE targets "
-            "and Backport for all others."
+            "Build type passed to the Pipeline (Backport, Novel, Validated, or Scratch). "
+            "When omitted, defaults to the target's pinned build type (Scratch for the "
+            "SCRATCH target), else Validated for VALIDATED/VALIDATED-STAGE targets and "
+            "Backport for all others."
         ),
     )
     parser.add_argument(

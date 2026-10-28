@@ -139,6 +139,22 @@ def test_build_pipelinerun_remediated_target_defaults_build_type(monkeypatch, tm
     assert params["BUILD_TYPE"] == "Backport"
 
 
+def test_build_pipelinerun_scratch_target_defaults_build_type(monkeypatch, tmp_path):
+    _pipeline_file(tmp_path, monkeypatch)
+    manifest = PythonEcosystem().build_pipelinerun("foolib==0.4.0", argparse.Namespace(target="SCRATCH"))
+    params = {p["name"]: p["value"] for p in manifest["spec"]["params"]}
+    assert params["BUILD_TYPE"] == "Scratch"
+
+
+def test_build_pipelinerun_explicit_build_type_overrides_target_pin(monkeypatch, tmp_path):
+    _pipeline_file(tmp_path, monkeypatch)
+    manifest = PythonEcosystem().build_pipelinerun(
+        "foolib==0.4.0", argparse.Namespace(target="SCRATCH", build_type="Backport")
+    )
+    params = {p["name"]: p["value"] for p in manifest["spec"]["params"]}
+    assert params["BUILD_TYPE"] == "Backport"
+
+
 class TestTargetSkipRelease:
     def test_remediated_does_not_skip_release(self):
         assert PythonEcosystem().target_skip_release("REMEDIATED") is False
