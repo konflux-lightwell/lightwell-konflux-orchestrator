@@ -1,10 +1,13 @@
 """Tests for the dev.lightwell.distribution-target annotation computed by the
 python-fromager-build-wheels create-oci-artifact step.
 
-Backport and Novel builds must both resolve to the umbrella "remediated"
-distribution target expected by registry-lightwell-python-remediated-stage's
-lightwell_allowed_distribution_targets policy; only Validated builds use
-"validated". See LWLP-3930.
+Backport resolves to the "remediated" distribution target allowed by
+registry-lightwell-python-remediated-stage's lightwell_allowed_distribution_targets
+policy. Novel intentionally gets its own "novel" target, which that policy does NOT
+yet allow -- the novel-fix workflow isn't live, so Novel builds should fail closed at
+Enterprise Contract release validation rather than silently ship under the remediated
+target. Once the policy recognizes "novel", those builds will pass with no further
+code change. Validated builds use "validated". See LWLP-3930.
 """
 
 import subprocess
@@ -32,11 +35,11 @@ def _create_oci_artifact_header():
     "build_type,expected",
     [
         ("Backport", "remediated"),
-        ("Novel", "remediated"),
+        ("Novel", "novel"),
         ("Validated", "validated"),
     ],
 )
-def test_distribution_target_collapses_backport_and_novel_to_remediated(build_type, expected):
+def test_distribution_target_separates_novel_from_remediated(build_type, expected):
     header = _create_oci_artifact_header()
     result = subprocess.run(
         ["bash", "-c", header + '\necho "$DISTRIBUTION_TARGET"'],
