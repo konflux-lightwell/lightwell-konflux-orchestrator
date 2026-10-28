@@ -84,7 +84,7 @@ class JavaScriptEcosystem:
     def register_cli(self, subparsers: argparse._SubParsersAction) -> None:
         """Register ``javascript`` CLI commands (build-only; no promote yet)."""
         from import_orchestrator.commands import import_file
-        from import_orchestrator.ecosystems.javascript.commands import orchestrate, trigger
+        from import_orchestrator.ecosystems.javascript.commands import orchestrate, run, trigger
 
         eco_parser = subparsers.add_parser(
             "javascript",
@@ -94,4 +94,5 @@ class JavaScriptEcosystem:
         import_file.register(eco_sub, self)
         orchestrate.register(eco_sub, self)
         trigger.register(eco_sub, self)
+        run.register(eco_sub, self)
         eco_parser.set_defaults(_ecosystem_parser=eco_parser)
