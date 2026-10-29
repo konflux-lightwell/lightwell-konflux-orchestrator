@@ -65,12 +65,12 @@ spec:
     - name: PYTHON_BUILDER_IMAGE
       description: Digest-pinned python-builder image containing the Lightwell task CLIs.
       type: string
-      default: quay.io/araszka/lightwell-playground@sha256:f516b0ce8c44db0efd8fb22aab6f14b97025eb013c3c2a40214be03f905cf119
+      default: quay.io/light-factory/python-builder-cli@sha256:23bf3413ec20a00b0a09c4aac0435b9c05f92994e66557b58b1de1e09bf5508c
 
     - name: FATH_CUAN_IMAGE
       description: Digest-pinned fath-cuan image.
       type: string
-      default: quay.io/araszka/lightwell-playground@sha256:199fb11756ab4c13a6989e9a59d06233b82715346f28919b366b7c842424d69c
+      default: quay.io/light-factory/fath-cuan@sha256:254f36f2a84c33df1cbd5715826f8d8bdfed23a4993a3bb8677c439cf40fcd6b
 
     - name: LIGHTWELL_BUILDS_REPO_URL
       description: >-
@@ -206,8 +206,7 @@ spec:
         resolver: bundles
         params:
           - name: bundle
-            # TODO: replace with the correct bundle reference for source-to-sdist task
-            value: quay.io/araszka/lightwell-playground@sha256:5a071abdcb8b020d971c6965eaa63f4af1a861e124bb3ca7ad9c8e195e366ffa
+            value: quay.io/light-factory/tekton-catalog/task-source-to-sdist@sha256:4cc15c186c4a6bc943f1efbaba11882a5e042ec9c8656c5a64a0b98ae2aa7299
           - name: name
             value: source-to-sdist
           - name: kind
@@ -249,7 +248,7 @@ spec:
         resolver: bundles
         params:
           - name: bundle
-            value: quay.io/konflux-ci/tekton-catalog/task-fromager-build-wheels:0.1@sha256:33e532d29be535f1b0b8b3a24e5a9c17dabbc78d129aa6e71ac5ce20daacfba7
+            value: quay.io/light-factory/tekton-catalog/task-fromager-build-wheels@sha256:c1f4cf1af93f159e3712e7c39fe0288bc1444fbc279367562d8919896de963f1
           - name: name
             value: python-fromager-build-wheels
           - name: kind
@@ -273,10 +272,6 @@ spec:
           value: $(tasks.source-to-sdist.results.COMPUTED_VERSION)
         - name: BUILD_TYPE
           value: $(params.BUILD_TYPE)
-        - name: ociStorage
-          value: $(params.ociStorage)
-        - name: ociArtifactExpiresAfter
-          value: $(params.ociArtifactExpiresAfter)
         - name: IMAGE
           value: $(params.IMAGE)
         - name: IMAGE_EXPIRES_AFTER
@@ -313,7 +308,7 @@ spec:
         resolver: bundles
         params:
           - name: bundle
-            value: quay.io/konflux-ci/tekton-catalog/task-attach-build-index:0.1@sha256:17a26b4556616dce78319b78385e3c56195b198fbae981451cab3d6f51506696
+            value: quay.io/light-factory/tekton-catalog/task-attach-build-index@sha256:b0cea6fb79a6e4375efb8b3c4980fd2f0157b0fb7ba0ac21d1a7b68d94d6b501
           - name: name
             value: attach-build-index
           - name: kind
@@ -323,10 +318,6 @@ spec:
       params:
         - name: FATH_CUAN_IMAGE
           value: $(params.FATH_CUAN_IMAGE)
-        - name: BUILD_TYPE
-          value: $(params.BUILD_TYPE)
-        - name: MANIFEST_ARTIFACT
-          value: $(tasks.fromager-build-wheels.results.MANIFEST_ARTIFACT)
         - name: SOURCE_ARTIFACT
           value: $(tasks.clone-lightwell-builds.results.SOURCE_ARTIFACT)
         - name: MANIFEST_ARTIFACT
