@@ -21,7 +21,7 @@ import sys
 from import_orchestrator.clients import KubeClient
 from import_orchestrator.engine.errors import ReleaseError
 from import_orchestrator.engine.request_view import RequestView
-from import_orchestrator.models import AttemptPhase, ClusterResource, Phase, PhaseStatus
+from import_orchestrator.models import AttemptPhase, ClusterResource, Fingerprint, Phase, PhaseStatus
 from import_orchestrator.utils import extract_tag
 
 
@@ -58,7 +58,11 @@ class ReleaseMonitor:
         if self.skip_release:
             return
 
-        eligible: list[tuple[int, str, dict[Phase, AttemptPhase]]] = []
+        # Each eligible entry carries the Request fingerprint so the Release we
+        # create for it is stamped with the same label as its intake PipelineRun
+        # (ADR-0001). The hash is computed here, where the full Request is in
+        # scope, and threaded through to create_release.
+        eligible: list[tuple[int, str, str, dict[Phase, AttemptPhase]]] = []
         for request in self.db.list_requests():
             assert request.id is not None
             phases = self.db.latest_phase_map(request.id)
@@ -68,7 +72,8 @@ class ReleaseMonitor:
             release = phases.get(Phase.RELEASE)
             if release is not None and release.status in (PhaseStatus.SUCCESS, PhaseStatus.FAILED):
                 continue
-            eligible.append((intake.attempt_id, extract_tag(request.artifact), phases))
+            fingerprint = Fingerprint.from_request(request).hash()
+            eligible.append((intake.attempt_id, extract_tag(request.artifact), fingerprint, phases))
 
         # Cap newly created releases at max_parallel to avoid flooding the release
         # pipeline. This is a defense-in-depth backstop: the trigger already bounds
@@ -76,9 +81,9 @@ class ReleaseMonitor:
         # normal run this cap is rarely the binding constraint. Adopting a release
         # that already exists on the cluster is not gated by it (adoption adds no new
         # cluster load).
-        active_releases = sum(1 for _, _, phases in eligible if self._has_reference(phases.get(Phase.RELEASE)))
+        active_releases = sum(1 for *_, phases in eligible if self._has_reference(phases.get(Phase.RELEASE)))
 
-        for attempt_id, tag, phases in eligible:
+        for attempt_id, tag, fingerprint, phases in eligible:
             # Step 1: discover the snapshot if not already recorded.
             snapshot = phases.get(Phase.SNAPSHOT)
             if snapshot is None or snapshot.status != PhaseStatus.SUCCESS or not snapshot.reference_id:
@@ -95,7 +100,7 @@ class ReleaseMonitor:
             # Step 2: find or create a release if not yet tracked.
             release = phases.get(Phase.RELEASE)
             if not self._has_reference(release):
-                if self._find_or_create_release(attempt_id, snapshot.reference_id, tag, active_releases):
+                if self._find_or_create_release(attempt_id, snapshot.reference_id, tag, active_releases, fingerprint):
                     active_releases += 1
                 continue
 
@@ -131,13 +136,17 @@ class ReleaseMonitor:
         )
         return True
 
-    def _find_or_create_release(self, attempt_id: int, snapshot_name: str, tag: str, active_count: int) -> str | None:
+    def _find_or_create_release(
+        self, attempt_id: int, snapshot_name: str, tag: str, active_count: int, fingerprint: str
+    ) -> str | None:
         """Find an existing release or create a new one for the snapshot, recording
         it on the release phase as RUNNING.
 
         ``active_count`` is how many releases are already tracked this cycle; a new
         one is only created while it stays under ``max_parallel`` (adopting an
-        existing release is never gated by it).
+        existing release is never gated by it). ``fingerprint`` is stamped as a
+        label on a release this method *creates* (an adopted one keeps whatever
+        label it already carries).
 
         Returns:
             The release name if found or created, None if creation was deferred or failed.
@@ -173,7 +182,7 @@ class ReleaseMonitor:
             file=sys.stderr,
         )
         try:
-            release_name = self.kube.create_release(snapshot_name, release_plan, self.prefix)
+            release_name = self.kube.create_release(snapshot_name, release_plan, self.prefix, fingerprint=fingerprint)
         except ReleaseError as e:
             # A rejected create call (e.g. a permissions gap) will not resolve
             # itself by retrying the identical request next poll. Record a
