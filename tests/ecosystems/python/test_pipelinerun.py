@@ -63,6 +63,17 @@ def _manifest(**overrides):
     return build_pipelinerun_manifest(**kwargs)
 
 
+class TestAiAttributionParams:
+    """AI attribution params that Tekton Chains records in SLSA provenance."""
+
+    def test_manifest_includes_ai_params_from_env(self, monkeypatch):
+        """The Python manifest carries the shared AI_ASSISTED and AI_MODELS params."""
+        monkeypatch.setenv("AI_ASSISTED", "true")
+        monkeypatch.setenv("AI_MODELS", "model-alpha")
+        params = {p["name"]: p["value"] for p in _manifest()["spec"]["params"]}
+        assert (params["AI_ASSISTED"], params["AI_MODELS"]) == ("true", "model-alpha")
+
+
 class TestBuildManifest:
     def test_kind_and_generate_name(self):
         manifest = _manifest()

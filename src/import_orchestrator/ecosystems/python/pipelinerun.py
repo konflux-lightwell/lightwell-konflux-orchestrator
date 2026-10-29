@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from import_orchestrator.ecosystems.base import DEFAULT_PIPELINERUN_ANNOTATIONS
+from import_orchestrator.ecosystems.base import DEFAULT_PIPELINERUN_ANNOTATIONS, ai_attribution_params
 from import_orchestrator.ecosystems.python import config
 from import_orchestrator.ecosystems.python.build_config import get_build_config_revision, get_build_config_source
 from import_orchestrator.engine.errors import TriggerError
@@ -71,6 +71,9 @@ def build_pipelinerun_manifest(
     ``build_type`` controls the pipeline build mode: ``Backport`` or ``Novel``
     for remediated builds (commit-distance version suffix applied), or
     ``Validated`` for an upstream rebuild (no version suffix, no wheel server).
+
+    The AI_ASSISTED and AI_MODELS params come from the AI_ASSISTED/AI_MODELS env
+    vars, and Tekton Chains records them in provenance.
     """
     # Push to the Konflux component repository (<tenant>/<application>/<component>),
     # which is the only repo the build service account can push to. The package and
@@ -93,6 +96,7 @@ def build_pipelinerun_manifest(
             {"name": "WHEEL_SERVER_URL", "value": effective_wheel_server},
             {"name": "BUILD_CONFIGS_REPO_URL", "value": get_build_config_source()},
             {"name": "BUILD_CONFIGS_REVISION", "value": get_build_config_revision()},
+            *ai_attribution_params(),
         ],
         "workspaces": [
             {"name": "git-auth", "secret": {"secretName": git_auth_secret}},

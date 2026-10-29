@@ -14,7 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
-from import_orchestrator.ecosystems.base import Ecosystem
+import pytest
+
+from import_orchestrator.ecosystems.base import Ecosystem, ai_attribution_params
 
 
 class _Dummy:
@@ -43,3 +45,35 @@ class _Dummy:
 
 def test_dummy_satisfies_ecosystem_protocol():
     assert isinstance(_Dummy(), Ecosystem)
+
+
+class TestAiAttributionParams:
+    """Ecosystem-independent AI attribution params for SLSA provenance."""
+
+    @pytest.fixture(autouse=True)
+    def _clear_ai_env(self, monkeypatch):
+        """Start every test with AI_* env unset so the developer's shell cannot leak in."""
+        monkeypatch.delenv("AI_ASSISTED", raising=False)
+        monkeypatch.delenv("AI_MODELS", raising=False)
+
+    @pytest.mark.parametrize(
+        ("env", "expected"),
+        [
+            pytest.param({}, ("false", ""), id="env-absent"),
+            pytest.param(
+                {"AI_ASSISTED": "true", "AI_MODELS": " model-alpha , ,model-beta "},
+                ("true", "model-alpha,model-beta"),
+                id="assisted-with-models",
+            ),
+            pytest.param({"AI_ASSISTED": "TRUE"}, ("true", ""), id="assisted-model-unknown"),
+            pytest.param(
+                {"AI_ASSISTED": "yes", "AI_MODELS": "model-alpha"}, ("false", "model-alpha"), id="non-true-value"
+            ),
+        ],
+    )
+    def test_ai_params_follow_env(self, monkeypatch, env, expected):
+        """AI_ASSISTED and AI_MODELS env vars become the AI_ASSISTED and AI_MODELS params."""
+        for key, value in env.items():
+            monkeypatch.setenv(key, value)
+        params = {p["name"]: p["value"] for p in ai_attribution_params()}
+        assert (params["AI_ASSISTED"], params["AI_MODELS"]) == expected
