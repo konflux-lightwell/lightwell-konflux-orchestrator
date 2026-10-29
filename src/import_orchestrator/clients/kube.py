@@ -57,6 +57,18 @@ class KubeClient:
     _MAX_LOG_LINES = 20
     _MAX_DETAIL_CHARS = 4000
 
+    # Konflux's Integration Service records the *overall* test outcome of a Snapshot in
+    # this status condition (set once the required, context-matching scenarios finish --
+    # or immediately, True, when none are required). It is the authoritative gate signal.
+    # The per-scenario annotation below is only used to describe a failure.
+    _KONFLUX_TEST_SUCCEEDED_CONDITION = "AppStudioTestSucceeded"
+    # The per-scenario results annotation (a JSON array, one entry per scenario).
+    _KONFLUX_ITS_RESULTS_ANNOTATION = "test.appstudio.openshift.io/status"
+    # Per-scenario statuses that are terminal-and-passing / still-running, used only when
+    # summarising a failure so passing or in-flight scenarios are left out of the message.
+    _KONFLUX_ITS_PASSING_STATUSES = frozenset({"TestPassed", "TestWarning"})
+    _KONFLUX_ITS_PENDING_STATUSES = frozenset({"Pending", "InProgress"})
+
     def __init__(self, namespace: str, cluster_api: str, kubearchive_api: str = ""):
         self.namespace = namespace
         self.cluster_api = cluster_api
@@ -432,19 +444,9 @@ class KubeClient:
         except KeyError:
             return None
 
-    # Konflux's Integration Service records the *overall* test outcome of a Snapshot in
-    # this status condition (set once the required, context-matching scenarios finish --
-    # or immediately, True, when none are required). It is the authoritative gate signal.
-    # The per-scenario annotation below is only used to describe a failure.
-    _KONFLUX_TEST_SUCCEEDED_CONDITION = "AppStudioTestSucceeded"
-    # The per-scenario results annotation (a JSON array, one entry per scenario).
-    _KONFLUX_ITS_RESULTS_ANNOTATION = "test.appstudio.openshift.io/status"
-    # Per-scenario statuses that are terminal-and-passing / still-running, used only when
-    # summarising a failure so passing or in-flight scenarios are left out of the message.
-    _KONFLUX_ITS_PASSING_STATUSES = frozenset({"TestPassed", "TestWarning"})
-    _KONFLUX_ITS_PENDING_STATUSES = frozenset({"Pending", "InProgress"})
-
-    def get_snapshot_test_status(self, snapshot_name: str) -> Literal["passed", "failed", "pending", "none"] | None:
+    def get_snapshot_test_status(
+        self, snapshot_name: str, snap: dict | None = None
+    ) -> Literal["passed", "failed", "pending", "none"] | None:
         """Return the overall IntegrationTestScenario verdict for a Snapshot.
 
         Konflux auto-runs the scenarios that apply to the Snapshot and records the
@@ -460,9 +462,11 @@ class KubeClient:
         - ``"pending"`` if the condition is not set yet (tests still in flight).
 
         Returns None only if the Snapshot itself cannot be fetched, so the caller can
-        retry rather than mistake a transient API error for a verdict.
+        retry rather than mistake a transient API error for a verdict. Pass ``snap`` to
+        reuse an already-fetched Snapshot and avoid a redundant API call.
         """
-        snap = self._get_snapshot(snapshot_name, "test status")
+        if snap is None:
+            snap = self._get_snapshot(snapshot_name, "test status")
         if snap is None:
             return None
 
@@ -485,15 +489,17 @@ class KubeClient:
             return "passed" if self._snapshot_has_test_results(snap) else "none"
         return "pending"  # "Unknown" or anything unexpected: wait.
 
-    def get_snapshot_test_failure_detail(self, snapshot_name: str) -> str | None:
+    def get_snapshot_test_failure_detail(self, snapshot_name: str, snap: dict | None = None) -> str | None:
         """Summarise the failing scenarios from the Snapshot's results annotation.
 
         Used to enrich the integration-tests phase error with the scenario name, status,
         details and test PipelineRun. Optional scenarios and passing/in-flight scenarios
         are skipped (they do not drive the failure). Returns None when no detail is
-        available (annotation absent, unparseable, or nothing to report).
+        available (annotation absent, unparseable, or nothing to report). Pass ``snap``
+        to reuse an already-fetched Snapshot and avoid a redundant API call.
         """
-        snap = self._get_snapshot(snapshot_name, "test failure detail")
+        if snap is None:
+            snap = self._get_snapshot(snapshot_name, "test failure detail")
         if snap is None:
             return None
         results = self._parse_test_results(snap, snapshot_name)
@@ -514,6 +520,14 @@ class KubeClient:
                 line += f" ({entry['testPipelineRunName']})"
             parts.append(line)
         return "; ".join(parts) if parts else None
+
+    def get_snapshot(self, snapshot_name: str) -> dict | None:
+        """Fetch a Snapshot once, or None (logged) if it cannot be read.
+
+        Lets a caller read the Snapshot a single time and feed it to both
+        ``get_snapshot_test_status`` and ``get_snapshot_test_failure_detail``.
+        """
+        return self._get_snapshot(snapshot_name, "test status")
 
     def _get_snapshot(self, snapshot_name: str, purpose: str) -> dict | None:
         """Fetch a Snapshot, or None (logged) if it cannot be read."""

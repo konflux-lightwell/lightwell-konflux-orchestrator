@@ -147,7 +147,8 @@ class ReleaseMonitor:
         if existing is not None and existing.status == PhaseStatus.FAILED:
             return False
 
-        status = self.kube.get_snapshot_test_status(snapshot_name)
+        snap = self.kube.get_snapshot(snapshot_name)
+        status = None if snap is None else self.kube.get_snapshot_test_status(snapshot_name, snap)
         if status is None:
             print(f"  Waiting to read integration-test status for {tag}...", file=sys.stderr)
             return False
@@ -162,7 +163,7 @@ class ReleaseMonitor:
             self.db.upsert_phase(attempt_id, Phase.INTEGRATION_TESTS, PhaseStatus.SUCCESS)
             print(f"  ✓ Integration tests passed for {tag}", file=sys.stderr)
             return True
-        detail = self.kube.get_snapshot_test_failure_detail(snapshot_name)
+        detail = self.kube.get_snapshot_test_failure_detail(snapshot_name, snap)
         self.db.upsert_phase(
             attempt_id,
             Phase.INTEGRATION_TESTS,
