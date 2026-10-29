@@ -682,6 +682,26 @@ class TestGetSnapshotTestStatus:
         assert kube.get_snapshot_test_status("snap-1") is None
 
 
+class TestGetSnapshotFingerprint:
+    _LABEL = "custom.appstudio.openshift.io/lightwell-fingerprint"
+
+    def test_returns_propagated_label(self, kube: KubeClient):
+        kube._mock_api.get.return_value = {"metadata": {"labels": {self._LABEL: "fp-abc123"}}}
+        assert kube.get_snapshot_fingerprint("snap-1") == "fp-abc123"
+
+    def test_none_when_label_absent(self, kube: KubeClient):
+        kube._mock_api.get.return_value = {"metadata": {"labels": {"other": "x"}}}
+        assert kube.get_snapshot_fingerprint("snap-1") is None
+
+    def test_none_when_no_labels(self, kube: KubeClient):
+        kube._mock_api.get.return_value = {"metadata": {}}
+        assert kube.get_snapshot_fingerprint("snap-1") is None
+
+    def test_none_on_http_error(self, kube: KubeClient):
+        kube._mock_api.get.side_effect = requests.HTTPError("404")
+        assert kube.get_snapshot_fingerprint("snap-1") is None
+
+
 class TestGetSnapshotTestFailureDetail:
     _ANNOTATION = "test.appstudio.openshift.io/status"
 

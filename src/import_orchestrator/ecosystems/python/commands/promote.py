@@ -120,8 +120,17 @@ def promote(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
     else:
+        # This manual path takes a snapshot + plan, not a Request, so it cannot
+        # recompute the fingerprint. Instead reuse the one Konflux propagated onto
+        # the Snapshot (from the intake PipelineRun) so the promoted Release carries
+        # the same label as the rest of the Request's resources and a promote
+        # workflow can be resumed by the fingerprint query. A snapshot not created
+        # by the orchestrator has no such label; the Release is then left unlabeled.
+        fingerprint = kube.get_snapshot_fingerprint(args.snapshot)
         try:
-            release_name = kube.create_release(args.snapshot, args.release_plan, eco.pipelinerun_prefix)
+            release_name = kube.create_release(
+                args.snapshot, args.release_plan, eco.pipelinerun_prefix, fingerprint=fingerprint
+            )
         except ReleaseError as e:
             print(
                 f"ERROR: failed to create a Release for {args.snapshot} against {args.release_plan}: {e}",

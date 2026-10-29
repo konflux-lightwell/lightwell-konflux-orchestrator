@@ -540,6 +540,21 @@ class KubeClient:
         """
         return self._get_snapshot(snapshot_name, "test status")
 
+    def get_snapshot_fingerprint(self, snapshot_name: str) -> str | None:
+        """Read the fingerprint label Konflux propagated onto the Snapshot.
+
+        The intake PipelineRun is stamped with
+        :data:`~import_orchestrator.constants.FINGERPRINT_LABEL`, and Konflux copies
+        labels under the ``custom.appstudio.openshift.io/`` prefix onto the Snapshot
+        it derives (ADR-0001), so the Snapshot carries the same value. Returns None
+        if the Snapshot cannot be read or has no fingerprint label -- in which case a
+        Release created from it is simply left unlabeled.
+        """
+        snap = self._get_snapshot(snapshot_name, "fingerprint")
+        if snap is None:
+            return None
+        return (snap.get("metadata", {}).get("labels") or {}).get(FINGERPRINT_LABEL)
+
     def _get_snapshot(self, snapshot_name: str, purpose: str) -> dict | None:
         """Fetch a Snapshot, or None (logged) if it cannot be read."""
         try:

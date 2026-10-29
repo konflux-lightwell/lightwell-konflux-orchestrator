@@ -113,6 +113,7 @@ class TestPromoteCommand:
     def test_creates_release_and_succeeds(self):
         kube = MagicMock()
         kube.find_release_for_snapshot_and_plan.return_value = None
+        kube.get_snapshot_fingerprint.return_value = "fp-abc123"
         kube.create_release.return_value = "rel-prod-1"
         kube.get_release_status.return_value = "True"
 
@@ -120,7 +121,7 @@ class TestPromoteCommand:
 
         assert rc == EXIT_OK
         kube.create_release.assert_called_once_with(
-            "remediated-build-xyz12", "remediated-build-prod", "remediated-build-"
+            "remediated-build-xyz12", "remediated-build-prod", "remediated-build-", fingerprint="fp-abc123"
         )
         assert payload == {
             "snapshot": "remediated-build-xyz12",
@@ -206,6 +207,34 @@ class TestPromoteCommand:
         assert rc == EXIT_OK
         assert payload["status"] == "True"
         assert kube.get_release_status.call_count == 3
+
+    def test_reuses_snapshot_fingerprint_on_created_release(self):
+        """The promoted Release must carry the fingerprint Konflux propagated onto the
+        Snapshot, so the fingerprint query recognises it and the workflow can resume."""
+        kube = MagicMock()
+        kube.find_release_for_snapshot_and_plan.return_value = None
+        kube.get_snapshot_fingerprint.return_value = "fp-from-snapshot"
+        kube.create_release.return_value = "rel-prod-1"
+        kube.get_release_status.return_value = "True"
+
+        _run(kube)
+
+        kube.get_snapshot_fingerprint.assert_called_once_with("remediated-build-xyz12")
+        assert kube.create_release.call_args.kwargs["fingerprint"] == "fp-from-snapshot"
+
+    def test_leaves_release_unlabeled_when_snapshot_has_no_fingerprint(self):
+        """A Snapshot not created by the orchestrator has no fingerprint; the Release
+        is then created unlabeled rather than failing."""
+        kube = MagicMock()
+        kube.find_release_for_snapshot_and_plan.return_value = None
+        kube.get_snapshot_fingerprint.return_value = None
+        kube.create_release.return_value = "rel-prod-1"
+        kube.get_release_status.return_value = "True"
+
+        rc, _ = _run(kube)
+
+        assert rc == EXIT_OK
+        assert kube.create_release.call_args.kwargs["fingerprint"] is None
 
     def test_never_infers_the_release_plan(self):
         """Promotion must use the plan it was given, never the auto-release lookup."""
