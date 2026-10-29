@@ -22,6 +22,13 @@ NAMESPACE = "lightwell-poc-tenant"
 CLUSTER_API = "https://api.stone-prod-p01.wcfb.p1.openshiftapps.com:6443"
 KUBEARCHIVE_API = "https://kubearchive-api-server-product-kubearchive.apps.stone-prod-p01.wcfb.p1.openshiftapps.com"
 
+# Label carrying a Request's fingerprint on the resources the orchestrator creates
+# (intake PipelineRun, Release). The ``custom.appstudio.openshift.io/`` prefix is
+# the one Konflux's integration service propagates onto the resulting Snapshot and
+# integration-test PipelineRuns, so stamping the intake PipelineRun covers those
+# two without the orchestrator patching them (ADR-0001, §Fingerprinting).
+FINGERPRINT_LABEL = "custom.appstudio.openshift.io/lightwell-fingerprint"
+
 DEFAULT_MAX_PARALLEL = 1
 DEFAULT_POLL_INTERVAL = 30  # seconds
 DEFAULT_MAX_RETRIES = 3
