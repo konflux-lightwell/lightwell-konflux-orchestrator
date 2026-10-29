@@ -19,10 +19,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from import_orchestrator.constants import FINGERPRINT_LABEL
 from import_orchestrator.database import WorkflowDatabase
 from import_orchestrator.ecosystems.java.pipelinerun import TriggerError
 from import_orchestrator.engine import ImportTrigger, RequestView
-from import_orchestrator.models import ClusterResource, Phase, PhaseStatus, Request, RequestState
+from import_orchestrator.models import ClusterResource, Fingerprint, Phase, PhaseStatus, Request, RequestState
 
 
 def _identity(ref: str) -> dict[str, str]:
@@ -298,6 +299,48 @@ class TestTriggerNextBatch:
         with pytest.raises(ValueError, match="malformed ref"):
             trigger.trigger_next_batch()
 
+
+class TestFingerprintStamping:
+    """The intake PipelineRun is stamped with the Request fingerprint (LWLP-2511)."""
+
+    def test_intake_manifest_carries_fingerprint_label(
+        self, trigger: ImportTrigger, db: WorkflowDatabase, mock_kube: MagicMock, mock_build: MagicMock
+    ):
+        """The submitted manifest carries the fingerprint under the shared label,
+        matching the Request's own fingerprint hash (AC #2, AC #5)."""
+        mock_build.return_value = {"kind": "PipelineRun", "metadata": {"labels": {"existing": "kept"}}}
+        request = _seed_request(db, "pkg==1.0.0")
+
+        assert trigger.trigger_next_batch() == 1
+
+        manifest = mock_kube.create_pipelinerun.call_args.args[0]
+        labels = manifest["metadata"]["labels"]
+        assert labels[FINGERPRINT_LABEL] == Fingerprint.from_request(request).hash()
+        # Existing labels from the ecosystem builder are preserved.
+        assert labels["existing"] == "kept"
+
+    def test_fingerprint_label_uses_custom_appstudio_prefix(
+        self, trigger: ImportTrigger, db: WorkflowDatabase, mock_kube: MagicMock
+    ):
+        """AC #3: the ``custom.appstudio.openshift.io/`` prefix is what makes
+        Konflux carry the label onto the Snapshot and integration-test PipelineRuns,
+        so no orchestrator code stamps those directly."""
+        assert FINGERPRINT_LABEL.startswith("custom.appstudio.openshift.io/")
+
+    def test_fingerprint_label_added_when_builder_omits_metadata(
+        self, trigger: ImportTrigger, db: WorkflowDatabase, mock_kube: MagicMock, mock_build: MagicMock
+    ):
+        """A builder that returns no metadata/labels block still gets a stamped label."""
+        mock_build.return_value = {"kind": "PipelineRun"}
+        _seed_request(db, "pkg==2.0.0")
+
+        assert trigger.trigger_next_batch() == 1
+
+        manifest = mock_kube.create_pipelinerun.call_args.args[0]
+        assert FINGERPRINT_LABEL in manifest["metadata"]["labels"]
+
+
+class TestRecovery:
     def test_recovers_phase_less_attempt(self, trigger: ImportTrigger, db: WorkflowDatabase, mock_kube: MagicMock):
         """A latest Attempt with no intake phase (e.g. a crash between creating the
         Attempt and recording its intake) is reused and re-triggered, not stacked."""
