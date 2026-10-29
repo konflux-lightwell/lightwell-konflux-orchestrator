@@ -21,6 +21,7 @@ from import_orchestrator.models import (
     Attempt,
     AttemptPhase,
     ClusterResource,
+    Fingerprint,
     Phase,
     PhaseStatus,
     PipelineRunStatus,
@@ -28,6 +29,82 @@ from import_orchestrator.models import (
     RequestState,
     derive_state,
 )
+
+
+def _request(**overrides) -> Request:
+    """A Request with the seven fingerprint fields populated; override one to test
+    that it changes the hash."""
+    fields = {
+        "id": 1,
+        "namespace": "ns",
+        "application": "app",
+        "component": "comp",
+        "pipeline": "import-pnc",
+        "release_plan": "rp",
+        "artifact": "pkg==1.0.0",
+        "target": "remediated",
+    }
+    fields.update(overrides)
+    return Request(**fields)
+
+
+class TestFingerprint:
+    def test_from_request_projects_the_seven_fields(self):
+        fp = Fingerprint.from_request(_request())
+        assert fp == Fingerprint(
+            namespace="ns",
+            application="app",
+            component="comp",
+            pipeline="import-pnc",
+            release_plan="rp",
+            target="remediated",
+            artifact="pkg==1.0.0",
+        )
+
+    def test_hash_is_deterministic_across_instances(self):
+        # AC #5: the same Request yields the same label on separate invocations.
+        # Fresh instances stand in for separate process runs.
+        assert Fingerprint.from_request(_request()).hash() == Fingerprint.from_request(_request()).hash()
+
+    def test_hash_matches_golden_value(self):
+        # Pins the exact wire format -- algorithm (SHA-256), field order, the NUL
+        # delimiter, UTF-8 encoding, and the 63-char truncation -- to a known
+        # digest. In-instance equality alone (above) does NOT prove AC #5: a
+        # salted builtin hash() is also stable within one process and would pass
+        # it, yet give a different label on every CLI run. Only this golden value
+        # fails if someone regresses to a salted or reordered implementation, so
+        # it is what actually guards cross-invocation recognition (LWLP-2512).
+        #
+        # Canonical string: "ns\0app\0comp\0import-pnc\0rp\0remediated\0pkg==1.0.0"
+        assert (
+            Fingerprint.from_request(_request()).hash()
+            == "8dc7985b88343eb4aad8c69c329c5c8312a99045b92758b18c0f342b00e3afe"
+        )
+
+    def test_hash_is_label_safe_length(self):
+        value = Fingerprint.from_request(_request()).hash()
+        assert len(value) <= 63
+
+    def test_hash_is_label_safe_charset(self):
+        # Hex digest fits the RFC 1123 label-value charset Konflux/K8s require.
+        value = Fingerprint.from_request(_request()).hash()
+        assert all(c in "0123456789abcdef" for c in value)
+
+    @pytest.mark.parametrize(
+        "field",
+        ["namespace", "application", "component", "pipeline", "release_plan", "artifact", "target"],
+    )
+    def test_changing_any_field_changes_the_hash(self, field):
+        base = Fingerprint.from_request(_request()).hash()
+        changed = Fingerprint.from_request(_request(**{field: "different"})).hash()
+        assert base != changed
+
+    def test_field_boundary_is_unambiguous(self):
+        # Shifting a character across a field boundary must not collide: the
+        # delimiter in the canonical serialization prevents ("a","bc")==("ab","c").
+        left = Fingerprint.from_request(_request(application="a", component="bc")).hash()
+        right = Fingerprint.from_request(_request(application="ab", component="c")).hash()
+        assert left != right
 
 
 class TestPipelineRunStatus:

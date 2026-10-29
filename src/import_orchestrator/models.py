@@ -16,10 +16,14 @@ limitations under the License.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from typing import Literal
+
+# Kubernetes caps a label *value* at 63 characters.
+_MAX_LABEL_VALUE_LEN = 63
 
 
 @dataclass
@@ -134,6 +138,74 @@ class Request:
     artifact: str
     target: str
     created_at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class Fingerprint:
+    """A stable identity for a :class:`Request`, derived from the fields that make
+    it unique (ADR-0001, §Fingerprinting).
+
+    :meth:`hash` projects these seven fields to a deterministic digest that is
+    stamped as the :data:`~import_orchestrator.constants.FINGERPRINT_LABEL` label
+    onto the resources the orchestrator creates (intake PipelineRun, Release). A
+    later invocation can then recognise those resources by querying on the label
+    instead of trusting the local cache (the querying side is LWLP-2512).
+    """
+
+    namespace: str
+    application: str
+    component: str
+    pipeline: str
+    release_plan: str
+    target: str
+    artifact: str
+
+    @classmethod
+    def from_request(cls, request: Request) -> Fingerprint:
+        """Project a :class:`Request` onto its fingerprint fields."""
+        return cls(
+            namespace=request.namespace,
+            application=request.application,
+            component=request.component,
+            pipeline=request.pipeline,
+            release_plan=request.release_plan,
+            target=request.target,
+            artifact=request.artifact,
+        )
+
+    def hash(self) -> str:
+        """Return a deterministic, K8s-label-safe digest of the fingerprint.
+
+        Uses :mod:`hashlib` (SHA-256) rather than the builtin ``hash()``: the
+        builtin is salted per process, so it would produce a different value on
+        every invocation and break the "same Request -> same label across runs"
+        guarantee (AC #5). The seven fields are joined in a fixed order with a
+        separator that cannot occur in the values, so distinct Requests cannot
+        collide by field-boundary ambiguity. The hex digest (``[0-9a-f]``) is
+        truncated to 63 chars to fit a Kubernetes label value.
+
+        This serialization is a *wire format*: the field order and the delimiter
+        below are load-bearing, because a resource stamped by an earlier run (or
+        an earlier build of this tool) must still match on a later run. Changing
+        either silently invalidates every previously stamped label, so they must
+        not be reordered -- which is why the tuple is spelled out explicitly here
+        rather than derived from the dataclass field order. A golden-value test
+        (tests/test_models.py) pins the digest to catch any drift.
+        """
+        # NUL cannot appear in these string fields, so it is an unambiguous
+        # delimiter: ("a", "bc") and ("ab", "c") serialise differently.
+        canonical = "\0".join(
+            (
+                self.namespace,
+                self.application,
+                self.component,
+                self.pipeline,
+                self.release_plan,
+                self.target,
+                self.artifact,
+            )
+        )
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:_MAX_LABEL_VALUE_LEN]
 
 
 @dataclass
