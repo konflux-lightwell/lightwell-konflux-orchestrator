@@ -33,6 +33,18 @@ def _document(path):
     return yaml.load(path.read_text(), Loader=UniqueKeyLoader)
 
 
+def test_python_pipeline_parameter_names_are_unique():
+    spec = _document(PIPELINE)["spec"]
+    scopes = [("pipeline", spec)]
+    for task in spec["tasks"] + spec.get("finally", []):
+        scopes.append((task["name"], task))
+        scopes.append((f"{task['name']}.taskRef", task.get("taskRef", {})))
+
+    for scope, definition in scopes:
+        names = [param["name"] for param in definition.get("params", [])]
+        assert len(names) == len(set(names)), f"Duplicate parameter names in {scope}: {names}"
+
+
 def test_pipeline_only_passes_build_config_and_auth_to_source_task():
     pipeline = _document(PIPELINE)
     tasks = {task["name"]: task for task in pipeline["spec"]["tasks"]}
