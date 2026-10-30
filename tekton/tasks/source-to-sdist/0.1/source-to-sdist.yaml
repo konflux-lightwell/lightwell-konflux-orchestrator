@@ -696,8 +696,14 @@ spec:
             checkout_dir = f"/var/workdir/sdists-repo/checkout/{pkg}-{computed_version}/{pkg}-{computed_version}"
             checkout_root = os.path.dirname(checkout_dir)
             os.makedirs(checkout_dir, exist_ok=True)
-            shutil.copytree(os.path.join(repo_dir, "source"), checkout_dir, dirs_exist_ok=True)
-            shutil.copytree(os.path.join(repo_dir, ".git"), os.path.join(checkout_root, ".git"))
+            # symlinks=True: git tracks symlinks as symlinks, and this mode
+            # exists specifically for packages with symlink/submodule issues
+            # in their PyPI sdist (e.g. griffe) — dereferencing them here would
+            # both corrupt tree fidelity and hard-fail on any dangling link.
+            shutil.copytree(
+                os.path.join(repo_dir, "source"), checkout_dir, dirs_exist_ok=True, symlinks=True
+            )
+            shutil.copytree(os.path.join(repo_dir, ".git"), os.path.join(checkout_root, ".git"), symlinks=True)
 
             if short_commit:
                 with open("/var/workdir/sdists-repo/.commit", "w") as f:

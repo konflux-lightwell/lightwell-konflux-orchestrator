@@ -76,9 +76,10 @@ def test_source_task_stages_git_checkout_when_configured():
     scripts = {step["name"]: step.get("script", "") for step in task["spec"]["steps"]}
     create = scripts["build-deterministic-sdist"]
     assert "canonical-source.json" in create
-    assert "tag" in create
-    assert "describe" in create
-    assert "checkout" in create
+    assert "--points-at" in create
+    assert '"describe"' in create and "--exact-match" in create
+    assert "symlinks=True" in create
+    assert "/sdists-repo/checkout/" in create
     _script_syntax_check(create)
 
 
