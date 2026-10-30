@@ -17,3 +17,6 @@ uv.lock
 
 # Local konflux-release-data checkout cloned on demand by `orchestrate --print-resources`.
 reference/
+
+# Git worktrees created by superpowers:using-git-worktrees.
+.worktrees/
