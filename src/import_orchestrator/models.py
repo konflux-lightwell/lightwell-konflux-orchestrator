@@ -156,7 +156,10 @@ class Fingerprint:
     application: str
     component: str
     pipeline: str
-    release_plan: str
+    # ``release_plan`` is optional: a Request that skips the release step has no
+    # plan (LWLP-2512 refactoring), so the fingerprint must stay well-defined
+    # when it is absent. :meth:`hash` serialises ``None`` as an empty field.
+    release_plan: str | None
     target: str
     artifact: str
 
@@ -193,14 +196,16 @@ class Fingerprint:
         (tests/test_models.py) pins the digest to catch any drift.
         """
         # NUL cannot appear in these string fields, so it is an unambiguous
-        # delimiter: ("a", "bc") and ("ab", "c") serialise differently.
+        # delimiter: ("a", "bc") and ("ab", "c") serialise differently. An
+        # absent release_plan serialises as the empty field; a real plan is a
+        # non-empty resource name, so the two cannot collide.
         canonical = "\0".join(
             (
                 self.namespace,
                 self.application,
                 self.component,
                 self.pipeline,
-                self.release_plan,
+                self.release_plan or "",
                 self.target,
                 self.artifact,
             )

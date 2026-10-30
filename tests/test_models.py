@@ -106,6 +106,25 @@ class TestFingerprint:
         right = Fingerprint.from_request(_request(application="ab", component="c")).hash()
         assert left != right
 
+    def test_hash_handles_absent_release_plan(self):
+        # A Request that skips the release step has no plan; the fingerprint must
+        # stay well-defined and label-safe. An absent plan serialises as the empty
+        # field, so it is equivalent to "" and distinct from any real plan name.
+        absent = Fingerprint(
+            namespace="ns",
+            application="app",
+            component="comp",
+            pipeline="import-pnc",
+            release_plan=None,
+            target="remediated",
+            artifact="pkg==1.0.0",
+        )
+        value = absent.hash()
+        assert len(value) <= 63 and all(c in "0123456789abcdef" for c in value)
+        # None and "" are the same empty field; both differ from a real plan.
+        assert absent.hash() == Fingerprint.from_request(_request(release_plan="")).hash()
+        assert absent.hash() != Fingerprint.from_request(_request(release_plan="rp")).hash()
+
 
 class TestPipelineRunStatus:
     def test_running(self):
