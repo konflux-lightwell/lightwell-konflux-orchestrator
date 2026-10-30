@@ -115,7 +115,7 @@ spec:
         - --ca-bundle
         - /mnt/trusted-ca/ca-bundle.crt
     - name: results
-      image: quay.io/light-castle/oci-artifact-importer@sha256:896f1529e640ee5d32ee90c68756b5c1a6e6f753829d2e8f95e745521322412c
+      image: quay.io/light-castle/oci-artifact-importer@sha256:3f73401d78377ac3028c44a5437208f5551fe31d3d2eb8467559e3a5021fdf21
       computeResources:
         limits:
           memory: 2Gi
