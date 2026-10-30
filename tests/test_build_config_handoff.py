@@ -71,6 +71,17 @@ def test_source_task_resolves_canonical_source():
     _script_syntax_check(resolve)
 
 
+def test_source_task_stages_git_checkout_when_configured():
+    task = _document(SOURCE_TASK)
+    scripts = {step["name"]: step.get("script", "") for step in task["spec"]["steps"]}
+    create = scripts["build-deterministic-sdist"]
+    assert "canonical-source.json" in create
+    assert "tag" in create
+    assert "describe" in create
+    assert "checkout" in create
+    _script_syntax_check(create)
+
+
 def test_wheel_task_uses_trusted_artifact_settings_and_backend_environment():
     task = _document(WHEEL_TASK)
     steps = {step["name"]: step for step in task["spec"]["steps"]}
