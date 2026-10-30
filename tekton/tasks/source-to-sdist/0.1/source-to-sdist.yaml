@@ -357,6 +357,9 @@ spec:
         python3 "$DEST/scripts/get-version-overrides.py" \
           --packages-dir "$DEST/packages" "$PACKAGE" "$VERSION" \
           > /var/workdir/sdists-repo/version-overrides.json
+        python3 "$DEST/scripts/get-canonical-source.py" \
+          --packages-dir "$DEST/packages" "$PACKAGE" "$VERSION" \
+          > /var/workdir/sdists-repo/canonical-source.json
 
         # Interim handoff: copy the selected package config and resolver helpers
         # into the Trusted Artifact so all later task steps consume this exact
@@ -366,6 +369,7 @@ spec:
         cp "$DEST/scripts/validate-build-config.py" \
           "$DEST/scripts/get-fromager-settings.py" \
           "$DEST/scripts/get-allowed-artifacts.py" \
+          "$DEST/scripts/get-canonical-source.py" \
           /var/workdir/sdists-repo/build-configs/scripts/
         git -C "$DEST" rev-parse HEAD > /var/workdir/sdists-repo/build-configs/.commit
 

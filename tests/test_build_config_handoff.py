@@ -62,6 +62,15 @@ def test_source_task_carries_resolved_build_inputs_in_trusted_artifact():
     _script_syntax_check(scripts["resolve-version-overrides"])
 
 
+def test_source_task_resolves_canonical_source():
+    task = _document(SOURCE_TASK)
+    scripts = {step["name"]: step.get("script", "") for step in task["spec"]["steps"]}
+    resolve = scripts["resolve-version-overrides"]
+    assert "get-canonical-source.py" in resolve
+    assert "canonical-source.json" in resolve
+    _script_syntax_check(resolve)
+
+
 def test_wheel_task_uses_trusted_artifact_settings_and_backend_environment():
     task = _document(WHEEL_TASK)
     steps = {step["name"]: step for step in task["spec"]["steps"]}
