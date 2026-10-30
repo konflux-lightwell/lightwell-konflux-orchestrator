@@ -62,6 +62,27 @@ def test_source_task_carries_resolved_build_inputs_in_trusted_artifact():
     _script_syntax_check(scripts["resolve-version-overrides"])
 
 
+def test_source_task_resolves_canonical_source():
+    task = _document(SOURCE_TASK)
+    scripts = {step["name"]: step.get("script", "") for step in task["spec"]["steps"]}
+    resolve = scripts["resolve-version-overrides"]
+    assert "get-canonical-source.py" in resolve
+    assert "canonical-source.json" in resolve
+    _script_syntax_check(resolve)
+
+
+def test_source_task_stages_git_checkout_when_configured():
+    task = _document(SOURCE_TASK)
+    scripts = {step["name"]: step.get("script", "") for step in task["spec"]["steps"]}
+    create = scripts["build-deterministic-sdist"]
+    assert "canonical-source.json" in create
+    assert "--points-at" in create
+    assert '"describe"' in create and "--exact-match" in create
+    assert "symlinks=True" in create
+    assert "/sdists-repo/checkout/" in create
+    _script_syntax_check(create)
+
+
 def test_wheel_task_uses_trusted_artifact_settings_and_backend_environment():
     task = _document(WHEEL_TASK)
     steps = {step["name"]: step for step in task["spec"]["steps"]}
@@ -80,6 +101,21 @@ def test_wheel_task_uses_trusted_artifact_settings_and_backend_environment():
     assert "/var/workdir/sdists-repo/build-configs" in verify_script
     assert all(param["name"] != "BUILD_CONFIGS_REPO_URL" for param in task["spec"].get("params", []))
     assert all(workspace["name"] != "git-auth" for workspace in task["spec"].get("workspaces", []))
+
+
+def test_wheel_task_skips_sdist_check_and_passes_checkout_root_for_git_mode():
+    task = _document(WHEEL_TASK)
+    steps = {step["name"]: step for step in task["spec"]["steps"]}
+    verify_script = steps["verify-pre-placed-sdist"]["script"]
+    build_script = steps["build-wheels"]["script"]
+    assert "canonical-source.json" in verify_script
+    assert "canonical-source.json" in build_script
+    assert "--checkout-root" in build_script
+    _script_syntax_check(verify_script)
+    _script_syntax_check(build_script)
+    # The backend environment handoff must still be sourced before the build
+    # binary runs, in both the sdist-mode and checkout-mode call shapes.
+    assert build_script.index('source "$BACKEND_ENV"') < build_script.index('build-wheels "${ARGS[@]}"')
 
 
 def test_pipeline_only_passes_build_config_and_auth_to_source_task():

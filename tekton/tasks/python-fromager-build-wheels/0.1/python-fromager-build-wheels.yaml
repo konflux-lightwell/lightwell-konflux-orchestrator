@@ -191,6 +191,21 @@ spec:
         #!/bin/bash
         set -euo pipefail
 
+        # LWLP-3013: canonical_source: git packages hand off a staged, tagged
+        # checkout instead of a pre-placed sdist — there is deliberately no
+        # tarball to find for them.
+        if [[ -f /var/workdir/sdists-repo/canonical-source.json ]] && \
+           python3 -c "import json,sys; sys.exit(0 if json.load(open('/var/workdir/sdists-repo/canonical-source.json')).get('type') == 'git' else 1)"; then
+          CHECKOUT_DIR="/var/workdir/sdists-repo/checkout/${PACKAGE}-${COMPUTED_VERSION}/${PACKAGE}-${COMPUTED_VERSION}"
+          if [[ ! -d "$CHECKOUT_DIR" ]]; then
+            echo "ERROR: expected staged git checkout not found: $CHECKOUT_DIR" >&2
+            ls -la /var/workdir/sdists-repo >&2
+            exit 1
+          fi
+          echo "Staged git checkout verified: ${CHECKOUT_DIR}"
+          exit 0
+        fi
+
         mkdir -p /var/workdir/sdists-repo/downloads
 
         # Find any matching sdist in sdists-repo (checking case-insensitively or via pattern)
@@ -285,7 +300,16 @@ spec:
         # The source task resolved and safely quoted this environment from the
         # same config snapshot used to rewrite and create the sdist.
         source "$BACKEND_ENV"
-        build-wheels "${ARGS[@]}" "${PACKAGE}==${VERSION}"
+
+        # LWLP-3013: canonical_source: git packages build from the staged,
+        # tagged checkout instead of a pre-placed sdist.
+        if [[ -f /var/workdir/sdists-repo/canonical-source.json ]] && \
+           python3 -c "import json,sys; sys.exit(0 if json.load(open('/var/workdir/sdists-repo/canonical-source.json')).get('type') == 'git' else 1)"; then
+          CHECKOUT_DIR="/var/workdir/sdists-repo/checkout/${PACKAGE}-${COMPUTED_VERSION}/${PACKAGE}-${COMPUTED_VERSION}"
+          build-wheels "${ARGS[@]}" --checkout-root "$CHECKOUT_DIR" "${PACKAGE}==${VERSION}"
+        else
+          build-wheels "${ARGS[@]}" "${PACKAGE}==${VERSION}"
+        fi
 
         # Fromager (via FROMAGER_SDISTS_REPO) writes built sdists to
         # /var/workdir/sdists-repo/builds. Sync them into output/sdists-repo/builds
