@@ -793,6 +793,22 @@ class TestCreateRelease:
             },
         )
 
+    def test_stamps_fingerprint_label_when_given(self, kube: KubeClient):
+        kube._mock_api.create.return_value = {"metadata": {"name": "pnc-import-fp"}}
+
+        kube.create_release("snap-1", "plan-1", "pnc-import-", fingerprint="abc123")
+
+        manifest = kube._mock_api.create.call_args.args[1]
+        assert manifest["metadata"]["labels"] == {"custom.appstudio.openshift.io/lightwell-fingerprint": "abc123"}
+
+    def test_omits_labels_when_no_fingerprint(self, kube: KubeClient):
+        kube._mock_api.create.return_value = {"metadata": {"name": "pnc-import-nofp"}}
+
+        kube.create_release("snap-1", "plan-1", "pnc-import-")
+
+        manifest = kube._mock_api.create.call_args.args[1]
+        assert "labels" not in manifest["metadata"]
+
     def test_raises_release_error_on_http_error(self, kube: KubeClient):
         kube._mock_api.create.side_effect = requests.HTTPError("403 Forbidden")
 

@@ -20,9 +20,10 @@ import sys
 from collections.abc import Callable
 
 from import_orchestrator.clients.kube import KubeClient
+from import_orchestrator.constants import FINGERPRINT_LABEL
 from import_orchestrator.engine.errors import TriggerError
 from import_orchestrator.engine.request_view import RequestView
-from import_orchestrator.models import Attempt, ClusterResource, Phase, PhaseStatus, Request
+from import_orchestrator.models import Attempt, ClusterResource, Fingerprint, Phase, PhaseStatus, Request
 from import_orchestrator.utils import extract_tag
 
 
@@ -101,6 +102,14 @@ class ImportTrigger:
 
         try:
             manifest = self.build_pipelinerun(request.artifact)
+            # Stamp the Request fingerprint so a later run can recognise this
+            # PipelineRun (and, via the custom.appstudio.openshift.io/ prefix,
+            # the Snapshot and integration-test PipelineRuns Konflux derives from
+            # it) by label rather than by the local cache (ADR-0001; LWLP-2512
+            # consumes it). Done here, where the full Request is in scope, rather
+            # than in the ecosystem builders, which only receive the artifact.
+            labels = manifest.setdefault("metadata", {}).setdefault("labels", {})
+            labels[FINGERPRINT_LABEL] = Fingerprint.from_request(request).hash()
             pr_name = self.kube.create_pipelinerun(manifest)
             if pr_name is None:
                 raise TriggerError("PipelineRun creation failed (API returned no name)")

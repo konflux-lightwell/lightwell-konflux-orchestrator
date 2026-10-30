@@ -23,7 +23,7 @@ from import_orchestrator.clients import KubeClient
 from import_orchestrator.database import WorkflowDatabase
 from import_orchestrator.engine import ReleaseMonitor, RequestView
 from import_orchestrator.engine.errors import ReleaseError
-from import_orchestrator.models import ClusterResource, Phase, PhaseStatus, Request, RequestState
+from import_orchestrator.models import ClusterResource, Fingerprint, Phase, PhaseStatus, Request, RequestState
 
 
 def _identity(ref: str) -> dict[str, str]:
@@ -159,7 +159,12 @@ class TestFindOrCreateRelease:
 
         release = _phase(db, request, Phase.RELEASE)
         assert release.reference_id == "release-789"
-        mock_kube.create_release.assert_called_once_with("snapshot-123", "release-plan-default", "pnc-import-")
+        mock_kube.create_release.assert_called_once_with(
+            "snapshot-123",
+            "release-plan-default",
+            "pnc-import-",
+            fingerprint=Fingerprint.from_request(request).hash(),
+        )
 
     def test_defers_when_capacity_full(self, db: WorkflowDatabase, mock_kube: MagicMock):
         """Verify that release creation is deferred when max_parallel is reached."""
@@ -252,7 +257,10 @@ class TestReleasePlanOverride:
         # Snapshot-based plan resolution must be bypassed entirely.
         mock_kube.find_release_plan_for_snapshot.assert_not_called()
         mock_kube.create_release.assert_called_once_with(
-            "snapshot-stage-123", "pnc-import-java-pulp-novel-stage", "pnc-import-"
+            "snapshot-stage-123",
+            "pnc-import-java-pulp-novel-stage",
+            "pnc-import-",
+            fingerprint=Fingerprint.from_request(request).hash(),
         )
         assert _phase(db, request, Phase.RELEASE).reference_id == "release-novel-1"
 

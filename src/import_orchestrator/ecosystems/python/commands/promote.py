@@ -121,6 +121,11 @@ def promote(args: argparse.Namespace) -> int:
         )
     else:
         try:
+            # No fingerprint: this manual promote path takes a snapshot + plan,
+            # not a Request, so it has no fingerprint fields to stamp. Releases it
+            # creates are intentionally unlabeled and so won't be recognized by the
+            # fingerprint query (LWLP-2512) -- acceptable for a manual escape hatch
+            # outside the orchestrated Request flow (LWLP-2511).
             release_name = kube.create_release(args.snapshot, args.release_plan, eco.pipelinerun_prefix)
         except ReleaseError as e:
             print(

@@ -22,6 +22,7 @@ from typing import Literal
 import requests
 
 from import_orchestrator.clients.kube_api import KubeAPI, KubeAuth, resolve_auth
+from import_orchestrator.constants import FINGERPRINT_LABEL
 from import_orchestrator.models import PipelineRunStatus
 
 
@@ -316,8 +317,15 @@ class KubeClient:
         except KeyError:
             return None
 
-    def create_release(self, snapshot_name: str, release_plan: str, prefix: str) -> str | None:
+    def create_release(
+        self, snapshot_name: str, release_plan: str, prefix: str, fingerprint: str | None = None
+    ) -> str | None:
         """Create a Release for the given snapshot and return its name.
+
+        When ``fingerprint`` is given it is stamped under the
+        :data:`~import_orchestrator.constants.FINGERPRINT_LABEL` label so a later
+        run can recognise this Release by querying on the label rather than
+        trusting the local cache (ADR-0001; LWLP-2512 consumes it).
 
         Raises ReleaseError if the API rejects the request (e.g. a permissions
         gap or an invalid releasePlan reference), mirroring create_pipelinerun's
@@ -327,13 +335,16 @@ class KubeClient:
         change (LWLP-3937). Returns None only if the Release was created but
         its name is absent from the response.
         """
+        metadata: dict[str, object] = {
+            "generateName": prefix,
+            "namespace": self.namespace,
+        }
+        if fingerprint is not None:
+            metadata["labels"] = {FINGERPRINT_LABEL: fingerprint}
         manifest = {
             "apiVersion": "appstudio.redhat.com/v1alpha1",
             "kind": "Release",
-            "metadata": {
-                "generateName": prefix,
-                "namespace": self.namespace,
-            },
+            "metadata": metadata,
             "spec": {
                 "releasePlan": release_plan,
                 "snapshot": snapshot_name,
