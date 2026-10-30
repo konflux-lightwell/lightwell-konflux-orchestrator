@@ -20,3 +20,6 @@ reference/
 
 # Git worktrees created by superpowers:using-git-worktrees.
 .worktrees/
+
+# Subagent-driven-development scratch workspace (ledger, briefs, review packages).
+.superpowers/
