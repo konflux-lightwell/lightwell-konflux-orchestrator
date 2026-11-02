@@ -1,4 +1,4 @@
-# import-orchestrator
+# Lightwell-Konflux Orchestrator
 
 CLI tool for orchestrating batch import PipelineRuns across ecosystems with intelligent state tracking, dynamic throttling, and automatic retry logic.
 
@@ -8,7 +8,7 @@ This tool orchestrates the release of Lightwell artifacts through Konflux. Comma
 
 ## Ecosystems
 
-Commands are namespaced by ecosystem: `import-orchestrator <ecosystem> <command>`.
+Commands are namespaced by ecosystem: `orchestrator <ecosystem> <command>`.
 
 Two ecosystems are available today. Each uses its own default database (`--db` overrides it):
 
@@ -53,47 +53,47 @@ pip install -e ".[dev]"
 
 ```bash
 # Show help
-import-orchestrator --help
-import-orchestrator java --help
-import-orchestrator java import-file --help
-import-orchestrator java orchestrate --help
-import-orchestrator java import-manifest --help
-import-orchestrator java trigger --help
-import-orchestrator java run --help
+orchestrator --help
+orchestrator java --help
+orchestrator java import-file --help
+orchestrator java orchestrate --help
+orchestrator java import-manifest --help
+orchestrator java trigger --help
+orchestrator java run --help
 
 # Typical workflow: import from file then orchestrate
-import-orchestrator java import-file refs.txt
-import-orchestrator java orchestrate --max-parallel 10
+orchestrator java import-file refs.txt
+orchestrator java orchestrate --max-parallel 10
 
 # Alternative: import from a consolidated build manifest
-import-orchestrator java import-manifest consolidated.yaml
-import-orchestrator java orchestrate --max-parallel 10
+orchestrator java import-manifest consolidated.yaml
+orchestrator java orchestrate --max-parallel 10
 
 # Trigger a single PNC import PipelineRun
-import-orchestrator java trigger 'quay.io/light-castle/rebuild-pnc:tag@sha256:abc123...'
+orchestrator java trigger 'quay.io/light-castle/rebuild-pnc:tag@sha256:abc123...'
 
 # Run a single reference end-to-end (trigger + monitor + release), then print
 # a JSON result to stdout. Uses a throwaway database unless --db is given.
-import-orchestrator java run 'quay.io/light-castle/rebuild-pnc:tag@sha256:abc123...'
+orchestrator java run 'quay.io/light-castle/rebuild-pnc:tag@sha256:abc123...'
 
 # Same, but persist state to a database and also write the result to a file
-import-orchestrator --db ./one-off.db java run \
+orchestrator --db ./one-off.db java run \
   'quay.io/light-castle/rebuild-pnc:tag@sha256:abc123...' \
   --artifact-type VALIDATED --output-json ./result.json
 
 # Import only (populate database for inspection)
-import-orchestrator import-file refs.txt
+orchestrator import-file refs.txt
 
 # Resume interrupted orchestration from existing database
-import-orchestrator java orchestrate
+orchestrator java orchestrate
 
 # Import REMEDIATED builds instead of STAGE (default)
-import-orchestrator java import-file refs.txt --artifact-type REMEDIATED
-import-orchestrator java orchestrate --max-parallel 5
+orchestrator java import-file refs.txt --artifact-type REMEDIATED
+orchestrator java orchestrate --max-parallel 5
 
 # Reset database and start fresh
-import-orchestrator --reset java import-file refs.txt
-import-orchestrator java orchestrate
+orchestrator --reset java import-file refs.txt
+orchestrator java orchestrate
 ```
 
 ### Python Ecosystem
@@ -102,31 +102,31 @@ The `python` ecosystem builds CVE-remediated wheels from `lightwell-builds` sour
 
 ```bash
 # Show help
-import-orchestrator python --help
-import-orchestrator python import-file --help
-import-orchestrator python orchestrate --help
-import-orchestrator python trigger --help
-import-orchestrator python run --help
-import-orchestrator python promote --help
+orchestrator python --help
+orchestrator python import-file --help
+orchestrator python orchestrate --help
+orchestrator python trigger --help
+orchestrator python run --help
+orchestrator python promote --help
 
 # Import package references from a file, then orchestrate
-import-orchestrator python import-file packages.txt
-import-orchestrator python orchestrate --max-parallel 5
+orchestrator python import-file packages.txt
+orchestrator python orchestrate --max-parallel 5
 
 # Trigger a single build
-import-orchestrator python trigger 'ntplib==0.4.0'
+orchestrator python trigger 'ntplib==0.4.0'
 
 # Run a single package end-to-end (trigger + monitor + release), then print
 # a JSON result to stdout. Uses a throwaway database unless --db is given.
-import-orchestrator python run 'ntplib==0.4.0'
+orchestrator python run 'ntplib==0.4.0'
 
 # Same, but persist state to a database and also write the result to a file
-import-orchestrator --db ./one-off.db python run 'ntplib==0.4.0' \
+orchestrator --db ./one-off.db python run 'ntplib==0.4.0' \
   --output-json ./result.json
 
 # Promote an already-built snapshot to production. No rebuild, no database --
 # this re-releases existing content against a second ReleasePlan.
-import-orchestrator python promote remediated-build-xyz12 \
+orchestrator python promote remediated-build-xyz12 \
   --release-plan remediated-build-prod
 ```
 
@@ -142,7 +142,7 @@ requests==2.31.0
 
 #### Global Options
 
-Global options are placed before the ecosystem: `import-orchestrator [--db PATH] [--reset] <ecosystem> <command>`.
+Global options are placed before the ecosystem: `orchestrator [--db PATH] [--reset] <ecosystem> <command>`.
 
 | Option | Default | Description |
 |--------|---------|-------------|
@@ -154,7 +154,7 @@ Global options are placed before the ecosystem: `import-orchestrator [--db PATH]
 Imports OCI references from a text file into the database.
 
 ```bash
-import-orchestrator java import-file <file>
+orchestrator java import-file <file>
 ```
 
 Reads OCI references from a text file (one per line) and adds them to the database as pending imports. Lines starting with `#` and blank lines are ignored.
@@ -174,7 +174,7 @@ quay.io/namespace/repo:tag3@sha256:789abc...
 Imports OCI references from a consolidated build manifest (YAML) into the database.
 
 ```bash
-import-orchestrator java import-manifest <file>
+orchestrator java import-manifest <file>
 ```
 
 Each library entry's `output.artifact.tag` and `output.artifact.digest` are combined into a `tag@digest` reference when both are present, falling back to digest-only or tag-only. Entries missing both fields are skipped. A malformed digest (missing `@` separator) is treated as an error and aborts processing.
@@ -196,7 +196,7 @@ libraries:
 Orchestrates the import process by triggering PipelineRuns and monitoring their status.
 
 ```bash
-import-orchestrator java orchestrate [OPTIONS]
+orchestrator java orchestrate [OPTIONS]
 ```
 
 | Option | Default | Description |
@@ -211,7 +211,7 @@ import-orchestrator java orchestrate [OPTIONS]
 Triggers a single PNC import PipelineRun for manual or ad-hoc imports.
 
 ```bash
-import-orchestrator java trigger <source_image> [tag] [OPTIONS]
+orchestrator java trigger <source_image> [tag] [OPTIONS]
 ```
 
 | Argument/Option | Description |
@@ -233,10 +233,10 @@ It has no `--dry-run`.
 
 ```bash
 # Java: one digest-pinned image
-import-orchestrator java run <source_image> [tag] [OPTIONS]
+orchestrator java run <source_image> [tag] [OPTIONS]
 
 # Python: one package==version reference
-import-orchestrator python run <ref> [OPTIONS]
+orchestrator python run <ref> [OPTIONS]
 ```
 
 **Java arguments and options:**
@@ -272,10 +272,10 @@ instead — useful for resuming or for inspecting the row afterwards:
 
 ```bash
 # Ephemeral — nothing left on disk
-import-orchestrator java run 'quay.io/light-castle/rebuild-pnc:tag@sha256:abc...'
+orchestrator java run 'quay.io/light-castle/rebuild-pnc:tag@sha256:abc...'
 
 # Persistent — state kept in ./one-off.db
-import-orchestrator --db ./one-off.db java run 'quay.io/light-castle/rebuild-pnc:tag@sha256:abc...'
+orchestrator --db ./one-off.db java run 'quay.io/light-castle/rebuild-pnc:tag@sha256:abc...'
 ```
 
 > **Point `--db` at a fresh or single-purpose database.** `run` seeds your reference into the
@@ -288,14 +288,14 @@ import-orchestrator --db ./one-off.db java run 'quay.io/light-castle/rebuild-pnc
 > entirely.
 
 > **Note:** `--reset` deletes the database it resolves *before* `run` swaps in its ephemeral one.
-> Running `import-orchestrator --reset java run ...` without an explicit `--db` therefore deletes
+> Running `orchestrator --reset java run ...` without an explicit `--db` therefore deletes
 > the shared `java_import_state.db` and then runs against a throwaway database anyway. Don't
 > combine `--reset` with `run` unless you also pass `--db`.
 
 ##### Result JSON
 
 On completion `run` prints exactly one JSON object to **stdout** — all progress and diagnostic
-output goes to stderr, so `import-orchestrator java run ... | jq` is safe. Pass `--output-json
+output goes to stderr, so `orchestrator java run ... | jq` is safe. Pass `--output-json
 PATH` to write the same payload to a file as well (stdout still gets it).
 
 ```json
@@ -332,10 +332,10 @@ Cumulative Ticket is cleared for release (ADR-0005), but the command itself carr
 the caller decides when a promotion is warranted and which plan to target.
 
 ```bash
-import-orchestrator python promote <snapshot> --release-plan <plan> [OPTIONS]
+orchestrator python promote <snapshot> --release-plan <plan> [OPTIONS]
 
 # Promote a verified snapshot to production
-import-orchestrator python promote remediated-build-xyz12 \
+orchestrator python promote remediated-build-xyz12 \
   --release-plan remediated-build-prod
 ```
 

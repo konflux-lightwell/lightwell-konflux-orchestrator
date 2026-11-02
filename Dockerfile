@@ -34,4 +34,4 @@ ENV TEKTON_PIPELINE_DIR=/opt/import-orchestrator/tekton \
     PIPELINE_GIT_URL=${PIPELINE_GIT_URL} \
     PIPELINE_GIT_REVISION=${PIPELINE_GIT_REVISION}
 
-ENTRYPOINT ["import-orchestrator"]
+ENTRYPOINT ["orchestrator"]

@@ -21,6 +21,9 @@ dev = [
 ]
 
 [project.scripts]
+orchestrator = "import_orchestrator.cli:main"
+
+# Kept for backward compatibility, no new code should rely on this alias
 import-orchestrator = "import_orchestrator.cli:main"
 
 [tool.uv]

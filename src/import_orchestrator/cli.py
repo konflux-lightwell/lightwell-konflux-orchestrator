@@ -27,8 +27,8 @@ from import_orchestrator.ecosystems import ECOSYSTEMS
 def make_parser() -> argparse.ArgumentParser:
     """Build the top-level argument parser with one subparser per ecosystem."""
     parser = argparse.ArgumentParser(
-        prog="import-orchestrator",
-        description="Orchestrate Konflux import PipelineRuns across ecosystems",
+        prog="orchestrator",
+        description="Orchestrate Konflux PipelineRuns across ecosystems",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=textwrap.dedent(
             """
@@ -39,19 +39,19 @@ def make_parser() -> argparse.ArgumentParser:
 
         Examples:
           # Import OCI references from a text file
-          import-orchestrator java import-file refs.txt
+          orchestrator java import-file refs.txt
 
           # Import OCI references from a consolidated build manifest
-          import-orchestrator java import-manifest consolidated.yaml
+          orchestrator java import-manifest consolidated.yaml
 
           # Orchestrate imports (up to 10 parallel)
-          import-orchestrator java orchestrate --max-parallel 10
+          orchestrator java orchestrate --max-parallel 10
 
           # Trigger a single PNC import PipelineRun
-          import-orchestrator java trigger 'quay.io/example/image:tag@sha256:abc123...'
+          orchestrator java trigger 'quay.io/example/image:tag@sha256:abc123...'
 
           # Full workflow
-          import-orchestrator java import-file refs.txt && import-orchestrator java orchestrate
+          orchestrator java import-file refs.txt && orchestrator java orchestrate
         """
         ),
     )
