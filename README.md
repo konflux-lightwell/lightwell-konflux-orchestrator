@@ -516,6 +516,10 @@ sqlite3 java_import_state.db \
 | `retry_count` | INTEGER | Number of retry attempts |
 | `created_at` | TIMESTAMP | When reference was first added |
 
+### CLI aliases
+
+The base `orchestrator` command can be replaced by the short alias `likor` (**Li**ghtwell-**K**onflux **Or**chestrator). The old `import-orchestrator` alias should be avoided and is only kept for backward compatibility purposes.
+
 ## Project Structure
 
 ```
