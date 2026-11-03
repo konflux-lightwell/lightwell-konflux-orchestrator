@@ -53,8 +53,12 @@ def build_pipelinerun_manifest(
     builds_tag: str | None = None,
     build_type: str = "Backport",
     wheel_server_url: str | None = None,
+    repo_url: str | None = None,
 ) -> dict[str, Any]:
     """Build a python-build PipelineRun manifest for one package/version.
+
+    ``repo_url`` overrides the exact clone URL. Otherwise the URL is derived
+    from ``repo_base`` and the package name.
 
     ``git_auth_secret`` names the secret bound to the ``git-auth`` workspace,
     which the clone task uses to authenticate against the lightwell-builds repo.
@@ -89,7 +93,7 @@ def build_pipelinerun_manifest(
             {"name": "PACKAGE", "value": package},
             {"name": "VERSION", "value": version},
             {"name": "BUILD_TYPE", "value": build_type},
-            {"name": "LIGHTWELL_BUILDS_REPO_URL", "value": f"{repo_base}/pypi.org-{package}"},
+            {"name": "LIGHTWELL_BUILDS_REPO_URL", "value": repo_url or f"{repo_base.rstrip('/')}/pypi.org-{package}"},
             {"name": "LIGHTWELL_BUILDS_TAG", "value": tag},
             {"name": "IMAGE", "value": image},
             {"name": "ociStorage", "value": f"{image}.src"},

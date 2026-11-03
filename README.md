@@ -257,9 +257,31 @@ orchestrator python run <ref> [OPTIONS]
 | `ref` | — | Package reference as `package==version` (e.g. `ntplib==0.4.0`) |
 | `--target` | `REMEDIATED` (or `LIGHTWELL_PYTHON_TARGET` env var) | Build target |
 | `--builds-tag` / `--builds-ref` | `<package>/<version>` | `lightwell-builds` git revision to build from |
+| `--lightwell-builds-repo-url` | derived from repository base | Exact source Git URL passed as `LIGHTWELL_BUILDS_REPO_URL` |
+| `--lightwell-builds-repo-base` | `https://gitlab.cee.redhat.com/lightwell/lightwell-builds` | Source namespace; appends `/pypi.org-<package>` |
 | `--poll-interval` | `30` | Seconds between status checks |
 | `--max-retries` | `3` | Max retry attempts on transient failure |
 | `--output-json` | — | Also write the result JSON to this path |
+
+The repository URL and base options are mutually exclusive. They and the
+`--builds-tag` / `--builds-ref` aliases are available on `python run`,
+`python trigger`, and `python orchestrate`. An explicit Git revision applies to
+every package in the invocation; otherwise each uses its `<package>/<version>`
+tag. For batch builds, use a repository
+base to select a separate source repository for each package:
+
+```bash
+orchestrator python orchestrate --target VALIDATED-STAGE \
+  --lightwell-builds-repo-base https://gitlab.example.com/lightwell/test-builds
+
+orchestrator python run ntplib==0.4.0 --target VALIDATED-STAGE \
+  --lightwell-builds-repo-url https://gitlab.example.com/lightwell/test-builds/custom-ntplib.git
+```
+
+An exact URL is used unchanged for every package in that invocation. Omitting
+both options retains the production repository base. When changing source
+repositories, use a fresh database so completed requests from earlier runs are
+not reused.
 
 ##### Database: ephemeral by default
 
