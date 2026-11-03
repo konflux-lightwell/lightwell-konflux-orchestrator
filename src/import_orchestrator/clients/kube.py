@@ -349,9 +349,7 @@ class KubeClient:
             # imports clients, so a module-level import would be circular.
             from import_orchestrator.engine.errors import ReleaseError
 
-            raise ReleaseError(
-                f"failed to create Release for Snapshot {snapshot_name}: {_api_error_detail(e)}"
-            ) from e
+            raise ReleaseError(f"failed to create Release for Snapshot {snapshot_name}: {_api_error_detail(e)}") from e
 
         try:
             return result["metadata"]["name"]
