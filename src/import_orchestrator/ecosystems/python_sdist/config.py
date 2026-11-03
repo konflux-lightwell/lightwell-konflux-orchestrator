@@ -38,6 +38,11 @@ TARGET_CONFIGS: dict[str, dict] = {
         "component": "python-sdist-mirror",
         "service_account": "build-pipeline-python-sdist-mirror",
     },
+    "MIRROR-STAGE": {
+        "app": "python-sdist-mirror-scratch",
+        "component": "python-sdist-mirror-scratch",
+        "service_account": "build-pipeline-python-sdist-mirror-scratch",
+    },
     "SCRATCH": {
         "app": "python-sdist-mirror-scratch",
         "component": "python-sdist-mirror-scratch",
