@@ -148,9 +148,6 @@ spec:
     - name: BUILD_INDEX_ATTACHED_REF
       description: Digest-pinned wheels image receiving the build-index referrer.
       value: $(tasks.attach-build-index.results.BUILD_INDEX_ATTACHED_REF)
-    - name: BUILD_INDEX_DIGEST
-      description: Content digest of build-index.json for release verification and attestation.
-      value: $(tasks.attach-build-index.results.BUILD_INDEX_DIGEST)
     - name: CHAINS-GIT_URL
       description: >-
         URL of the lightwell-builds git repository that was cloned. Required by
