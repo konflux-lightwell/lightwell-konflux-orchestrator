@@ -245,7 +245,7 @@ spec:
         resolver: bundles
         params:
           - name: bundle
-            value: quay.io/light-factory/tekton-catalog/task-fromager-build-wheels@sha256:c1f4cf1af93f159e3712e7c39fe0288bc1444fbc279367562d8919896de963f1
+            value: quay.io/light-factory/tekton-catalog/task-fromager-build-wheels@sha256:b1ddc69008f24c5795db5a822e0f0e42b238a47ec351a56acfde02d4b98d408d
           - name: name
             value: python-fromager-build-wheels
           - name: kind
