@@ -279,9 +279,10 @@ orchestrator python run ntplib==0.4.0 --target VALIDATED-STAGE \
 ```
 
 An exact URL is used unchanged for every package in that invocation. Omitting
-both options retains the production repository base. When changing source
-repositories, use a fresh database so completed requests from earlier runs are
-not reused.
+both options retains the production repository base. The resolved source
+repository URL is part of the request identity, so changing repositories creates
+a separate request even when using the same database. Equivalent URL and base
+options that resolve to the same URL reuse the same request.
 
 ##### Database: ephemeral by default
 

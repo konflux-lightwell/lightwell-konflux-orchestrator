@@ -37,6 +37,11 @@ def parse_ref(ref: str) -> tuple[str, str]:
     return package, version
 
 
+def resolve_repo_url(package: str, repo_base: str, repo_url: str | None = None) -> str:
+    """Resolve the source repository used by both the manifest and request identity."""
+    return repo_url or f"{repo_base.rstrip('/')}/pypi.org-{package}"
+
+
 def build_pipelinerun_manifest(
     *,
     package: str,
@@ -93,7 +98,7 @@ def build_pipelinerun_manifest(
             {"name": "PACKAGE", "value": package},
             {"name": "VERSION", "value": version},
             {"name": "BUILD_TYPE", "value": build_type},
-            {"name": "LIGHTWELL_BUILDS_REPO_URL", "value": repo_url or f"{repo_base.rstrip('/')}/pypi.org-{package}"},
+            {"name": "LIGHTWELL_BUILDS_REPO_URL", "value": resolve_repo_url(package, repo_base, repo_url)},
             {"name": "LIGHTWELL_BUILDS_TAG", "value": tag},
             {"name": "IMAGE", "value": image},
             {"name": "ociStorage", "value": f"{image}.src"},

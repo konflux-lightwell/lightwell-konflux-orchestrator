@@ -178,6 +178,7 @@ def test_request_identity_defaults_to_remediated_target():
         "release_plan": "",
         "target": "REMEDIATED",
         "artifact": "foolib==0.4.0",
+        "source_repo": f"{config.LIGHTWELL_BUILDS_REPO_BASE}/pypi.org-foolib",
     }
 
 

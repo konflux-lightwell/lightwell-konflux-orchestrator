@@ -136,7 +136,9 @@ def run_single(args: argparse.Namespace, ref: str) -> int:
             target = getattr(args, "target", None)
             skip_release = target is not None and getattr(eco, "target_skip_release", lambda t: False)(target)
 
-            Ingest(db, build_identity=lambda r: eco.request_identity(r, args)).from_lines([ref])
+            identity = eco.request_identity(ref, args)
+            Ingest(db, build_identity=lambda r: identity).from_lines([ref])
+            request, _ = db.get_or_create_request(**identity)
 
             kube = KubeClient(eco.namespace, CLUSTER_API, KUBEARCHIVE_API)
             view = RequestView(db, skip_release)
@@ -169,7 +171,6 @@ def run_single(args: argparse.Namespace, ref: str) -> int:
             rc = orchestrator.run_until_complete()
 
             # Capture final state while the DB is still open, before cleanup.
-            request = next((r for r in db.list_requests() if r.artifact == ref), None)
             payload = _result_payload(ref, view, request, rc)
             _emit_result(payload, getattr(args, "output_json", None))
 

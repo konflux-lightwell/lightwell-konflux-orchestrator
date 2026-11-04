@@ -124,7 +124,7 @@ class Request:
     """An intent to release a single artifact for a specific target.
 
     The combination of (namespace, application, component, pipeline,
-    release_plan, target, artifact) is the request's fingerprint and is unique:
+    release_plan, target, artifact, source_repo) is the request's fingerprint and is unique:
     re-importing the same artifact for the same target returns the existing
     Request rather than creating a duplicate.
     """
@@ -138,6 +138,7 @@ class Request:
     artifact: str
     target: str
     created_at: datetime | None = None
+    source_repo: str = ""
 
 
 @dataclass(frozen=True)

@@ -49,6 +49,16 @@ def _make_request(store: WorkflowDatabase, **overrides):
 
 
 class TestRequests:
+    def test_different_source_repository_creates_new_request(self, store):
+        first, _ = _make_request(store, source_repo="https://example.com/original.git")
+        second, inserted = _make_request(store, source_repo="https://example.com/other.git")
+        assert inserted
+        assert second.id != first.id
+        assert store.get_request(second.id).source_repo == "https://example.com/other.git"
+        again, inserted = _make_request(store, source_repo=first.source_repo)
+        assert not inserted
+        assert again.id == first.id
+
     def test_get_or_create_inserts_new(self, store: WorkflowDatabase):
         request, was_inserted = _make_request(store)
         assert was_inserted is True

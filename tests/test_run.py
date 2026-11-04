@@ -142,6 +142,35 @@ class TestEphemeralDatabase:
 
 
 class TestPersistentDatabase:
+    def test_result_uses_request_for_selected_repository(self, tmp_path, capsys):
+        db_path = tmp_path / "shared.db"
+        eco = _make_eco()
+        eco.request_identity.side_effect = lambda ref, args: {
+            **_identity(ref, args),
+            "source_repo": args.lightwell_builds_repo_url,
+        }
+
+        def complete_selected_request(self):
+            request = self.view.pending()[0]
+            attempt = self.view.db.create_attempt(request.id)
+            self.view.db.upsert_phase(
+                attempt.id, Phase.INTAKE, PhaseStatus.SUCCESS, ClusterResource.PIPELINE_RUN, request.source_repo
+            )
+            self.view.db.upsert_phase(
+                attempt.id, Phase.RELEASE, PhaseStatus.SUCCESS, ClusterResource.RELEASE, "release"
+            )
+            return 0
+
+        for source in ["https://example.com/first.git", "https://example.com/second.git"]:
+            with (
+                patch("import_orchestrator.commands.run.KubeClient"),
+                patch.object(ImportOrchestrator, "run_until_complete", complete_selected_request),
+            ):
+                run_single(_args(ecosystem=eco, db_explicit=True, db=db_path, lightwell_builds_repo_url=source), _REF)
+            payload = json.loads(capsys.readouterr().out)
+            assert payload["pipelinerun_name"] == source
+        assert _request_count(db_path) == 2
+
     def test_explicit_db_seeded_and_retained(self, tmp_path):
         db_path = tmp_path / "ct-123.db"
 

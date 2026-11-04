@@ -20,7 +20,7 @@ import argparse
 
 from import_orchestrator.ecosystems.base import build_request_identity
 from import_orchestrator.ecosystems.python import config
-from import_orchestrator.ecosystems.python.pipelinerun import build_pipelinerun_manifest, parse_ref
+from import_orchestrator.ecosystems.python.pipelinerun import build_pipelinerun_manifest, parse_ref, resolve_repo_url
 from import_orchestrator.engine.pipeline_loader import apply_pipeline_overrides, load_pipeline
 
 
@@ -66,6 +66,7 @@ class PythonEcosystem:
         return apply_pipeline_overrides(manifest, pipeline_path)
 
     def request_identity(self, ref: str, args: argparse.Namespace) -> dict[str, str]:
+        package, _ = parse_ref(ref)
         target = getattr(args, "target", config.DEFAULT_TARGET)
         cfg = config.TARGET_CONFIGS[target]
         return build_request_identity(
@@ -76,6 +77,11 @@ class PythonEcosystem:
             release_plan=getattr(args, "release_plan", "") or "",
             target=target,
             artifact=ref,
+            source_repo=resolve_repo_url(
+                package,
+                getattr(args, "lightwell_builds_repo_base", config.LIGHTWELL_BUILDS_REPO_BASE),
+                getattr(args, "lightwell_builds_repo_url", None),
+            ),
         )
 
     def target_skip_release(self, target: str) -> bool:

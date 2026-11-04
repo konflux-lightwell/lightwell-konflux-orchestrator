@@ -116,8 +116,9 @@ class WorkflowDatabase:
                 release_plan TEXT NOT NULL,
                 artifact TEXT NOT NULL,
                 target TEXT NOT NULL,
+                source_repo TEXT NOT NULL DEFAULT '',
                 created_at TIMESTAMP NOT NULL,
-                UNIQUE(namespace, application, component, pipeline, release_plan, target, artifact)
+                UNIQUE(namespace, application, component, pipeline, release_plan, target, artifact, source_repo)
             )
         """
         )
@@ -165,11 +166,12 @@ class WorkflowDatabase:
         release_plan: str,
         artifact: str,
         target: str,
+        source_repo: str = "",
     ) -> tuple[Request, bool]:
         """Create a Request for an artifact/target, or return the existing one.
 
-        The seven identifying fields form the request fingerprint (ADR-0001);
-        re-importing the same artifact for the same target is a no-op.
+        The identifying fields include the source repository when supplied;
+        re-importing the same artifact, target and source is a no-op.
 
         Returns:
             Tuple of (Request, was_inserted) where was_inserted is True if newly
@@ -182,10 +184,10 @@ class WorkflowDatabase:
         cursor.execute(
             """
             INSERT OR IGNORE INTO requests
-                (namespace, application, component, pipeline, release_plan, artifact, target, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (namespace, application, component, pipeline, release_plan, artifact, target, source_repo, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-            (namespace, application, component, pipeline, release_plan, artifact, target, now),
+            (namespace, application, component, pipeline, release_plan, artifact, target, source_repo, now),
         )
         was_inserted = cursor.rowcount > 0
         self.conn.commit()
@@ -194,9 +196,9 @@ class WorkflowDatabase:
             """
             SELECT * FROM requests
             WHERE namespace = ? AND application = ? AND component = ? AND pipeline = ?
-              AND release_plan = ? AND target = ? AND artifact = ?
+              AND release_plan = ? AND target = ? AND artifact = ? AND source_repo = ?
         """,
-            (namespace, application, component, pipeline, release_plan, target, artifact),
+            (namespace, application, component, pipeline, release_plan, target, artifact, source_repo),
         )
         return self._row_to_request(cursor.fetchone()), was_inserted
 
@@ -447,6 +449,7 @@ class WorkflowDatabase:
             release_plan=row["release_plan"],
             artifact=row["artifact"],
             target=row["target"],
+            source_repo=row["source_repo"],
             created_at=self._parse_timestamp(row["created_at"]),
         )
 
