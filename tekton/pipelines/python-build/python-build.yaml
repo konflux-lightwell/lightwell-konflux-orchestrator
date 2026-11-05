@@ -301,6 +301,13 @@ spec:
 
     # ── Step 5: Attach the fath-cuan build index to the wheels image ─────────
     - name: attach-build-index
+      # Scratch is a reversioning check that never releases, so it needs no
+      # vuln build-index; skip the task (and its release-side BUILD_INDEX_*
+      # results) for Scratch. Backport/Novel/Validated are unaffected.
+      when:
+        - input: "$(params.BUILD_TYPE)"
+          operator: notin
+          values: ["Scratch"]
       taskRef:
         resolver: bundles
         params:
