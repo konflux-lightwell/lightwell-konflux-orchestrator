@@ -67,7 +67,7 @@ class ReleaseMonitor:
         # (ADR-0001). The hash is computed here, where the full Request is in
         # scope, and threaded through to create_release.
         eligible: list[tuple[int, str, str, dict[Phase, AttemptPhase]]] = []
-        for request in self.db.list_requests():
+        for request in self.view.requests():
             assert request.id is not None
             phases = self.db.latest_phase_map(request.id)
             intake = phases.get(Phase.INTAKE)

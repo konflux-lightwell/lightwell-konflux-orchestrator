@@ -21,6 +21,7 @@ import argparse
 import pytest
 
 from import_orchestrator.ecosystems.base import Ecosystem
+from import_orchestrator.ecosystems.javascript import config
 from import_orchestrator.ecosystems.javascript.ecosystem import JavaScriptEcosystem
 from import_orchestrator.engine.errors import TriggerError
 
@@ -97,4 +98,5 @@ def test_request_identity_defaults_to_validated_target():
         "release_plan": "",
         "target": "VALIDATED",
         "artifact": "bluebird==3.7.2",
+        "source_repo": config.DEFAULT_SOURCE_GIT_URL,
     }

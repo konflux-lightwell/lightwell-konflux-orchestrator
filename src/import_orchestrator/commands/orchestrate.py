@@ -97,6 +97,10 @@ def run_orchestrate(args: argparse.Namespace, empty_db_warning: str) -> int:
     Generic across ecosystems: the ecosystem supplies its own namespace,
     PipelineRun prefix and manifest builder. ``empty_db_warning`` is the
     ecosystem-specific hint shown when the database has no references yet.
+
+    Create or reuse a request for each stored artifact using this invocation's
+    identity, and scope all work to those requests. Existing identities and
+    their attempt history remain untouched.
     """
     with WorkflowDatabase(args.db) as db:
         warn_if_legacy_database(db)
@@ -107,7 +111,13 @@ def run_orchestrate(args: argparse.Namespace, empty_db_warning: str) -> int:
         eco = args.ecosystem
         target = getattr(args, "target", None)
         skip_release = target is not None and getattr(eco, "target_skip_release", lambda t: False)(target)
-        view = RequestView(db, skip_release)
+        request_ids = set()
+        artifacts = dict.fromkeys(request.artifact for request in db.list_requests())
+        for artifact in artifacts:
+            request, _ = db.get_or_create_request(**eco.request_identity(artifact, args))
+            assert request.id is not None
+            request_ids.add(request.id)
+        view = RequestView(db, skip_release, request_ids=request_ids)
 
         if getattr(args, "print_resources", False):
             return _run_print_resources(args, view)

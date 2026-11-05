@@ -76,6 +76,7 @@ class JavaScriptEcosystem:
             release_plan=getattr(args, "release_plan", "") or "",
             target=target,
             artifact=ref,
+            source_repo=getattr(args, "source_git_url", config.DEFAULT_SOURCE_GIT_URL),
         )
 
     def target_skip_release(self, target: str) -> bool:

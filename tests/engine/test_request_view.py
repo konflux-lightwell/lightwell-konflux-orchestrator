@@ -15,11 +15,12 @@ limitations under the License.
 """
 
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
 from import_orchestrator.database import WorkflowDatabase
-from import_orchestrator.engine import RequestView
+from import_orchestrator.engine import PipelineMonitor, ReleaseMonitor, RequestView
 from import_orchestrator.models import ClusterResource, Phase, PhaseStatus, Request, RequestState
 
 
@@ -80,6 +81,38 @@ class TestState:
 
 
 class TestSelectors:
+    def test_scope_applies_to_all_selectors(self, db):
+        selected = _pending(db, "selected")
+        _running(db, "other-running")
+        _failed(db, "other-failed")
+        view = RequestView(db, skip_release=False, request_ids={selected.id})
+        assert view.requests() == [selected]
+        assert view.pending() == [selected]
+        assert view.retry_candidates(3) == []
+        assert view.in_flight_count() == 0
+        assert view.statistics() == {"pending": 1, "running": 0, "releasing": 0, "success": 0, "failed": 0}
+        assert not view.is_complete(3)
+
+    def test_empty_scope_is_complete_even_with_pending_requests(self, db):
+        _pending(db, "other")
+        view = RequestView(db, skip_release=False, request_ids=set())
+        assert view.requests() == []
+        assert view.is_complete(3)
+
+    @pytest.mark.parametrize("intake_status", [PhaseStatus.RUNNING, PhaseStatus.SUCCESS])
+    def test_monitors_leave_requests_outside_scope_untouched(self, db, intake_status):
+        selected = _pending(db, "selected")
+        other = _running(db, "other")
+        attempt = db.latest_attempt(other.id)
+        db.upsert_phase(attempt.id, Phase.INTAKE, intake_status, ClusterResource.PIPELINE_RUN, "other")
+        phases_before = db.latest_phase_map(other.id)
+        view = RequestView(db, skip_release=True, request_ids={selected.id})
+        kube = MagicMock()
+        PipelineMonitor(view, kube).update_statuses()
+        ReleaseMonitor(view, kube, max_parallel=5, prefix="python-build-").update_statuses()
+        assert kube.mock_calls == []
+        assert db.latest_phase_map(other.id) == phases_before
+
     def test_pending_lists_only_unattempted(self, db, view):
         _pending(db, "p1")
         _running(db, "r1")

@@ -36,9 +36,11 @@ class RequestView:
     ``max_retries`` retries after the first attempt).
     """
 
-    def __init__(self, db: WorkflowDatabase, skip_release: bool):
+    def __init__(self, db: WorkflowDatabase, skip_release: bool, *, request_ids: set[int] | None = None):
         self.db = db
         self.skip_release = skip_release
+        # None selects the whole database; an empty set selects no requests.
+        self.request_ids = request_ids
 
     def state(self, request: Request) -> RequestState:
         """Return the overall :class:`RequestState` of a Request."""
@@ -46,8 +48,11 @@ class RequestView:
         return derive_state(self.db.latest_phase_map(request.id), self.skip_release)
 
     def requests(self) -> list[Request]:
-        """Return every Request, ordered by id."""
-        return self.db.list_requests()
+        """Return requests in this invocation's scope, ordered by id."""
+        requests = self.db.list_requests()
+        if self.request_ids is None:
+            return requests
+        return [request for request in requests if request.id in self.request_ids]
 
     def pending(self) -> list[Request]:
         """Requests awaiting their first (or a recovered) intake trigger.
