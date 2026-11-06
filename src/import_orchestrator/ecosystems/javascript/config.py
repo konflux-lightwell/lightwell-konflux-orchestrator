@@ -28,6 +28,11 @@ PIPELINERUN_PREFIX = "javascript-validated-build-"
 # (``javascript-validated-build``). Align with a future rename to
 # ``javascript-validated`` when the KRD component is renamed.
 TARGET_CONFIGS: dict[str, dict] = {
+    "VALIDATED_STAGE": {
+        "app": "javascript-validated-stage",
+        "component": "javascript-validated-stage-build",
+        "service_account": "build-pipeline-javascript-validated-build",
+    },
     "VALIDATED": {
         "app": "javascript-validated",
         "component": "javascript-validated-build",
