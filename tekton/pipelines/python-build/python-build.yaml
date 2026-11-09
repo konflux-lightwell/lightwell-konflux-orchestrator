@@ -19,8 +19,8 @@ spec:
 
     Validated:
       Builds a straight upstream rebuild. No version suffix is applied — the
-      wheel ships with the upstream version as-is. No prebuilt wheel server is
-      used; dependencies are resolved from upstream sources.
+      wheel ships with the upstream version as-is. An optional prebuilt wheel
+      server can be used for dependency resolution.
 
     Pipeline flow:
       1. git-clone-oci-ta: Clone pypi.org-<package> from lightwell-builds at the
@@ -53,7 +53,7 @@ spec:
         Build mode. Accepted values:
           Backport — remediated build, B/N from commits since ingestion tag.
           Novel    — remediated build, B from ingestion→baseline, N from baseline→HEAD.
-          Validated — upstream rebuild; no version suffix, no wheel server.
+          Validated — upstream rebuild; no version suffix, optional wheel server.
       type: string
     - name: BUILD_CONFIGS_REPO_URL
       description: Build-config registry URL, supplied by the orchestrator.
@@ -65,7 +65,7 @@ spec:
     - name: PYTHON_BUILDER_IMAGE
       description: Digest-pinned python-builder image containing the Lightwell task CLIs.
       type: string
-      default: quay.io/light-factory/python-builder-cli@sha256:5232f3c38d91ca301a08cbc632418ea9ea32203ff4f5eea4ab9453cc449abca3
+      default: quay.io/light-factory/python-builder-cli@sha256:bd29cf6ae67e3556c8eae9906fa883b3b56d4e554a73aa0b15a5910e72a5a8aa
 
     - name: FATH_CUAN_IMAGE
       description: Digest-pinned fath-cuan image.

@@ -256,6 +256,8 @@ orchestrator python run <ref> [OPTIONS]
 |-----------------|---------|-------------|
 | `ref` | — | Package reference as `package==version` (e.g. `ntplib==0.4.0`) |
 | `--target` | `REMEDIATED` (or `LIGHTWELL_PYTHON_TARGET` env var) | Build target |
+| `--wheel-server-url` | `https://packages.redhat.com/lightwell/python/validated/simple/` (or `WHEEL_SERVER_URL` env var) | Wheel server for all build types, including Validated; pass `''` to disable |
+| `--python-builder-image` | Pipeline parameter default | Override the Python builder execution image for this invocation |
 | `--builds-tag` / `--builds-ref` | `<package>/<version>` | `lightwell-builds` git revision to build from |
 | `--lightwell-builds-repo-url` | derived from repository base | Exact source Git URL passed as `LIGHTWELL_BUILDS_REPO_URL` |
 | `--lightwell-builds-repo-base` | `https://gitlab.cee.redhat.com/lightwell/lightwell-builds` | Source namespace; appends `/pypi.org-<package>` |

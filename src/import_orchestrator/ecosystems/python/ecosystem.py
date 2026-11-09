@@ -62,6 +62,7 @@ class PythonEcosystem:
             builds_tag=builds_tag,
             build_type=build_type,
             wheel_server_url=getattr(args, "wheel_server_url", None),
+            python_builder_image=getattr(args, "python_builder_image", None),
         )
         return apply_pipeline_overrides(manifest, pipeline_path)
 

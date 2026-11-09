@@ -59,6 +59,7 @@ def build_pipelinerun_manifest(
     build_type: str = "Backport",
     wheel_server_url: str | None = None,
     repo_url: str | None = None,
+    python_builder_image: str | None = None,
 ) -> dict[str, Any]:
     """Build a python-build PipelineRun manifest for one package/version.
 
@@ -79,7 +80,13 @@ def build_pipelinerun_manifest(
 
     ``build_type`` controls the pipeline build mode: ``Backport`` or ``Novel``
     for remediated builds (commit-distance version suffix applied), or
-    ``Validated`` for an upstream rebuild (no version suffix, no wheel server).
+    ``Validated`` for an upstream rebuild (no version suffix).
+
+    ``wheel_server_url`` overrides the configured wheel server for every build
+    type. None uses the configured default; an empty URL disables the server.
+
+    ``python_builder_image`` overrides PYTHON_BUILDER_IMAGE only when supplied.
+    When None, omit the PipelineRun parameter so the pipeline default applies.
 
     The AI_ASSISTED and AI_MODELS params come from the AI_ASSISTED/AI_MODELS env
     vars, and Tekton Chains records them in provenance.
@@ -89,9 +96,7 @@ def build_pipelinerun_manifest(
     # version are encoded in the tag rather than a per-package repo.
     image = f"{image_repo_base}/{application}/{component}:{package}-{version}"
     tag = builds_tag or f"{package}/{version}"
-    # Validated builds skip the prebuilt wheel server; the task CLI treats an
-    # empty URL as disabled.
-    effective_wheel_server = "" if build_type == "Validated" else (wheel_server_url or config.WHEEL_SERVER_URL)
+    effective_wheel_server = config.WHEEL_SERVER_URL if wheel_server_url is None else wheel_server_url
     spec: dict[str, Any] = {
         "pipelineSpec": pipeline_spec,
         "params": [
@@ -111,6 +116,8 @@ def build_pipelinerun_manifest(
             {"name": "git-auth", "secret": {"secretName": git_auth_secret}},
         ],
     }
+    if python_builder_image is not None:
+        spec["params"].append({"name": "PYTHON_BUILDER_IMAGE", "value": python_builder_image})
     if service_account:
         spec["taskRunTemplate"] = {"serviceAccountName": service_account}
 
