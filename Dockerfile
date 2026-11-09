@@ -1,5 +1,5 @@
 # Stage 1: build the wheel
-FROM registry.access.redhat.com/ubi9/python-312-minimal@sha256:b99faaadaf10de740d60c713a047088df2f46ebdd766e9c6a0957896f44d0ea1 as builder
+FROM registry.access.redhat.com/ubi9/python-312-minimal@sha256:5bf075c20f9544544e5eb8cb82fdcb11bb9bc15848b2e648c02ec10f0cea153c as builder
 
 USER 0
 WORKDIR /build
@@ -14,7 +14,7 @@ RUN pip install --no-cache-dir build \
  && python -m build --wheel --outdir /build/dist
 
 # Stage 2: minimal runtime image
-FROM registry.access.redhat.com/ubi9/python-312-minimal@sha256:b99faaadaf10de740d60c713a047088df2f46ebdd766e9c6a0957896f44d0ea1
+FROM registry.access.redhat.com/ubi9/python-312-minimal@sha256:5bf075c20f9544544e5eb8cb82fdcb11bb9bc15848b2e648c02ec10f0cea153c
 
 WORKDIR /opt/import-orchestrator
 
