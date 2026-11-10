@@ -410,6 +410,10 @@ retry. A terminally failed Release is *not* adopted, so a retry after `1` genuin
 | `LIGHTWELL_ARTIFACT_TYPE` | No | `STAGE` (default), `VALIDATED`, `REMEDIATED`, or `NOVEL` |
 | `LIGHTWELL_PYTHON_TARGET` | No | Build target for the `python` ecosystem: `REMEDIATED` (default) |
 | `TEKTON_PIPELINE_DIR` | No | Path to directory containing Tekton pipeline definitions (defaults to `tekton/` in repository root) |
+| `BUILD_CONFIGS_REPO_URL` | **Yes, for the `python-sdist` ecosystem** | HTTPS URL (no embedded credentials) of the calunga-python build-config repository. Required for every `python-sdist` trigger, not just `canonical_source.type: git` routing — `build_pipelinerun` unconditionally resolves canonical source before building any PipelineRun manifest. |
+| `BUILD_CONFIGS_REVISION` | No | Git revision (branch or tag) of the build-config repo to clone. Defaults to `main`. |
+
+> **`python-sdist` now fails closed on a missing build-config entry.** Every package/version triggered through the `python-sdist` ecosystem must have a matching `packages/<name>.json` entry (with a valid PEP 440 version) in the configured calunga-python repo — if it's missing, or the entry's reported `canonical_source.type` is neither `git` nor `pypi-sdist`, the trigger now fails with `TriggerError` instead of proceeding as plain sdist ingestion, which was the behavior before this resolver existed. This also means `git` and network access to the configured `BUILD_CONFIGS_REPO_URL` host are now hard runtime prerequisites for the `python-sdist` ecosystem, in addition to `BUILD_CONFIGS_REPO_URL` itself.
 
 
 ### Operation Flow
