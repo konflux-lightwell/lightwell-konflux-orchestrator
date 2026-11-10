@@ -100,6 +100,12 @@ spec:
 
   tasks:
     # ── Step 1: Clone upstream git source & resolve ref to exact commit SHA ───
+    # NOTE(LWLP-4827): revision is pinned to the taisce-cuan feature branch
+    # (feat/LWLP-4827-push-git-source-wiring) because fetch-git-source.yaml isn't on
+    # taisce-cuan main yet. Flip this to `main` once that branch merges — matching the
+    # precedent set by release-service-catalog's python-sdist-mirror.yaml, which did the
+    # same feature-branch-then-main flip for its own taisce-cuan task resolver (see
+    # commit ce6bb33b "fix(LWLP-2287): resolve source mirror tasks from main").
     - name: fetch-git-source
       taskRef:
         resolver: git
@@ -107,7 +113,7 @@ spec:
           - name: url
             value: https://github.com/konflux-lightwell/taisce-cuan.git
           - name: revision
-            value: main
+            value: feat/LWLP-4827-push-git-source-wiring
           - name: pathInRepo
             value: tekton/tasks/fetch-git-source/0.1/fetch-git-source.yaml
       params:
