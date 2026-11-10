@@ -38,6 +38,14 @@ _PACKAGES_SUBDIR = "packages"
 # ASSUMPTION: the script lives at this fixed path within calunga-python. Also unverified.
 _SCRIPT_RELATIVE_PATH = Path("scripts") / "get-canonical-source.py"
 
+# The only two vocabulary values canonical_source.type may take. Anything else -- a
+# missing/None type, or an unrecognized string like "wheel" -- is treated as a
+# malformed/drifted calunga-python result and fails closed via TriggerError, rather
+# than silently passing an invented value through to callers (Task 9's ecosystem.py
+# branches on type == "git" and would otherwise silently route anything else, e.g.
+# "wheel", down the sdist path as if it were ordinary pypi-sdist).
+_VALID_SOURCE_TYPES = ("git", "pypi-sdist")
+
 
 def resolve_canonical_source(package: str, version: str) -> dict:
     """Resolve calunga-python's canonical-source verdict for a package/version.
@@ -55,9 +63,11 @@ def resolve_canonical_source(package: str, version: str) -> dict:
     Raises:
         TriggerError: If ``BUILD_CONFIGS_REPO_URL``/``BUILD_CONFIGS_REVISION`` are
             misconfigured, the clone or script invocation fails, the script's
-            output is not valid JSON, or the script reports ``type: "git"`` without
-            both ``upstream_url`` and ``ref``. Fails closed rather than silently
-            falling back to sdist.
+            output is not valid JSON, the script reports a ``type`` other than
+            ``"git"``/``"pypi-sdist"`` (including a missing/``None`` type), or it
+            reports ``type: "git"`` without both ``upstream_url`` and ``ref``.
+            Fails closed rather than silently falling back to sdist or passing an
+            unrecognized type through.
     """
     repo_url = get_build_config_source()
     revision = get_build_config_revision()
@@ -69,6 +79,13 @@ def resolve_canonical_source(package: str, version: str) -> dict:
         shutil.rmtree(clone_dir, ignore_errors=True)
 
     source_type = result.get("type")
+    if source_type not in _VALID_SOURCE_TYPES:
+        raise TriggerError(
+            f"calunga-python build-config for {package}=={version} reported an "
+            f"unrecognized canonical_source type {source_type!r} (expected one of "
+            f"{_VALID_SOURCE_TYPES}): {result!r}"
+        )
+
     if source_type == "git":
         upstream_url = result.get("upstream_url")
         ref = result.get("ref")
@@ -91,6 +108,13 @@ def _clone_build_configs(repo_url: str, revision: str) -> Path:
     Note: `import_orchestrator.clients.git.clone()`/`GitClient` don't support
     cloning a specific ref, only the remote's default branch, so this clones
     directly via `git clone --branch <revision>` instead of reusing them.
+
+    Caveat: `--branch` resolves branch and tag names reliably, but will not
+    fetch an arbitrary bare commit SHA that isn't itself the tip of some ref,
+    even though `get_build_config_revision()` is documented elsewhere as
+    accepting "a valid Git revision" (which could be a SHA). In practice
+    `BUILD_CONFIGS_REVISION` defaults to "main" and is expected to stay
+    branch/tag-shaped; revisit this if it's ever pinned to a bare SHA.
 
     Raises:
         TriggerError: If git is unavailable or the clone fails (e.g. unknown

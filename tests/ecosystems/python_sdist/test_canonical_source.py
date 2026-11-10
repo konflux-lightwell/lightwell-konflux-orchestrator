@@ -113,6 +113,20 @@ class TestResolveCanonicalSource:
         with pytest.raises(TriggerError):
             resolve_canonical_source("broken-pkg", "1.0.0")
 
+    def test_resolve_canonical_source_raises_on_missing_type(self, monkeypatch, tmp_path):
+        _stub_clone(monkeypatch, tmp_path)
+        _stub_script(monkeypatch, {})
+
+        with pytest.raises(TriggerError):
+            resolve_canonical_source("broken-pkg", "1.0.0")
+
+    def test_resolve_canonical_source_raises_on_unrecognized_type(self, monkeypatch, tmp_path):
+        _stub_clone(monkeypatch, tmp_path)
+        _stub_script(monkeypatch, {"type": "wheel"})
+
+        with pytest.raises(TriggerError):
+            resolve_canonical_source("broken-pkg", "1.0.0")
+
     def test_resolve_canonical_source_never_leaks_internal_url(self, monkeypatch, tmp_path):
         _stub_clone(monkeypatch, tmp_path)
         _stub_script(
