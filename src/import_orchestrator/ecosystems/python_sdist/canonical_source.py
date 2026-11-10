@@ -17,8 +17,10 @@ limitations under the License.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -28,15 +30,58 @@ from import_orchestrator.ecosystems.python.build_config import (
 )
 from import_orchestrator.engine.errors import TriggerError
 
-# ASSUMPTION (unverified against the real calunga-python repo — flag for human review
-# before this ships): calunga-python's package build-configs live under a top-level
-# "packages/" directory in the repo, i.e. `<clone_dir>/packages`. Confirm against
-# `calunga-python/scripts/get-canonical-source.py`'s own `--packages-dir` argument
-# description/default before relying on this in production.
+# Trust note: the build-config repository and revision cloned below
+# (BUILD_CONFIGS_REPO_URL/BUILD_CONFIGS_REVISION) are operator-configured, not
+# user/caller-supplied, so the ref executed here is trusted the same way any other
+# deployment-pinned dependency is. Even so, the cloned `get-canonical-source.py` is run
+# with a minimal environment (PATH/HOME/LANG only, see `_minimal_subprocess_env`) as
+# defense-in-depth against it incidentally observing the operator's cluster
+# credentials (KONFLUX_TOKEN/KUBECONFIG/etc.) -- this is a precaution, not a sandbox.
+
+# Confirmed against calunga-python's scripts/get-canonical-source.py: its
+# DEFAULT_PACKAGES_DIR resolves to a top-level "packages/" directory at the repo
+# root, i.e. `<clone_dir>/packages` -- matching this constant.
 _PACKAGES_SUBDIR = "packages"
 
-# ASSUMPTION: the script lives at this fixed path within calunga-python. Also unverified.
+# Confirmed against calunga-python: the script lives at this fixed path.
 _SCRIPT_RELATIVE_PATH = Path("scripts") / "get-canonical-source.py"
+
+# Clamp how long we'll wait on network/subprocess operations against the
+# (operator-configured, but still external) build-config repository, so a hung
+# `git clone` or `get-canonical-source.py` invocation -- e.g. an unconfigured auth
+# prompt blocking on /dev/tty, or a stalled network -- can't wedge the trigger loop
+# forever.
+_CLONE_TIMEOUT_SECONDS = 60
+_SCRIPT_TIMEOUT_SECONDS = 30
+
+
+def _no_prompt_env() -> dict[str, str]:
+    """Full process environment with GIT_TERMINAL_PROMPT disabled.
+
+    Prevents `git` from blocking indefinitely on an interactive credential
+    prompt when the configured build-config repo requires auth that isn't
+    available non-interactively.
+    """
+    env = os.environ.copy()
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    return env
+
+
+def _minimal_subprocess_env() -> dict[str, str]:
+    """A minimal environment for running untrusted-ish cloned script code.
+
+    Deliberately excludes the orchestrator's full environment (cluster
+    credentials such as KONFLUX_TOKEN/KUBECONFIG, etc.) as defense-in-depth --
+    see the module-level trust note above. Also disables git prompts, since the
+    script itself may shell out to git.
+    """
+    env = {"GIT_TERMINAL_PROMPT": "0"}
+    for key in ("PATH", "HOME", "LANG"):
+        value = os.environ.get(key)
+        if value is not None:
+            env[key] = value
+    return env
+
 
 # The only two vocabulary values canonical_source.type may take. Anything else -- a
 # missing/None type, or an unrecognized string like "wheel" -- is treated as a
@@ -117,8 +162,9 @@ def _clone_build_configs(repo_url: str, revision: str) -> Path:
     branch/tag-shaped; revisit this if it's ever pinned to a bare SHA.
 
     Raises:
-        TriggerError: If git is unavailable or the clone fails (e.g. unknown
-            revision, unreachable repo).
+        TriggerError: If git is unavailable, the clone fails (e.g. unknown
+            revision, unreachable repo), or it doesn't complete within
+            `_CLONE_TIMEOUT_SECONDS`.
     """
     dest = Path(tempfile.mkdtemp(prefix="calunga-python-"))
     try:
@@ -127,10 +173,17 @@ def _clone_build_configs(repo_url: str, revision: str) -> Path:
             check=True,
             capture_output=True,
             text=True,
+            env=_no_prompt_env(),
+            timeout=_CLONE_TIMEOUT_SECONDS,
         )
     except OSError as exc:
         shutil.rmtree(dest, ignore_errors=True)
         raise TriggerError(f"unable to run git clone for build-config repo {repo_url}: {exc}") from exc
+    except subprocess.TimeoutExpired as exc:
+        shutil.rmtree(dest, ignore_errors=True)
+        raise TriggerError(
+            f"timed out cloning build-config repo {repo_url}@{revision} after {_CLONE_TIMEOUT_SECONDS}s"
+        ) from exc
     except subprocess.CalledProcessError as exc:
         shutil.rmtree(dest, ignore_errors=True)
         raise TriggerError(f"failed to clone build-config repo {repo_url}@{revision}: {exc.stderr.strip()}") from exc
@@ -141,20 +194,28 @@ def _run_get_canonical_source(clone_dir: Path, package: str, version: str) -> di
     """Run calunga-python's get-canonical-source.py and parse its JSON output.
 
     Raises:
-        TriggerError: If the script is unavailable, exits non-zero, or its
-            stdout is not valid JSON.
+        TriggerError: If the script is unavailable, exits non-zero, its stdout
+            is not valid JSON, or it doesn't complete within
+            `_SCRIPT_TIMEOUT_SECONDS`.
     """
     script = clone_dir / _SCRIPT_RELATIVE_PATH
     packages_dir = clone_dir / _PACKAGES_SUBDIR
     try:
         result = subprocess.run(
-            ["python3", str(script), package, version, "--packages-dir", str(packages_dir)],
+            [sys.executable, str(script), package, version, "--packages-dir", str(packages_dir)],
             check=True,
             capture_output=True,
             text=True,
+            env=_minimal_subprocess_env(),
+            timeout=_SCRIPT_TIMEOUT_SECONDS,
         )
     except OSError as exc:
         raise TriggerError(f"unable to run calunga-python's get-canonical-source.py: {exc}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise TriggerError(
+            f"timed out running calunga-python's get-canonical-source.py for "
+            f"{package}=={version} after {_SCRIPT_TIMEOUT_SECONDS}s"
+        ) from exc
     except subprocess.CalledProcessError as exc:
         raise TriggerError(
             f"calunga-python get-canonical-source.py failed for {package}=={version}: {exc.stderr.strip()}"

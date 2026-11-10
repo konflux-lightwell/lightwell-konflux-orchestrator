@@ -168,6 +168,15 @@ class TestCloneBuildConfigs:
         with pytest.raises(TriggerError):
             _clone_build_configs(str(tmp_path / "does-not-exist"), "main")
 
+    def test_clone_timeout_raises_trigger_error(self, monkeypatch, build_configs_repo: Path):
+        def _fake_run(*args, **kwargs):
+            raise subprocess.TimeoutExpired(cmd=args[0] if args else kwargs.get("args"), timeout=kwargs.get("timeout"))
+
+        monkeypatch.setattr(subprocess, "run", _fake_run)
+
+        with pytest.raises(TriggerError):
+            _clone_build_configs(str(build_configs_repo), "release")
+
 
 class TestRunGetCanonicalSource:
     """Exercises the real subprocess call against a tiny stand-in script."""
@@ -203,7 +212,16 @@ class TestRunGetCanonicalSource:
             _run_get_canonical_source(tmp_path, "pkg", "1.0.0")
 
     def test_missing_script_raises_trigger_error(self, tmp_path: Path):
-        # No script written at all -- python3 exits non-zero (file not found).
+        # No script written at all -- sys.executable exits non-zero (file not found).
+        with pytest.raises(TriggerError):
+            _run_get_canonical_source(tmp_path, "pkg", "1.0.0")
+
+    def test_script_timeout_raises_trigger_error(self, monkeypatch, tmp_path: Path):
+        def _fake_run(*args, **kwargs):
+            raise subprocess.TimeoutExpired(cmd=args[0] if args else kwargs.get("args"), timeout=kwargs.get("timeout"))
+
+        monkeypatch.setattr(subprocess, "run", _fake_run)
+
         with pytest.raises(TriggerError):
             _run_get_canonical_source(tmp_path, "pkg", "1.0.0")
 
