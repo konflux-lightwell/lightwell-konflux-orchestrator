@@ -37,7 +37,7 @@ spec:
       description: Package version string.
       type: string
     - name: IMAGE
-      description: Destination OCI artifact reference for the git-source Snapshot (e.g. quay.io/.../sdists:pkg-ver).
+      description: Destination OCI artifact reference for the git-source Snapshot (e.g. quay.io/.../git-source:pkg-ver).
       type: string
     - name: UPSTREAM_URL
       description: URL of the upstream git repository to clone.
