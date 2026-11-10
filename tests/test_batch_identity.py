@@ -51,6 +51,15 @@ def test_batch_identity_matches_invocation(ecosystem, import_command, options, t
         pipeline = tmp_path / "pipelines" / name / f"{name}.yaml"
         pipeline.parent.mkdir(parents=True)
         pipeline.write_text("spec:\n  tasks: []\n")
+    if ecosystem == "python-sdist":
+        # build_pipelinerun resolves canonical_source.type against calunga-python at
+        # trigger time (LWLP-4827); this test doesn't exercise that resolution, so
+        # stub it to the sdist route rather than letting it attempt a real clone
+        # against the fake BUILD_CONFIGS_REPO_URL another test module leaves set.
+        monkeypatch.setattr(
+            "import_orchestrator.ecosystems.python_sdist.ecosystem.resolve_canonical_source",
+            lambda package, version: {"type": "pypi-sdist"},
+        )
 
     refs = (
         [f"quay.io/example/pkg:build-{n}@sha256:{str(n) * 64}" for n in [1, 2]]
