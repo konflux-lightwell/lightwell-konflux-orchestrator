@@ -22,6 +22,7 @@ from pathlib import Path
 
 import pytest
 
+from import_orchestrator.ecosystems.python.build_config import get_build_config_local_path
 from import_orchestrator.ecosystems.python_sdist import canonical_source
 from import_orchestrator.ecosystems.python_sdist.canonical_source import (
     _clone_build_configs,
@@ -145,9 +146,91 @@ class TestResolveCanonicalSource:
 
     def test_resolve_canonical_source_requires_build_configs_repo_url(self, monkeypatch, tmp_path):
         monkeypatch.delenv("BUILD_CONFIGS_REPO_URL", raising=False)
+        monkeypatch.delenv("BUILD_CONFIGS_LOCAL_PATH", raising=False)
 
         with pytest.raises(TriggerError):
             resolve_canonical_source("griffe", "2.3.2")
+
+    def test_resolve_canonical_source_uses_local_path_without_cloning(self, monkeypatch, tmp_path):
+        """When BUILD_CONFIGS_LOCAL_PATH is set (e.g. the orchestrator is already
+        running from within a calunga-python checkout, as it is in calunga-python's
+        own CI), resolve_canonical_source must read it directly and never clone."""
+        local_repo = tmp_path / "already-checked-out-calunga-python"
+        local_repo.mkdir()
+        monkeypatch.setenv("BUILD_CONFIGS_LOCAL_PATH", str(local_repo))
+        monkeypatch.delenv("BUILD_CONFIGS_REPO_URL", raising=False)
+
+        def _clone_should_not_be_called(repo_url, revision):
+            raise AssertionError("_clone_build_configs must not be called when BUILD_CONFIGS_LOCAL_PATH is set")
+
+        monkeypatch.setattr(canonical_source, "_clone_build_configs", _clone_should_not_be_called)
+
+        seen_clone_dir = None
+
+        def _fake_run_script(clone_dir, package, version):
+            nonlocal seen_clone_dir
+            seen_clone_dir = clone_dir
+            return {"type": "pypi-sdist"}
+
+        monkeypatch.setattr(canonical_source, "_run_get_canonical_source", _fake_run_script)
+
+        result = resolve_canonical_source("sniffio", "1.3.1")
+
+        assert result == {"type": "pypi-sdist"}
+        assert seen_clone_dir == local_repo
+
+    def test_resolve_canonical_source_local_path_does_not_delete_the_directory(self, monkeypatch, tmp_path):
+        """Unlike a clone (owned, scratch, cleaned up after use), a configured local
+        path is someone else's checkout -- it must survive the call."""
+        local_repo = tmp_path / "already-checked-out-calunga-python"
+        local_repo.mkdir()
+        marker = local_repo / "marker.txt"
+        marker.write_text("still here")
+        monkeypatch.setenv("BUILD_CONFIGS_LOCAL_PATH", str(local_repo))
+        monkeypatch.delenv("BUILD_CONFIGS_REPO_URL", raising=False)
+        _stub_script(monkeypatch, {"type": "pypi-sdist"})
+
+        resolve_canonical_source("sniffio", "1.3.1")
+
+        assert marker.read_text() == "still here"
+
+    def test_resolve_canonical_source_raises_when_local_path_missing(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("BUILD_CONFIGS_LOCAL_PATH", str(tmp_path / "does-not-exist"))
+        monkeypatch.delenv("BUILD_CONFIGS_REPO_URL", raising=False)
+
+        with pytest.raises(TriggerError):
+            resolve_canonical_source("griffe", "2.3.2")
+
+    def test_resolve_canonical_source_local_path_takes_priority_over_repo_url(self, monkeypatch, tmp_path):
+        """BUILD_CONFIGS_REPO_URL may still be configured (e.g. left over from a
+        shared environment template) -- BUILD_CONFIGS_LOCAL_PATH must win when set,
+        not merely be an alternative when the URL is absent."""
+        local_repo = tmp_path / "already-checked-out-calunga-python"
+        local_repo.mkdir()
+        monkeypatch.setenv("BUILD_CONFIGS_LOCAL_PATH", str(local_repo))
+        monkeypatch.setenv("BUILD_CONFIGS_REPO_URL", "https://example.test/calunga-python")
+
+        def _clone_should_not_be_called(repo_url, revision):
+            raise AssertionError("_clone_build_configs must not be called when BUILD_CONFIGS_LOCAL_PATH is set")
+
+        monkeypatch.setattr(canonical_source, "_clone_build_configs", _clone_should_not_be_called)
+        _stub_script(monkeypatch, {"type": "pypi-sdist"})
+
+        assert resolve_canonical_source("sniffio", "1.3.1") == {"type": "pypi-sdist"}
+
+
+class TestGetBuildConfigLocalPath:
+    def test_returns_none_when_unset(self, monkeypatch):
+        monkeypatch.delenv("BUILD_CONFIGS_LOCAL_PATH", raising=False)
+        assert get_build_config_local_path() is None
+
+    def test_returns_none_when_blank(self, monkeypatch):
+        monkeypatch.setenv("BUILD_CONFIGS_LOCAL_PATH", "   ")
+        assert get_build_config_local_path() is None
+
+    def test_returns_the_configured_path(self, monkeypatch):
+        monkeypatch.setenv("BUILD_CONFIGS_LOCAL_PATH", "/some/checkout")
+        assert get_build_config_local_path() == "/some/checkout"
 
 
 class TestCloneBuildConfigs:

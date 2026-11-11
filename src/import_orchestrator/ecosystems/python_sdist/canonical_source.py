@@ -25,6 +25,7 @@ import tempfile
 from pathlib import Path
 
 from import_orchestrator.ecosystems.python.build_config import (
+    get_build_config_local_path,
     get_build_config_revision,
     get_build_config_source,
 )
@@ -95,8 +96,12 @@ _VALID_SOURCE_TYPES = ("git", "pypi-sdist")
 def resolve_canonical_source(package: str, version: str) -> dict:
     """Resolve calunga-python's canonical-source verdict for a package/version.
 
-    Shallow-clones the configured build-config repository (calunga-python) and
-    runs its ``get-canonical-source.py`` script to determine whether this
+    When ``BUILD_CONFIGS_LOCAL_PATH`` is configured (the common case: the
+    orchestrator is already running from within a checkout of the build-config
+    repository itself, e.g. calunga-python's own CI), reads directly from that
+    path. Otherwise shallow-clones the configured build-config repository
+    (``BUILD_CONFIGS_REPO_URL``/``BUILD_CONFIGS_REVISION``). Either way, runs the
+    repo's ``get-canonical-source.py`` script to determine whether this
     package/version should be ingested from PyPI sdist or from an upstream Git
     checkout.
 
@@ -106,22 +111,30 @@ def resolve_canonical_source(package: str, version: str) -> dict:
         may emit, even if present in its output.
 
     Raises:
-        TriggerError: If ``BUILD_CONFIGS_REPO_URL``/``BUILD_CONFIGS_REVISION`` are
-            misconfigured, the clone or script invocation fails, the script's
-            output is not valid JSON, the script reports a ``type`` other than
+        TriggerError: If ``BUILD_CONFIGS_LOCAL_PATH`` is set but doesn't exist, or
+            (when it's unset) ``BUILD_CONFIGS_REPO_URL``/``BUILD_CONFIGS_REVISION``
+            are misconfigured or the clone fails; or if the script invocation
+            fails, its output is not valid JSON, it reports a ``type`` other than
             ``"git"``/``"pypi-sdist"`` (including a missing/``None`` type), or it
             reports ``type: "git"`` without both ``upstream_url`` and ``ref``.
             Fails closed rather than silently falling back to sdist or passing an
             unrecognized type through.
     """
-    repo_url = get_build_config_source()
-    revision = get_build_config_revision()
+    local_path = get_build_config_local_path()
+    if local_path is not None:
+        repo_dir = Path(local_path)
+        if not repo_dir.is_dir():
+            raise TriggerError(f"BUILD_CONFIGS_LOCAL_PATH does not exist or is not a directory: {local_path}")
+        result = _run_get_canonical_source(repo_dir, package, version)
+    else:
+        repo_url = get_build_config_source()
+        revision = get_build_config_revision()
 
-    clone_dir = _clone_build_configs(repo_url, revision)
-    try:
-        result = _run_get_canonical_source(clone_dir, package, version)
-    finally:
-        shutil.rmtree(clone_dir, ignore_errors=True)
+        clone_dir = _clone_build_configs(repo_url, revision)
+        try:
+            result = _run_get_canonical_source(clone_dir, package, version)
+        finally:
+            shutil.rmtree(clone_dir, ignore_errors=True)
 
     source_type = result.get("type")
     if source_type not in _VALID_SOURCE_TYPES:
