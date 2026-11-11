@@ -90,7 +90,9 @@ spec:
       description: Target directories in component's source code to scan with SAST tools. Multiple values should be separated with commas.
       name: sast-target-dirs
       type: string
-    - default: []
+    - default:
+      - PIPELINE_GIT_URL={{source_url}}
+      - PIPELINE_GIT_REVISION={{revision}}
       description: Array of --build-arg values ("arg=value" strings) for buildah
       name: build-args
       type: array
