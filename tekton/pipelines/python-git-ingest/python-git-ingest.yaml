@@ -106,6 +106,9 @@ spec:
     # precedent set by release-service-catalog's python-sdist-mirror.yaml, which did the
     # same feature-branch-then-main flip for its own taisce-cuan task resolver (see
     # commit ce6bb33b "fix(LWLP-2287): resolve source mirror tasks from main").
+    # Per ADR-0019, build-phase pipelines must reference tasks via `resolver: bundles`
+    # pinned by digest, never `resolver: git` — this task's git-resolver use is a known,
+    # tracked gap (not yet onboarded to Konflux bundle build), see LWLP-5127.
     - name: fetch-git-source
       taskRef:
         resolver: git
@@ -136,176 +139,33 @@ spec:
 
     # ── Step 2: Package the git checkout as an OCI artifact Snapshot ──────────
     #
-    # DESIGN NOTE (LWLP-4827 / Task 7): fromager-build-sdist (the sdist route's
-    # OCI-image-creation task, quay.io/konflux-ci/tekton-catalog/task-fromager-build-sdist:0.1)
-    # is an opaque, digest-pinned external catalog bundle. Its internals were inspected
-    # directly (2026-11-10) via:
-    #   tkn bundle list quay.io/konflux-ci/tekton-catalog/task-fromager-build-sdist:0.1@sha256:99211a42d8f8ef84101351a993edbbcc4a46bb5c868ff673aedacf47ccb0d7aa task fromager-build-sdist -o yaml
-    # Finding: its final step ("create-oci-artifact") is a GENERIC, fromager-independent
-    # `oras push` of whatever files sit in a local directory — using
-    # `quay.io/konflux-ci/oras:latest@sha256:1beeecce012c99794568f74265c065839f9703d28306a8430b667f639343a98b`
-    # plus the `select-oci-auth`/`retry` helpers baked into that image. Fromager-specific
-    # normalization (the `fromager step prepare-source`/`build-sdist` calls, sdist filename
-    # verification, sdist-transformation.json bookkeeping) lives entirely in the *preceding*
-    # step and does not apply to a git checkout.
+    # DESIGN NOTE (LWLP-4827 / Task 7): the OCI-push mechanism this task uses was derived
+    # by inspecting fromager-build-sdist's internals directly (2026-11-10) — its final step
+    # is a generic, fromager-independent `oras push` of a local directory, with no
+    # sdist-specific normalization. That mechanism is now its own standalone taisce-cuan
+    # task (not inline here, per review feedback on an earlier revision of this pipeline)
+    # with a tested CLI behind it — see taisce-cuan's package-git-source-image task/CLI.
     #
-    # The konflux-ci catalog has no standalone "directory to OCI image" task independent of
-    # fromager-build-sdist (checked: no other task in this repo, release-service-catalog, or
-    # taisce-cuan does a bare directory->OCI push). This task therefore reuses the exact same
-    # generic push mechanism (same oras image/digest, same auth/retry helpers, same result
-    # shape) inline via taskSpec, pointed at fetch-git-source's SOURCE_ARTIFACT instead of a
-    # normalized sdist. No sdist normalization logic is reproduced here.
+    # NOTE(LWLP-4827): revision is pinned to the taisce-cuan feature branch for the same
+    # reason as fetch-git-source above — flip to `main` once that branch merges, and to
+    # `resolver: bundles` once LWLP-5127 lands (see the fetch-git-source note above).
     #
-    # TODO(human, pre-production): confirm `select-oci-auth`/`retry` behave identically for a
+    # TODO(human, pre-production): confirm select-oci-auth/retry behave identically for a
     # git-source Trusted Artifact tree as they do for a sdist tree (both are just directories
     # of files to this mechanism, so this is expected to be a non-issue, but hasn't been
     # exercised end-to-end against a real OCI registry push yet — see Task 10's live pilot).
     - name: package-git-source-image
       runAfter:
         - fetch-git-source
-      taskSpec:
+      taskRef:
+        resolver: git
         params:
-          - name: SOURCE_ARTIFACT
-            description: Trusted Artifact URI containing the fetched git source tree (from fetch-git-source).
-            type: string
-          - name: PACKAGE
-            description: Canonical Python package name (PEP 503 normalized).
-            type: string
-          - name: VERSION
-            description: Package version string.
-            type: string
-          - name: IMAGE
-            description: Destination reference of the OCI git-source artifact to produce.
-            type: string
-          - name: IMAGE_EXPIRES_AFTER
-            description: Delete image tag after specified time. Empty means keep.
-            type: string
-            default: ""
-          - name: caTrustConfigMapName
-            description: Name of the ConfigMap to read CA bundle data from.
-            type: string
-            default: trusted-ca
-          - name: caTrustConfigMapKey
-            description: Key in ConfigMap for CA bundle.
-            type: string
-            default: ca-bundle.crt
-          - name: git-url
-            description: Immutable source git repository URL for Konflux Snapshot attribution.
-            type: string
+          - name: url
+            value: https://github.com/konflux-lightwell/taisce-cuan.git
           - name: revision
-            description: Full immutable source commit revision for Konflux Snapshot attribution.
-            type: string
-        results:
-          - name: IMAGE_DIGEST
-            description: Digest of the git-source OCI artifact.
-          - name: IMAGE_URL
-            description: OCI artifact repository and tag where the git source was pushed.
-          - name: IMAGE_REF
-            description: Full OCI reference (repo@digest) of the git-source artifact.
-          - name: CHAINS-GIT_URL
-            description: Source git repository URL for Tekton Chains / Snapshot.
-          - name: CHAINS-GIT_COMMIT
-            description: Git commit SHA for Tekton Chains / Snapshot.
-        stepTemplate:
-          computeResources:
-            limits:
-              cpu: "1"
-              memory: 512Mi
-            requests:
-              cpu: 100m
-              memory: 128Mi
-          env:
-            - name: HOME
-              value: /tekton/home
-          securityContext:
-            runAsUser: 1001
-          volumeMounts:
-            - mountPath: /var/workdir
-              name: workdir
-        steps:
-          - name: use-source-artifact
-            image: quay.io/konflux-ci/build-trusted-artifacts:latest@sha256:2712c8a6453fc9db5fc4c2d9d952554a4eea46d2fdba47a272b79fa07f8c8c40
-            args:
-              - use
-              - $(params.SOURCE_ARTIFACT)=/var/workdir/source-repo
-            volumeMounts:
-              - mountPath: /etc/pki/tls/certs/ca-custom-bundle.crt
-                name: trusted-ca
-                readOnly: true
-                subPath: ca-bundle.crt
-          - name: create-oci-artifact
-            image: quay.io/konflux-ci/oras:latest@sha256:1beeecce012c99794568f74265c065839f9703d28306a8430b667f639343a98b
-            env:
-              - name: IMAGE
-                value: $(params.IMAGE)
-              - name: IMAGE_EXPIRES_AFTER
-                value: $(params.IMAGE_EXPIRES_AFTER)
-              - name: PACKAGE
-                value: $(params.PACKAGE)
-              - name: VERSION
-                value: $(params.VERSION)
-            script: |
-              #!/bin/bash
-              set -euo pipefail
-
-              echo "[$(date --utc -Ins)] Pushing git-source OCI artifact: ${IMAGE}"
-
-              select-oci-auth "$IMAGE" > auth.json
-              AUTHFILE="$(realpath auth.json)"
-
-              EXPIRE_LABEL=()
-              [ -n "$IMAGE_EXPIRES_AFTER" ] && EXPIRE_LABEL=("--annotation" "quay.expires-after=$IMAGE_EXPIRES_AFTER")
-
-              cd source-repo
-              shopt -s nullglob
-              FILES=( * )
-              if [ ${#FILES[@]} -eq 0 ]; then
-                echo "ERROR: source-repo/ directory is empty, no git source files to push" >&2
-                exit 1
-              fi
-
-              if ! retry oras push "$IMAGE" \
-                --registry-config "${AUTHFILE}" \
-                "${EXPIRE_LABEL[@]}" \
-                --annotation "dev.lightwell.package=${PACKAGE}" \
-                --annotation "dev.lightwell.version=${VERSION}" \
-                --annotation "dev.lightwell.pipeline=python-git-ingest" \
-                --artifact-type "application/vnd.lightwell.git-source" \
-                "${FILES[@]}"
-              then
-                echo "ERROR: Failed to push OCI artifact ${IMAGE}" >&2
-                exit 1
-              fi
-
-              if ! RESULTING_DIGEST=$(retry oras resolve --registry-config "${AUTHFILE}" "${IMAGE}"); then
-                echo "ERROR: Failed to resolve digest for ${IMAGE}" >&2
-                exit 1
-              fi
-
-              echo -n "$IMAGE" | tee "$(results.IMAGE_URL.path)"
-              echo -n "$RESULTING_DIGEST" | tee "$(results.IMAGE_DIGEST.path)"
-              echo -n "${IMAGE}@${RESULTING_DIGEST}" | tee "$(results.IMAGE_REF.path)"
-              echo -n "$(params.git-url)" > "$(results.CHAINS-GIT_URL.path)"
-              echo -n "$(params.revision)" > "$(results.CHAINS-GIT_COMMIT.path)"
-
-              echo ""
-              echo "[$(date --utc -Ins)] Done — pushed ${IMAGE}@${RESULTING_DIGEST}"
-            volumeMounts:
-              - mountPath: /etc/pki/tls/certs/ca-custom-bundle.crt
-                name: trusted-ca
-                readOnly: true
-                subPath: ca-bundle.crt
-            workingDir: /var/workdir
-        volumes:
-          - name: trusted-ca
-            configMap:
-              items:
-                - key: $(params.caTrustConfigMapKey)
-                  path: ca-bundle.crt
-              name: $(params.caTrustConfigMapName)
-              optional: true
-          - name: workdir
-            emptyDir: {}
+            value: feat/LWLP-4827-push-git-source-wiring
+          - name: pathInRepo
+            value: tekton/tasks/package-git-source-image/0.1/package-git-source-image.yaml
       params:
         - name: SOURCE_ARTIFACT
           value: $(tasks.fetch-git-source.results.SOURCE_ARTIFACT)
