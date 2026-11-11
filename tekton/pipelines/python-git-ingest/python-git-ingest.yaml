@@ -100,15 +100,6 @@ spec:
 
   tasks:
     # ── Step 1: Clone upstream git source & resolve ref to exact commit SHA ───
-    # NOTE(LWLP-4827): revision is pinned to the taisce-cuan feature branch
-    # (feat/LWLP-4827-push-git-source-wiring) because fetch-git-source.yaml isn't on
-    # taisce-cuan main yet. Flip this to `main` once that branch merges — matching the
-    # precedent set by release-service-catalog's python-sdist-mirror.yaml, which did the
-    # same feature-branch-then-main flip for its own taisce-cuan task resolver (see
-    # commit ce6bb33b "fix(LWLP-2287): resolve source mirror tasks from main").
-    # Per ADR-0019, build-phase pipelines must reference tasks via `resolver: bundles`
-    # pinned by digest, never `resolver: git` — this task's git-resolver use is a known,
-    # tracked gap (not yet onboarded to Konflux bundle build), see LWLP-5127.
     - name: fetch-git-source
       taskRef:
         resolver: git
@@ -138,22 +129,6 @@ spec:
           value: $(params.caTrustConfigMapKey)
 
     # ── Step 2: Package the git checkout as an OCI artifact Snapshot ──────────
-    #
-    # DESIGN NOTE (LWLP-4827 / Task 7): the OCI-push mechanism this task uses was derived
-    # by inspecting fromager-build-sdist's internals directly (2026-11-10) — its final step
-    # is a generic, fromager-independent `oras push` of a local directory, with no
-    # sdist-specific normalization. That mechanism is now its own standalone taisce-cuan
-    # task (not inline here, per review feedback on an earlier revision of this pipeline)
-    # with a tested CLI behind it — see taisce-cuan's package-git-source-image task/CLI.
-    #
-    # NOTE(LWLP-4827): revision is pinned to the taisce-cuan feature branch for the same
-    # reason as fetch-git-source above — flip to `main` once that branch merges, and to
-    # `resolver: bundles` once LWLP-5127 lands (see the fetch-git-source note above).
-    #
-    # TODO(human, pre-production): confirm select-oci-auth/retry behave identically for a
-    # git-source Trusted Artifact tree as they do for a sdist tree (both are just directories
-    # of files to this mechanism, so this is expected to be a non-issue, but hasn't been
-    # exercised end-to-end against a real OCI registry push yet — see Task 10's live pilot).
     - name: package-git-source-image
       runAfter:
         - fetch-git-source
