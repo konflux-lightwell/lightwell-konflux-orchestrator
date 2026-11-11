@@ -65,12 +65,12 @@ spec:
     - name: PYTHON_BUILDER_IMAGE
       description: Digest-pinned python-builder image containing the Lightwell task CLIs.
       type: string
-      default: quay.io/light-factory/python-builder-cli@sha256:5f9c6c5811b5a99e7b95b4c55e512654237fc4abe33fe580e501cace99caba94
+      default: quay.io/light-factory/python-builder-cli:latest@sha256:5f9c6c5811b5a99e7b95b4c55e512654237fc4abe33fe580e501cace99caba94
 
     - name: FATH_CUAN_IMAGE
       description: Digest-pinned fath-cuan image.
       type: string
-      default: quay.io/light-factory/fath-cuan@sha256:254f36f2a84c33df1cbd5715826f8d8bdfed23a4993a3bb8677c439cf40fcd6b
+      default: quay.io/light-factory/fath-cuan:latest@sha256:254f36f2a84c33df1cbd5715826f8d8bdfed23a4993a3bb8677c439cf40fcd6b
 
     - name: LIGHTWELL_BUILDS_REPO_URL
       description: >-
@@ -203,7 +203,7 @@ spec:
         resolver: bundles
         params:
           - name: bundle
-            value: quay.io/light-factory/tekton-catalog/task-source-to-sdist@sha256:4cc15c186c4a6bc943f1efbaba11882a5e042ec9c8656c5a64a0b98ae2aa7299
+            value: quay.io/light-factory/tekton-catalog/task-source-to-sdist:0.2@sha256:4cc15c186c4a6bc943f1efbaba11882a5e042ec9c8656c5a64a0b98ae2aa7299
           - name: name
             value: source-to-sdist
           - name: kind
@@ -245,7 +245,7 @@ spec:
         resolver: bundles
         params:
           - name: bundle
-            value: quay.io/light-factory/tekton-catalog/task-fromager-build-wheels@sha256:b1ddc69008f24c5795db5a822e0f0e42b238a47ec351a56acfde02d4b98d408d
+            value: quay.io/light-factory/tekton-catalog/task-fromager-build-wheels:0.2@sha256:b1ddc69008f24c5795db5a822e0f0e42b238a47ec351a56acfde02d4b98d408d
           - name: name
             value: python-fromager-build-wheels
           - name: kind
@@ -312,7 +312,7 @@ spec:
         resolver: bundles
         params:
           - name: bundle
-            value: quay.io/light-factory/tekton-catalog/task-attach-build-index@sha256:b0cea6fb79a6e4375efb8b3c4980fd2f0157b0fb7ba0ac21d1a7b68d94d6b501
+            value: quay.io/light-factory/tekton-catalog/task-attach-build-index:0.2@sha256:b0cea6fb79a6e4375efb8b3c4980fd2f0157b0fb7ba0ac21d1a7b68d94d6b501
           - name: name
             value: attach-build-index
           - name: kind
