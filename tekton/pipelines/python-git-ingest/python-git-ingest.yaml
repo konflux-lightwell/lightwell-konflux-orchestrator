@@ -107,14 +107,14 @@ spec:
     # ── Step 1: Clone upstream git source & resolve ref to exact commit SHA ───
     - name: fetch-git-source
       taskRef:
-        resolver: git
+        resolver: bundles
         params:
-          - name: url
-            value: https://github.com/konflux-lightwell/taisce-cuan.git
-          - name: revision
-            value: 282754bceabd06f678b2de839d7b5fbd60a04d4a
-          - name: pathInRepo
-            value: tekton/tasks/fetch-git-source/0.1/fetch-git-source.yaml
+          - name: bundle
+            value: quay.io/light-factory/tekton-catalog/task-fetch-git-source@sha256:5ea4805ebe747228557616953ef723dee1b83987c29743f3407f29d305a9d21f
+          - name: name
+            value: fetch-git-source
+          - name: kind
+            value: task
       params:
         - name: packageName
           value: $(params.PACKAGE)
@@ -138,14 +138,14 @@ spec:
       runAfter:
         - fetch-git-source
       taskRef:
-        resolver: git
+        resolver: bundles
         params:
-          - name: url
-            value: https://github.com/konflux-lightwell/taisce-cuan.git
-          - name: revision
-            value: 282754bceabd06f678b2de839d7b5fbd60a04d4a
-          - name: pathInRepo
-            value: tekton/tasks/package-git-source-image/0.1/package-git-source-image.yaml
+          - name: bundle
+            value: quay.io/light-factory/tekton-catalog/task-package-git-source-image@sha256:ab212d2c9abe1a26bacea1e0a05599f459aee681cc498ce7cbddafd5484475fa
+          - name: name
+            value: package-git-source-image
+          - name: kind
+            value: task
       params:
         - name: SOURCE_ARTIFACT
           value: $(tasks.fetch-git-source.results.SOURCE_ARTIFACT)
