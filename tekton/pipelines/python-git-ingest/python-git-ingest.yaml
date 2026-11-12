@@ -112,7 +112,7 @@ spec:
           - name: url
             value: https://github.com/konflux-lightwell/taisce-cuan.git
           - name: revision
-            value: feat/LWLP-4827-push-git-source-wiring
+            value: 282754bceabd06f678b2de839d7b5fbd60a04d4a
           - name: pathInRepo
             value: tekton/tasks/fetch-git-source/0.1/fetch-git-source.yaml
       params:
@@ -143,7 +143,7 @@ spec:
           - name: url
             value: https://github.com/konflux-lightwell/taisce-cuan.git
           - name: revision
-            value: feat/LWLP-4827-push-git-source-wiring
+            value: 282754bceabd06f678b2de839d7b5fbd60a04d4a
           - name: pathInRepo
             value: tekton/tasks/package-git-source-image/0.1/package-git-source-image.yaml
       params:
