@@ -70,7 +70,7 @@ spec:
     - name: FATH_CUAN_IMAGE
       description: Digest-pinned fath-cuan image.
       type: string
-      default: quay.io/light-factory/fath-cuan:latest@sha256:254f36f2a84c33df1cbd5715826f8d8bdfed23a4993a3bb8677c439cf40fcd6b
+      default: quay.io/light-factory/fath-cuan:latest@sha256:439c6178225f5435f53e8db8a73c86ef37806ef28b35a8baa604e63956581b28
 
     - name: LIGHTWELL_BUILDS_REPO_URL
       description: >-
