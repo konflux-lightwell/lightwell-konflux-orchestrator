@@ -47,9 +47,14 @@ spec:
       type: string
     - name: SOURCE_TYPE
       description: >-
-        Canonical source type this pipeline ingests. Always "git" — named as a param
-        rather than hardcoded in a jq filter so provenance readers can treat SOURCE_TYPE
-        as a literal PipelineRun param regardless of which ingest pipeline ran.
+        Canonical source type this pipeline ingests. Always "git". No task in this
+        pipeline reads it — it exists solely so it lands in the PipelineRun's params and
+        is captured by Tekton Chains into the SLSA provenance attestation's
+        predicate.invocation.parameters. release-service-catalog's extract-py-artifacts
+        task reads it back out from there (jq '.predicate.invocation.parameters.SOURCE_TYPE')
+        to route python-sdist-mirror's archive-sources call between the git and sdist
+        param shapes, since SOURCE_TYPE isn't otherwise observable downstream of the
+        build once the triggering PipelineRun is gone.
       type: string
       default: "git"
     - name: ociStorage
