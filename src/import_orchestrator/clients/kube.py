@@ -23,7 +23,7 @@ from typing import Literal
 import requests
 
 from import_orchestrator.clients.kube_api import KubeAPI, KubeAuth, resolve_auth
-from import_orchestrator.constants import FINGERPRINT_LABEL
+from import_orchestrator.constants import FINGERPRINT_LABEL, KONFLUX_RELEASE_URL_TEMPLATE
 from import_orchestrator.models import PipelineRunStatus
 
 
@@ -611,3 +611,43 @@ class KubeClient:
         except requests.RequestException as e:
             self._log_api_error(f"get Release {release_name} status", e, ignore_not_found=True)
             return None
+
+    def get_release_failure_detail(self, release_name: str) -> str | None:
+        """Summarise why a Release failed, from its ``Released`` condition.
+
+        Reads the ``reason`` and ``message`` of the ``Released`` condition and joins
+        them (``"<reason> - <message>"``), so a failed Release is surfaced with the
+        cluster's own explanation instead of the opaque "Release <name> failed".
+        Returns None when the Release cannot be read or carries no reason/message --
+        callers fall back to the generic message in that case.
+        """
+        release = self._fetch_resource(
+            f"/apis/appstudio.redhat.com/v1alpha1/namespaces/{self.namespace}/releases/{release_name}",
+        )
+        if release is None:
+            return None
+        released = next(
+            (c for c in release.get("status", {}).get("conditions", []) if c.get("type") == "Released"),
+            None,
+        )
+        if released is None:
+            return None
+        detail = " - ".join(p for p in (released.get("reason", ""), released.get("message", "")) if p)
+        return detail or None
+
+    def get_snapshot_application(self, snapshot_name: str) -> str | None:
+        """Read the application a Snapshot belongs to from its label.
+
+        Konflux stamps ``appstudio.openshift.io/application`` on every Snapshot; the
+        Konflux UI nests a Release under that application, so this is needed to build
+        a link to the Release page. Returns None if the Snapshot cannot be read or
+        carries no application label.
+        """
+        snap = self._get_snapshot(snapshot_name, "application")
+        if snap is None:
+            return None
+        return (snap.get("metadata", {}).get("labels") or {}).get("appstudio.openshift.io/application") or None
+
+    def release_url(self, application: str, release_name: str) -> str:
+        """Build the Konflux UI URL for a Release page in this client's namespace."""
+        return KONFLUX_RELEASE_URL_TEMPLATE.format(namespace=self.namespace, application=application, name=release_name)

@@ -114,7 +114,7 @@ class ReleaseMonitor:
 
             # Step 4: poll the tracked release for completion.
             assert release is not None and release.reference_id is not None
-            self._check_release_completion(attempt_id, release.reference_id, tag)
+            self._check_release_completion(attempt_id, release.reference_id, tag, snapshot.reference_id)
 
     @staticmethod
     def _has_reference(phase: AttemptPhase | None) -> bool:
@@ -285,7 +285,7 @@ class ReleaseMonitor:
         )
         print(f"  Tracking release/{release_name} ({tag})", file=sys.stderr)
 
-    def _check_release_completion(self, attempt_id: int, release_name: str, tag: str) -> None:
+    def _check_release_completion(self, attempt_id: int, release_name: str, tag: str, snapshot_name: str) -> None:
         """Poll release status and advance the release phase to SUCCESS/FAILED."""
         release_status = self.kube.get_release_status(release_name)
         if release_status == "True":
@@ -298,14 +298,23 @@ class ReleaseMonitor:
             )
             print(f"  ✓ Released: {tag} (release/{release_name})", file=sys.stderr)
         elif release_status == "False":
+            detail = self.kube.get_release_failure_detail(release_name)
             self.db.upsert_phase(
                 attempt_id,
                 Phase.RELEASE,
                 PhaseStatus.FAILED,
                 reference_type=ClusterResource.RELEASE,
                 reference_id=release_name,
-                error_message=f"Release {release_name} failed",
+                error_message=detail or f"Release {release_name} failed",
             )
             print(f"  ✗ Release failed: {tag} (release/{release_name})", file=sys.stderr)
+            if detail:
+                print(f"    {detail}", file=sys.stderr)
+            # Link straight to the Release page in the Konflux UI, which nests it under
+            # the Snapshot's application. Best-effort: if the application label can't be
+            # read, the failure is still logged above, just without the clickable link.
+            application = self.kube.get_snapshot_application(snapshot_name)
+            if application:
+                print(f"    {self.kube.release_url(application, release_name)}", file=sys.stderr)
         else:
             print(f"  Waiting for release/{release_name} ({tag})...", file=sys.stderr)
