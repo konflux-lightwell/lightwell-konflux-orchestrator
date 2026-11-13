@@ -625,6 +625,70 @@ class TestGetReleaseStatus:
         assert kube.get_release_status("rel-1") is None
 
 
+class TestGetReleaseFailureDetail:
+    def test_joins_reason_and_message(self, kube: KubeClient):
+        kube._mock_api.get.return_value = {
+            "status": {
+                "conditions": [
+                    {"type": "Released", "status": "False", "reason": "Failed", "message": "managed pipeline failed"}
+                ]
+            }
+        }
+
+        assert kube.get_release_failure_detail("rel-1") == "Failed - managed pipeline failed"
+
+    def test_uses_reason_alone_when_no_message(self, kube: KubeClient):
+        kube._mock_api.get.return_value = {
+            "status": {"conditions": [{"type": "Released", "status": "False", "reason": "Failed"}]}
+        }
+
+        assert kube.get_release_failure_detail("rel-1") == "Failed"
+
+    def test_returns_none_when_no_released_condition(self, kube: KubeClient):
+        kube._mock_api.get.return_value = {"status": {"conditions": [{"type": "Other", "status": "False"}]}}
+
+        assert kube.get_release_failure_detail("rel-1") is None
+
+    def test_returns_none_when_reason_and_message_empty(self, kube: KubeClient):
+        kube._mock_api.get.return_value = {"status": {"conditions": [{"type": "Released", "status": "False"}]}}
+
+        assert kube.get_release_failure_detail("rel-1") is None
+
+    def test_returns_none_when_release_cannot_be_read(self, kube: KubeClient):
+        kube._mock_api.get.side_effect = requests.HTTPError("404")
+
+        assert kube.get_release_failure_detail("rel-1") is None
+
+
+class TestGetSnapshotApplication:
+    def test_returns_application_label(self, kube: KubeClient):
+        kube._mock_api.get.return_value = {
+            "metadata": {"labels": {"appstudio.openshift.io/application": "python-sdist-mirror"}}
+        }
+
+        assert kube.get_snapshot_application("snap-1") == "python-sdist-mirror"
+
+    def test_returns_none_when_label_absent(self, kube: KubeClient):
+        kube._mock_api.get.return_value = {"metadata": {"labels": {"other": "x"}}}
+
+        assert kube.get_snapshot_application("snap-1") is None
+
+    def test_returns_none_when_snapshot_cannot_be_read(self, kube: KubeClient):
+        kube._mock_api.get.side_effect = requests.HTTPError("404")
+
+        assert kube.get_snapshot_application("snap-1") is None
+
+
+class TestReleaseUrl:
+    def test_builds_konflux_ui_url(self, kube: KubeClient):
+        url = kube.release_url("python-sdist-mirror", "rel-1")
+
+        assert url == (
+            "https://konflux-ui.apps.stone-prod-p01.wcfb.p1.openshiftapps.com/ns"
+            "/test-ns/applications/python-sdist-mirror/releases/rel-1"
+        )
+
+
 class TestGetSnapshotTestStatus:
     _ANNOTATION = "test.appstudio.openshift.io/status"
     _CONDITION = "AppStudioTestSucceeded"
