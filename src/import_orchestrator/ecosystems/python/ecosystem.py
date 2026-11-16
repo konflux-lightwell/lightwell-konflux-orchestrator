@@ -44,6 +44,7 @@ class PythonEcosystem:
             "Validated" if target in ("VALIDATED", "VALIDATED-STAGE") else "Backport"
         )
         build_type = getattr(args, "build_type", None) or default_build_type
+        # Canonical label for Kueue: stage/dev scope overrides build_type
         label_build_type = build_type_for_python(target, build_type)
         pipeline_path = config.pipeline_definition_path()
         pipeline_spec = load_pipeline(pipeline_path)
@@ -89,7 +90,7 @@ class PythonEcosystem:
                 getattr(args, "lightwell_builds_repo_base", config.LIGHTWELL_BUILDS_REPO_BASE),
                 getattr(args, "lightwell_builds_repo_url", None),
             ),
-            # build_type not yet in fingerprint (commit3)
+            build_type=build_type_for_python(target, build_type),
         )
 
     def target_skip_release(self, target: str) -> bool:

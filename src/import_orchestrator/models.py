@@ -159,6 +159,7 @@ class Request:
     target: str
     created_at: datetime | None = None
     source_repo: str = ""
+    build_type: str = ""
 
 
 @dataclass(frozen=True)
@@ -183,6 +184,8 @@ class Fingerprint:
     release_plan: str | None
     target: str
     artifact: str
+    source_repo: str = ""
+    build_type: str = ""
 
     @classmethod
     def from_request(cls, request: Request) -> Fingerprint:
@@ -195,6 +198,8 @@ class Fingerprint:
             release_plan=request.release_plan,
             target=request.target,
             artifact=request.artifact,
+            source_repo=request.source_repo,
+            build_type=request.build_type,
         )
 
     def hash(self) -> str:
@@ -220,6 +225,10 @@ class Fingerprint:
         # delimiter: ("a", "bc") and ("ab", "c") serialise differently. An
         # absent release_plan serialises as the empty field; a real plan is a
         # non-empty resource name, so the two cannot collide.
+        # ``build_type`` and ``source_repo`` are appended for ecosystems where
+        # the same target+artifact can produce distinct builds (e.g. python
+        # Backport vs Novel on REMEDIATED). Empty string preserves the old
+        # 7-field hash for existing rows.
         canonical = "\0".join(
             (
                 self.namespace,
@@ -229,6 +238,8 @@ class Fingerprint:
                 self.release_plan or "",
                 self.target,
                 self.artifact,
+                self.source_repo or "",
+                self.build_type or "",
             )
         )
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:_MAX_LABEL_VALUE_LEN]

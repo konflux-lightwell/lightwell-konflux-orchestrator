@@ -117,11 +117,23 @@ class WorkflowDatabase:
                 artifact TEXT NOT NULL,
                 target TEXT NOT NULL,
                 source_repo TEXT NOT NULL DEFAULT '',
+                build_type TEXT NOT NULL DEFAULT '',
                 created_at TIMESTAMP NOT NULL,
-                UNIQUE(namespace, application, component, pipeline, release_plan, target, artifact, source_repo)
+                UNIQUE(
+                    namespace, application, component, pipeline,
+                    release_plan, target, artifact, source_repo, build_type
+                )
             )
         """
         )
+        # Migrate existing DBs that predate the build_type column (added for
+        # python Backport vs Novel disambiguation, LWLP-5473).
+        cursor.execute("PRAGMA table_info(requests)")
+        cols = {row[1] for row in cursor.fetchall()}
+        if "build_type" not in cols:
+            cursor.execute("ALTER TABLE requests ADD COLUMN build_type TEXT NOT NULL DEFAULT ''")
+        if "source_repo" not in cols:
+            cursor.execute("ALTER TABLE requests ADD COLUMN source_repo TEXT NOT NULL DEFAULT ''")
 
         cursor.execute(
             """
@@ -167,6 +179,7 @@ class WorkflowDatabase:
         artifact: str,
         target: str,
         source_repo: str = "",
+        build_type: str = "",
     ) -> tuple[Request, bool]:
         """Create a Request for an artifact/target, or return the existing one.
 
@@ -184,10 +197,12 @@ class WorkflowDatabase:
         cursor.execute(
             """
             INSERT OR IGNORE INTO requests
-                (namespace, application, component, pipeline, release_plan, artifact, target, source_repo, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (namespace, application, component, pipeline,
+                 release_plan, artifact, target, source_repo,
+                 build_type, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-            (namespace, application, component, pipeline, release_plan, artifact, target, source_repo, now),
+            (namespace, application, component, pipeline, release_plan, artifact, target, source_repo, build_type, now),
         )
         was_inserted = cursor.rowcount > 0
         self.conn.commit()
@@ -196,9 +211,10 @@ class WorkflowDatabase:
             """
             SELECT * FROM requests
             WHERE namespace = ? AND application = ? AND component = ? AND pipeline = ?
-              AND release_plan = ? AND target = ? AND artifact = ? AND source_repo = ?
+              AND release_plan = ? AND target = ? AND artifact = ?
+              AND source_repo = ? AND build_type = ?
         """,
-            (namespace, application, component, pipeline, release_plan, target, artifact, source_repo),
+            (namespace, application, component, pipeline, release_plan, target, artifact, source_repo, build_type),
         )
         return self._row_to_request(cursor.fetchone()), was_inserted
 
@@ -440,6 +456,16 @@ class WorkflowDatabase:
         return self._row_to_phase(row) if row else None
 
     def _row_to_request(self, row: sqlite3.Row) -> Request:
+        # build_type column may be absent on DBs that predate the migration;
+        # sqlite3.Row behaves like a dict but raises on missing keys, so use mapping fallback.
+        try:
+            bt = row["build_type"]
+        except (IndexError, KeyError, ValueError):
+            bt = ""
+        try:
+            sr = row["source_repo"]
+        except (IndexError, KeyError, ValueError):
+            sr = ""
         return Request(
             id=row["id"],
             namespace=row["namespace"],
@@ -449,7 +475,8 @@ class WorkflowDatabase:
             release_plan=row["release_plan"],
             artifact=row["artifact"],
             target=row["target"],
-            source_repo=row["source_repo"],
+            source_repo=sr,
+            build_type=bt or "",
             created_at=self._parse_timestamp(row["created_at"]),
         )
 
