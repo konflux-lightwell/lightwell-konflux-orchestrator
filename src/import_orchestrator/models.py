@@ -32,6 +32,8 @@ class PipelineRunStatus:
 
     name: str
     status: Literal["True", "False", "Unknown"]
+    reason: str = ""
+    message: str = ""
 
     @property
     def is_running(self) -> bool:
@@ -45,10 +47,28 @@ class PipelineRunStatus:
     def is_failed(self) -> bool:
         return self.status == "False"
 
+    @property
+    def is_pending(self) -> bool:
+        """True when the run is Kueue-queued (Unknown + Pending reason)."""
+        return self.is_running and self.reason in ("Pending", "PipelineRunPending")
+
     @staticmethod
     def from_str(name: str, status: str) -> PipelineRunStatus | None:
         if name and status in ("True", "False", "Unknown"):
             return PipelineRunStatus(name, status)
+        return None
+
+    @staticmethod
+    def from_condition(name: str, condition: dict) -> PipelineRunStatus | None:
+        """Build from a full Succeeded condition dict (status+reason+message)."""
+        status = condition.get("status", "")
+        if name and status in ("True", "False", "Unknown"):
+            return PipelineRunStatus(
+                name=name,
+                status=status,  # type: ignore[arg-type]
+                reason=condition.get("reason", "") or "",
+                message=condition.get("message", "") or "",
+            )
         return None
 
 

@@ -22,6 +22,7 @@ import os
 from import_orchestrator.commands.trigger import run_trigger
 from import_orchestrator.ecosystems.base import Ecosystem
 from import_orchestrator.ecosystems.python_sdist import config
+from import_orchestrator.engine.kueue import add_kueue_args
 
 
 def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> None:
@@ -50,6 +51,7 @@ def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> No
         help=f"Ingestion target (default: {config.DEFAULT_TARGET}, or LIGHTWELL_PYTHON_SDIST_TARGET env var)",
     )
 
+    add_kueue_args(parser)
     parser.set_defaults(func=run, ecosystem=ecosystem)
 
 

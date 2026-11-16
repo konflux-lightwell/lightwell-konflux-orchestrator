@@ -22,6 +22,7 @@ from import_orchestrator.commands.run import run_single
 from import_orchestrator.constants import DEFAULT_MAX_RETRIES, DEFAULT_POLL_INTERVAL
 from import_orchestrator.ecosystems.base import Ecosystem
 from import_orchestrator.ecosystems.javascript.commands.trigger import add_build_args
+from import_orchestrator.engine.kueue import add_kueue_args
 
 
 def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> None:
@@ -72,6 +73,7 @@ def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> No
         help="Also write the final result payload as JSON to PATH (in addition to stdout)",
     )
 
+    add_kueue_args(parser)
     parser.set_defaults(func=run, ecosystem=ecosystem)
 
 

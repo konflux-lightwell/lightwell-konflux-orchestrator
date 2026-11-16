@@ -58,7 +58,7 @@ class PipelineMonitor:
             tag = extract_tag(request.artifact)
 
             if pr_status.is_running:
-                continue  # still in flight; intake already recorded RUNNING
+                continue  # still in flight; intake already recorded RUNNING (Kueue pending is also in_progress)
             elif pr_status.is_successful:
                 self.db.upsert_phase(
                     intake.attempt_id,

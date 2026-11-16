@@ -22,6 +22,7 @@ import sys
 from import_orchestrator.clients import KubeClient
 from import_orchestrator.constants import CLUSTER_API, KUBEARCHIVE_API
 from import_orchestrator.engine.errors import TriggerError
+from import_orchestrator.engine.kueue import apply_kueue_scheduling
 
 
 def run_trigger(args: argparse.Namespace, ref: str) -> int:
@@ -34,6 +35,7 @@ def run_trigger(args: argparse.Namespace, ref: str) -> int:
         eco = args.ecosystem
         kube = KubeClient(eco.namespace, CLUSTER_API, KUBEARCHIVE_API)
         manifest = eco.build_pipelinerun(ref, args)
+        apply_kueue_scheduling(manifest, getattr(args, "kueue_queue_name", None))
         pr_name = kube.create_pipelinerun(manifest)
 
         if pr_name:

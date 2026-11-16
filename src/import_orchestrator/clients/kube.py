@@ -127,6 +127,10 @@ class KubeClient:
                 f"/apis/tekton.dev/v1/namespaces/{self.namespace}/pipelineruns/{name}",
             )
             conditions = data.get("status", {}).get("conditions", [])
+            if conditions:
+                if pr_status := PipelineRunStatus.from_condition(name, conditions[0]):
+                    return pr_status
+            # Fallback for old data without reason/message
             status = conditions[0].get("status", "") if conditions else ""
             if pr_status := PipelineRunStatus.from_str(name, status):
                 return pr_status
@@ -140,6 +144,8 @@ class KubeClient:
                 )
                 for cond in data.get("status", {}).get("conditions", []):
                     if cond.get("type") == "Succeeded":
+                        if pr_status := PipelineRunStatus.from_condition(name, cond):
+                            return pr_status
                         status = cond.get("status", "")
                         if pr_status := PipelineRunStatus.from_str(name, status):
                             return pr_status
@@ -147,6 +153,17 @@ class KubeClient:
                 self._log_api_error(f"get PipelineRun {name}", e, source="KubeArchive", ignore_not_found=True)
 
         return None
+
+    def get_pipelinerun_annotations(self, name: str) -> dict:
+        """Fetch PipelineRun annotations for Kueue stall diagnostics (best-effort)."""
+        try:
+            data = self._api.get(
+                f"/apis/tekton.dev/v1/namespaces/{self.namespace}/pipelineruns/{name}",
+            )
+            ann = data.get("metadata", {}).get("annotations", {}) or {}
+            return ann if isinstance(ann, dict) else {}
+        except requests.RequestException:
+            return {}
 
     def get_pipelinerun_failure_detail(self, name: str) -> str | None:
         """Best-effort human-readable diagnostics for a failed PipelineRun.
