@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import argparse
 
-from import_orchestrator.ecosystems.base import build_request_identity
+from import_orchestrator.ecosystems.base import build_request_identity, build_type_for_javascript
 from import_orchestrator.ecosystems.javascript import config
 from import_orchestrator.ecosystems.javascript.pipelinerun import build_pipelinerun_manifest, parse_ref
 from import_orchestrator.engine.pipeline_loader import load_pipeline
@@ -66,6 +66,8 @@ class JavaScriptEcosystem:
             ),
             pulp_read_secret_name=getattr(args, "pulp_read_secret_name", config.DEFAULT_PULP_READ_SECRET_NAME),
             git_auth_secret=getattr(args, "git_auth_secret", config.GIT_AUTH_SECRET),
+            ecosystem=self.name,
+            build_type=build_type_for_javascript(target),
         )
 
     def request_identity(self, ref: str, args: argparse.Namespace) -> dict[str, str]:

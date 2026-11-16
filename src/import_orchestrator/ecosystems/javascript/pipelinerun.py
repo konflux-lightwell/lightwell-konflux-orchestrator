@@ -18,7 +18,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from import_orchestrator.ecosystems.base import DEFAULT_PIPELINERUN_ANNOTATIONS
+from import_orchestrator.ecosystems.base import (
+    DEFAULT_PIPELINERUN_ANNOTATIONS,
+    LIGHTWELL_BUILD_TYPE_LABEL,
+    LIGHTWELL_ECOSYSTEM_LABEL,
+    LIGHTWELL_ORCHESTRATED_LABEL,
+)
 from import_orchestrator.ecosystems.javascript import config
 from import_orchestrator.engine.errors import TriggerError
 
@@ -71,6 +76,8 @@ def build_pipelinerun_manifest(
     pulp_read_secret_name: str = config.DEFAULT_PULP_READ_SECRET_NAME,
     git_auth_secret: str = config.GIT_AUTH_SECRET,
     service_account: str | None = None,
+    ecosystem: str = "javascript",
+    build_type: str = "validated",
 ) -> dict[str, Any]:
     """Build a javascript-validated-build PipelineRun for one package/version.
 
@@ -118,6 +125,9 @@ def build_pipelinerun_manifest(
                 "appstudio.openshift.io/component": component,
                 "pipelines.appstudio.openshift.io/type": "build",
                 "pipelines.openshift.io/runtime": "build-npm-compliance",
+                LIGHTWELL_ORCHESTRATED_LABEL: "true",
+                LIGHTWELL_ECOSYSTEM_LABEL: ecosystem,
+                LIGHTWELL_BUILD_TYPE_LABEL: build_type.lower(),
                 "lightwell.redhat.com/package": package_slug,
                 "lightwell.redhat.com/version": version,
             },

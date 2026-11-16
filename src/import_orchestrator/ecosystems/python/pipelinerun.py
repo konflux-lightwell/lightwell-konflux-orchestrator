@@ -18,7 +18,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from import_orchestrator.ecosystems.base import DEFAULT_PIPELINERUN_ANNOTATIONS, ai_attribution_params
+from import_orchestrator.ecosystems.base import (
+    DEFAULT_PIPELINERUN_ANNOTATIONS,
+    LIGHTWELL_BUILD_TYPE_LABEL,
+    LIGHTWELL_ECOSYSTEM_LABEL,
+    LIGHTWELL_ORCHESTRATED_LABEL,
+    ai_attribution_params,
+)
 from import_orchestrator.ecosystems.python import config
 from import_orchestrator.ecosystems.python.build_config import get_build_config_revision, get_build_config_source
 from import_orchestrator.engine.errors import TriggerError
@@ -60,6 +66,7 @@ def build_pipelinerun_manifest(
     wheel_server_url: str | None = None,
     repo_url: str | None = None,
     python_builder_image: str | None = None,
+    label_build_type: str | None = None,
 ) -> dict[str, Any]:
     """Build a python-build PipelineRun manifest for one package/version.
 
@@ -132,6 +139,9 @@ def build_pipelinerun_manifest(
                 "appstudio.openshift.io/application": application,
                 "appstudio.openshift.io/component": component,
                 "pipelines.appstudio.openshift.io/type": "build",
+                LIGHTWELL_ORCHESTRATED_LABEL: "true",
+                LIGHTWELL_ECOSYSTEM_LABEL: "python",
+                LIGHTWELL_BUILD_TYPE_LABEL: (label_build_type or build_type).lower(),
                 # Package identity, so builds can be queried/filtered by package.
                 "lightwell.redhat.com/package": package,
                 "lightwell.redhat.com/version": version,

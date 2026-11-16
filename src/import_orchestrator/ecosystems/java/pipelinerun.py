@@ -20,7 +20,12 @@ import re
 from typing import Any
 
 from import_orchestrator.constants import NAMESPACE
-from import_orchestrator.ecosystems.base import DEFAULT_PIPELINERUN_ANNOTATIONS
+from import_orchestrator.ecosystems.base import (
+    DEFAULT_PIPELINERUN_ANNOTATIONS,
+    LIGHTWELL_BUILD_TYPE_LABEL,
+    LIGHTWELL_ECOSYSTEM_LABEL,
+    LIGHTWELL_ORCHESTRATED_LABEL,
+)
 from import_orchestrator.engine.errors import TriggerError
 from import_orchestrator.engine.pipeline_loader import load_pipeline
 
@@ -59,6 +64,8 @@ def build_pipelinerun_manifest(
     prefix: str,
     verification_secret: str,
     namespace: str = NAMESPACE,
+    ecosystem: str = "java",
+    build_type: str = "validated",
 ) -> dict[str, Any]:
     return {
         "apiVersion": "tekton.dev/v1",
@@ -71,6 +78,9 @@ def build_pipelinerun_manifest(
                 "appstudio.openshift.io/application": app,
                 "appstudio.openshift.io/component": app,
                 "pipelines.appstudio.openshift.io/type": "build",
+                LIGHTWELL_ORCHESTRATED_LABEL: "true",
+                LIGHTWELL_ECOSYSTEM_LABEL: ecosystem,
+                LIGHTWELL_BUILD_TYPE_LABEL: build_type.lower(),
             },
         },
         "spec": {

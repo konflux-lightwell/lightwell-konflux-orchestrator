@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import argparse
 
-from import_orchestrator.ecosystems.base import build_request_identity
+from import_orchestrator.ecosystems.base import build_request_identity, build_type_for_python
 from import_orchestrator.ecosystems.python import config
 from import_orchestrator.ecosystems.python.pipelinerun import build_pipelinerun_manifest, parse_ref, resolve_repo_url
 from import_orchestrator.engine.pipeline_loader import apply_pipeline_overrides, load_pipeline
@@ -44,6 +44,7 @@ class PythonEcosystem:
             "Validated" if target in ("VALIDATED", "VALIDATED-STAGE") else "Backport"
         )
         build_type = getattr(args, "build_type", None) or default_build_type
+        label_build_type = build_type_for_python(target, build_type)
         pipeline_path = config.pipeline_definition_path()
         pipeline_spec = load_pipeline(pipeline_path)
         manifest = build_pipelinerun_manifest(
@@ -61,6 +62,7 @@ class PythonEcosystem:
             git_auth_secret=config.GIT_AUTH_SECRET,
             builds_tag=builds_tag,
             build_type=build_type,
+            label_build_type=label_build_type,
             wheel_server_url=getattr(args, "wheel_server_url", None),
             python_builder_image=getattr(args, "python_builder_image", None),
         )
@@ -70,6 +72,10 @@ class PythonEcosystem:
         package, _ = parse_ref(ref)
         target = getattr(args, "target", config.DEFAULT_TARGET)
         cfg = config.TARGET_CONFIGS[target]
+        default_build_type = cfg.get("build_type") or (
+            "Validated" if target in ("VALIDATED", "VALIDATED-STAGE") else "Backport"
+        )
+        build_type = getattr(args, "build_type", None) or default_build_type
         return build_request_identity(
             namespace=self.namespace,
             application=cfg["app"],
@@ -83,6 +89,7 @@ class PythonEcosystem:
                 getattr(args, "lightwell_builds_repo_base", config.LIGHTWELL_BUILDS_REPO_BASE),
                 getattr(args, "lightwell_builds_repo_url", None),
             ),
+            # build_type not yet in fingerprint (commit3)
         )
 
     def target_skip_release(self, target: str) -> bool:

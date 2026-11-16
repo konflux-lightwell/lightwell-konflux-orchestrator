@@ -25,6 +25,68 @@ DEFAULT_PIPELINERUN_ANNOTATIONS: dict[str, str] = {
     "test.appstudio.openshift.io/ignore-supersession": "true",
 }
 
+# Lightwell-standard Kueue scheduling labels.
+LIGHTWELL_ORCHESTRATED_LABEL = "lightwell.redhat.com/orchestrated"
+LIGHTWELL_ECOSYSTEM_LABEL = "lightwell.redhat.com/ecosystem"
+LIGHTWELL_BUILD_TYPE_LABEL = "lightwell.redhat.com/build-type"
+
+# Canonical BUILD_TYPE values exposed as PLR labels for Kueue CEL:
+# validated > stage (≈ push/700) > dev (≈ PR/500); remediation (backport/novel)
+# sits between push and managed-release (850) via orchestrated label.
+CANONICAL_BUILD_TYPES = ("validated", "backport", "novel", "stage", "dev")
+
+
+def _normalize_build_type(raw: str) -> str:
+    """Lowercase and alias scratch->dev, remediated->backport, etc."""
+    lower = raw.strip().lower()
+    if lower in ("remediated", "remediation"):
+        return "backport"
+    if lower in ("scratch", "dev-scoped", "dev"):
+        return "dev"
+    return lower
+
+
+def build_type_for_java(artifact_type: str) -> str:
+    """Map java ARTIFACT_CONFIG key -> canonical build-type."""
+    mapping = {
+        "VALIDATED": "validated",
+        "STAGE": "stage",
+        "REMEDIATED": "backport",
+        "NOVEL": "novel",
+    }
+    return mapping.get(artifact_type.upper(), _normalize_build_type(artifact_type))
+
+
+def build_type_for_python(target: str, build_type: str) -> str:
+    """Map python target+BUILD_TYPE -> canonical build-type.
+
+    Target governs stage/dev scope: SCRATCH->dev, VALIDATED-STAGE->stage.
+    """
+    if target.upper() == "SCRATCH":
+        return "dev"
+    if target.upper() == "VALIDATED-STAGE":
+        return "stage"
+    return _normalize_build_type(build_type)
+
+
+def build_type_for_javascript(target: str) -> str:
+    """Map javascript TARGET_CONFIG key -> canonical build-type."""
+    mapping = {
+        "VALIDATED": "validated",
+        "VALIDATED_STAGE": "stage",
+    }
+    return mapping.get(target.upper(), _normalize_build_type(target))
+
+
+def build_type_for_python_sdist(target: str) -> str:
+    """Map python_sdist TARGET_CONFIG key -> canonical build-type."""
+    mapping = {
+        "MIRROR": "validated",
+        "MIRROR-STAGE": "stage",
+        "SCRATCH": "dev",
+    }
+    return mapping.get(target.upper(), _normalize_build_type(target))
+
 
 def ai_attribution_params() -> list[dict[str, str]]:
     """Return the AI_ASSISTED and AI_MODELS PipelineRun params read from the environment.
@@ -57,6 +119,7 @@ def build_request_identity(
     artifact: str,
     release_plan: str = "",
     source_repo: str = "",
+    build_type: str = "",
 ) -> dict[str, str]:
     """Assemble the ADR-0001 Request fingerprint from its resolved fields.
 
@@ -78,6 +141,8 @@ def build_request_identity(
     }
     if source_repo:
         identity["source_repo"] = source_repo
+    if build_type:
+        identity["build_type"] = build_type
     return identity
 
 

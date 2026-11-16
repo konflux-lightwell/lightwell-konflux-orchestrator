@@ -18,7 +18,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from import_orchestrator.ecosystems.base import DEFAULT_PIPELINERUN_ANNOTATIONS
+from import_orchestrator.ecosystems.base import (
+    DEFAULT_PIPELINERUN_ANNOTATIONS,
+    LIGHTWELL_BUILD_TYPE_LABEL,
+    LIGHTWELL_ECOSYSTEM_LABEL,
+    LIGHTWELL_ORCHESTRATED_LABEL,
+)
 from import_orchestrator.engine.errors import TriggerError
 
 __all__ = ["TriggerError", "build_pipelinerun_manifest", "parse_ref"]
@@ -52,6 +57,8 @@ def build_pipelinerun_manifest(
     source_type: str = "pypi-sdist",
     upstream_url: str | None = None,
     upstream_ref: str | None = None,
+    ecosystem: str = "python-sdist",
+    build_type: str = "validated",
 ) -> dict[str, Any]:
     """Build a python-sdist-ingest or python-git-ingest PipelineRun manifest.
 
@@ -112,6 +119,9 @@ def build_pipelinerun_manifest(
                 "appstudio.openshift.io/application": application,
                 "appstudio.openshift.io/component": component,
                 "pipelines.appstudio.openshift.io/type": "build",
+                LIGHTWELL_ORCHESTRATED_LABEL: "true",
+                LIGHTWELL_ECOSYSTEM_LABEL: ecosystem,
+                LIGHTWELL_BUILD_TYPE_LABEL: build_type.lower(),
                 "lightwell.redhat.com/package": package,
                 "lightwell.redhat.com/version": version,
             },
