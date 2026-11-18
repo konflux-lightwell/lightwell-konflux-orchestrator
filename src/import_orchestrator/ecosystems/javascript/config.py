@@ -30,6 +30,13 @@ TL_NPM_REGISTRY_URL_STAGE = "https://packages.redhat.com/api/pulp-content/lightw
 # Build targets, keyed by target name. Selected via ``--target``.
 # Component/SA names match the provisioned Konflux resources on stone-prod-p01.
 TARGET_CONFIGS: dict[str, dict] = {
+    "SCRATCH": {
+        "app": "javascript-validated-stage",
+        "component": "javascript-validated-stage-build",
+        "service_account": "build-pipeline-javascript-validated-stage-build",
+        "tl_npm_registry_url": TL_NPM_REGISTRY_URL_STAGE,
+        "skip_release": True,
+    },
     "VALIDATED_STAGE": {
         "app": "javascript-validated-stage",
         "component": "javascript-validated-stage-build",
