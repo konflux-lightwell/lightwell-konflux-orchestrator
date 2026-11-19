@@ -581,23 +581,23 @@ class KubeClient:
     def list_integration_test_scenarios(self, application: str) -> list[dict] | None:
         """IntegrationTestScenarios bound to an application (None on API error).
 
-        Scenarios select their application via the
-        ``test.appstudio.openshift.io/application`` label; an empty list
+        Scenarios bind via ``spec.application`` (not a label, so no
+        server-side selector), hence the client-side filter; an empty list
         means nothing applies, which is the precondition for treating an
         orchestrator-created Snapshot's tests as skipped when no
         controller ever stamps the verdict condition.
         """
         try:
             result = self._api.list(
-                f"/apis/appstudio.redhat.com/v1alpha1/namespaces/{self.namespace}/integrationtestscenarios",
-                labelSelector=f"test.appstudio.openshift.io/application={application}",
+                f"/apis/appstudio.redhat.com/v1alpha1/namespaces/{self.namespace}/integrationtestscenarios"
             )
-            return result.get("items", [])
+            return [s for s in result.get("items", []) if s.get("spec", {}).get("application") == application]
         except requests.RequestException as e:
             self._log_api_error(f"list IntegrationTestScenarios for {application}", e)
             return None
 
-    def get_snapshot_test_status(        self, snapshot_name: str, snap: dict | None = None
+    def get_snapshot_test_status(
+        self, snapshot_name: str, snap: dict | None = None
     ) -> Literal["passed", "failed", "pending", "none"] | None:
         """Return the overall IntegrationTestScenario verdict for a Snapshot.
 

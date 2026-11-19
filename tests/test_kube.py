@@ -1041,3 +1041,29 @@ class TestSnapshotFromPipelinerun:
 
         client._mock_api.create.side_effect = Boom()
         assert client.create_snapshot_from_pipelinerun("pr-1", "pnc-import", "snap-1") is None
+
+
+class TestIntegrationTestScenarioFilter:
+    """Scenarios bind via spec.application; the lookup filters client-side."""
+
+    def test_filters_by_spec_application(self, monkeypatch):
+        client = _make_kube_client(monkeypatch)
+        client._mock_api.list.return_value = {
+            "items": [
+                {"metadata": {"name": "s-other"}, "spec": {"application": "other-app"}},
+                {"metadata": {"name": "s-ours"}, "spec": {"application": "pnc-import"}},
+            ]
+        }
+        got = client.list_integration_test_scenarios("pnc-import")
+        assert [s["metadata"]["name"] for s in got] == ["s-ours"]
+        # no labelSelector param: spec fields cannot be label-selected
+        assert "labelSelector" not in client._mock_api.list.call_args[1]
+
+    def test_none_on_api_error(self, monkeypatch):
+        client = _make_kube_client(monkeypatch)
+
+        class Boom(requests.RequestException):
+            pass
+
+        client._mock_api.list.side_effect = Boom()
+        assert client.list_integration_test_scenarios("pnc-import") is None
