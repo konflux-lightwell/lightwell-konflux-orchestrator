@@ -265,6 +265,28 @@ class KubeClient:
         running_prs = self.get_running_pipelineruns()
         return sum(1 for pr in running_prs if pr.name.startswith(prefix))
 
+    def prune_request_resources(self, fingerprint: str) -> bool:
+        """Delete the Releases, Snapshots, and PipelineRuns with this fingerprint.
+
+        Tries each kind even if another fails. Returns True only when every delete
+        was accepted. Finalizers can leave objects Terminating, so True does not
+        mean they are gone.
+        """
+        selector = f"{FINGERPRINT_LABEL}={fingerprint}"
+        collections = (
+            ("Releases", f"/apis/appstudio.redhat.com/v1alpha1/namespaces/{self.namespace}/releases"),
+            ("Snapshots", f"/apis/appstudio.redhat.com/v1alpha1/namespaces/{self.namespace}/snapshots"),
+            ("PipelineRuns", f"/apis/tekton.dev/v1/namespaces/{self.namespace}/pipelineruns"),
+        )
+        all_ok = True
+        for kind, api_path in collections:
+            try:
+                self._api.delete_collection(api_path, labelSelector=selector)
+            except requests.RequestException as e:
+                self._log_api_error(f"prune {kind} for fingerprint {fingerprint}", e)
+                all_ok = False
+        return all_ok
+
     def find_snapshot_by_pipelinerun(self, pr_name: str) -> str | None:
         """Find the Snapshot created by a specific PipelineRun via its label."""
         try:

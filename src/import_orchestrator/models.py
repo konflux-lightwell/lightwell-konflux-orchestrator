@@ -139,6 +139,8 @@ class Request:
     target: str
     created_at: datetime | None = None
     source_repo: str = ""
+    # Set once the Request's cluster resources have been pruned; None while live.
+    pruned_at: datetime | None = None
 
 
 @dataclass(frozen=True)

@@ -32,6 +32,7 @@ from import_orchestrator.engine import (
     ImportOrchestrator,
     ImportTrigger,
     PipelineMonitor,
+    PruneMonitor,
     ReleaseMonitor,
     RequestView,
 )
@@ -83,6 +84,14 @@ def add_common_orchestrate_args(parser: argparse.ArgumentParser) -> None:
             "Create every Release against this specific ReleasePlan instead of "
             "resolving one based on the Konflux application."
         ),
+    )
+    parser.add_argument(
+        "--prune",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="After a Request succeeds, delete its cluster resources (intake and "
+        "integration-test PipelineRuns, Snapshot, Release) to reclaim namespace quota; "
+        "KubeArchive retains them. Use --no-prune to keep them (default: enabled).",
     )
 
 
@@ -140,6 +149,8 @@ def run_orchestrate(args: argparse.Namespace, empty_db_warning: str) -> int:
             release_plan=getattr(args, "release_plan", None),
         )
 
+        prune_monitor = PruneMonitor(view=view, kube=kube) if getattr(args, "prune", True) else None
+
         orchestrator = ImportOrchestrator(
             view=view,
             trigger=trigger,
@@ -147,6 +158,7 @@ def run_orchestrate(args: argparse.Namespace, empty_db_warning: str) -> int:
             release_monitor=release_monitor,
             poll_interval=args.poll_interval,
             max_retries=args.max_retries,
+            prune_monitor=prune_monitor,
         )
 
         return orchestrator.run_until_complete()

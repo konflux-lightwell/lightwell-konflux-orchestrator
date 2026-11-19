@@ -191,3 +191,44 @@ class TestRunOrchestratePrintResourcesDispatch:
         err = capsys.readouterr().err
         assert "empty db hint" in err
         assert "No pending references" in err
+
+
+class TestPruneFlag:
+    def test_default_parses_prune_enabled(self):
+        from import_orchestrator.commands.orchestrate import add_common_orchestrate_args
+
+        parser = argparse.ArgumentParser()
+        add_common_orchestrate_args(parser)
+        assert parser.parse_args([]).prune is True
+        assert parser.parse_args(["--no-prune"]).prune is False
+        assert parser.parse_args(["--prune"]).prune is True
+
+    @pytest.mark.parametrize("prune,expect_monitor", [(True, True), (False, False)])
+    def test_run_orchestrate_wires_prune_monitor_per_flag(self, tmp_path: Path, prune: bool, expect_monitor: bool):
+        eco = SimpleNamespace(
+            namespace=_NS,
+            pipelinerun_prefix="pnc-import-",
+            build_pipelinerun=lambda ref, args: _manifest(),
+        )
+        args = argparse.Namespace(
+            db=tmp_path / "state.db",
+            print_resources=False,
+            ecosystem=eco,
+            release_data_repo=None,
+            max_parallel=1,
+            max_retries=3,
+            poll_interval=0,
+            release_plan=None,
+            prune=prune,
+        )
+
+        with (
+            patch("import_orchestrator.commands.orchestrate.KubeClient"),
+            patch("import_orchestrator.commands.orchestrate.ImportOrchestrator") as mock_orch,
+        ):
+            mock_orch.return_value.run_until_complete.return_value = 0
+            rc = run_orchestrate(args, "empty db hint")
+
+        assert rc == 0
+        prune_monitor = mock_orch.call_args.kwargs["prune_monitor"]
+        assert (prune_monitor is not None) is expect_monitor

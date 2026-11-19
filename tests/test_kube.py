@@ -22,6 +22,7 @@ import requests
 
 from import_orchestrator.clients import KubeClient
 from import_orchestrator.clients.kube_api import KubeAuth
+from import_orchestrator.constants import FINGERPRINT_LABEL
 from import_orchestrator.engine.errors import ReleaseError, TriggerError
 
 
@@ -1022,3 +1023,40 @@ class TestCreateRelease:
 
         api_path = kube._mock_api.create.call_args[0][0]
         assert "/namespaces/test-ns/" in api_path
+
+
+class TestPruneRequestResources:
+    def test_deletes_all_three_kinds_by_fingerprint(self, kube: KubeClient):
+        kube._mock_api.delete_collection.return_value = {"kind": "Status", "status": "Success"}
+
+        assert kube.prune_request_resources("fp123") is True
+
+        selector = f"{FINGERPRINT_LABEL}=fp123"
+        called_paths = [call.args[0] for call in kube._mock_api.delete_collection.call_args_list]
+        assert any(path.endswith("/namespaces/test-ns/releases") for path in called_paths)
+        assert any(path.endswith("/namespaces/test-ns/snapshots") for path in called_paths)
+        assert any(path.endswith("/namespaces/test-ns/pipelineruns") for path in called_paths)
+        assert len(called_paths) == 3
+        for call in kube._mock_api.delete_collection.call_args_list:
+            assert call.kwargs == {"labelSelector": selector}
+
+    def test_returns_true_when_nothing_matches(self, kube: KubeClient):
+        # delete-collection returns 200 with an empty result even when no object carries
+        # the label (resources already pruned/absent); that is still success.
+        kube._mock_api.delete_collection.return_value = {"kind": "Status", "status": "Success", "items": []}
+
+        assert kube.prune_request_resources("fp-none") is True
+        assert kube._mock_api.delete_collection.call_count == 3
+
+    def test_returns_false_when_a_kind_fails_but_still_tries_the_rest(self, kube: KubeClient, capsys):
+        def delete_side_effect(api_path, **_):
+            if api_path.endswith("/snapshots"):
+                raise requests.HTTPError("403 Forbidden")
+            return {"kind": "Status", "status": "Success"}
+
+        kube._mock_api.delete_collection.side_effect = delete_side_effect
+
+        assert kube.prune_request_resources("fp123") is False
+        # All three kinds were attempted even though the middle one failed.
+        assert kube._mock_api.delete_collection.call_count == 3
+        assert "prune Snapshots for fingerprint fp123" in capsys.readouterr().err
