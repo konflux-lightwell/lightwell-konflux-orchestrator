@@ -558,3 +558,75 @@ class TestSnapshotFallback:
         monitor.update_statuses()
 
         assert _phase(db, request, Phase.SNAPSHOT) is None
+
+
+class TestItsFallbackVerdict:
+    """Locally deciding 'no scenario applies' for orchestrator-created Snapshots
+    when no controller stamps the test verdict condition."""
+
+    FALLBACK_SNAP = {"metadata": {"annotations": {"lightwell.dev/snapshot-source": "orchestrator-fallback"}}}
+    ITS_SNAP = {"metadata": {"annotations": {}}}
+
+    def _pending(self, mock_kube: MagicMock, snap: dict) -> None:
+        mock_kube.get_snapshot.return_value = snap
+        mock_kube.get_snapshot_test_status.return_value = "pending"
+        mock_kube.list_integration_test_scenarios.return_value = []
+        mock_kube.find_release_for_snapshot.return_value = "release-789"
+
+    def test_fallback_snapshot_skips_tests_after_timeout(
+        self, monitor: ReleaseMonitor, db: WorkflowDatabase, mock_kube: MagicMock
+    ):
+        """Fallback snapshot + verdict missing past the timeout + no scenario
+        applies -> tests recorded SKIPPED and the release proceeds."""
+        request = _seed(db, "r1", snapshot="snap-fallback")
+        self._pending(mock_kube, self.FALLBACK_SNAP)
+        monitor.its_fallback_seconds = 0
+
+        monitor.update_statuses()
+
+        it = _phase(db, request, Phase.INTEGRATION_TESTS)
+        assert it is not None and it.status == PhaseStatus.SKIPPED
+        assert _phase(db, request, Phase.RELEASE).reference_id == "release-789"
+
+    def test_fallback_snapshot_within_timeout_keeps_waiting(
+        self, monitor: ReleaseMonitor, db: WorkflowDatabase, mock_kube: MagicMock
+    ):
+        """Within the timeout the verdict is still awaited from the cluster."""
+        request = _seed(db, "r1", snapshot="snap-fallback")
+        self._pending(mock_kube, self.FALLBACK_SNAP)
+        monitor.its_fallback_seconds = 3600
+
+        monitor.update_statuses()
+
+        it = _phase(db, request, Phase.INTEGRATION_TESTS)
+        assert it is not None and it.status == PhaseStatus.RUNNING
+        assert _phase(db, request, Phase.RELEASE) is None
+
+    def test_its_snapshot_never_locally_skipped(
+        self, monitor: ReleaseMonitor, db: WorkflowDatabase, mock_kube: MagicMock
+    ):
+        """Integration-service-created snapshots always wait for the cluster verdict."""
+        request = _seed(db, "r1", snapshot="snap-its")
+        self._pending(mock_kube, self.ITS_SNAP)
+        monitor.its_fallback_seconds = 0
+
+        monitor.update_statuses()
+
+        it = _phase(db, request, Phase.INTEGRATION_TESTS)
+        assert it is not None and it.status == PhaseStatus.RUNNING
+        assert _phase(db, request, Phase.RELEASE) is None
+
+    def test_fallback_snapshot_with_scenarios_keeps_waiting(
+        self, monitor: ReleaseMonitor, db: WorkflowDatabase, mock_kube: MagicMock
+    ):
+        """When scenarios DO apply, the local skip is never taken."""
+        request = _seed(db, "r1", snapshot="snap-fallback")
+        self._pending(mock_kube, self.FALLBACK_SNAP)
+        mock_kube.list_integration_test_scenarios.return_value = [{"metadata": {"name": "scenario-1"}}]
+        monitor.its_fallback_seconds = 0
+
+        monitor.update_statuses()
+
+        it = _phase(db, request, Phase.INTEGRATION_TESTS)
+        assert it is not None and it.status == PhaseStatus.RUNNING
+        assert _phase(db, request, Phase.RELEASE) is None

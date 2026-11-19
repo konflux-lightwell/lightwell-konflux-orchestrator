@@ -354,10 +354,20 @@ class KubeClient:
             return None
         git_url = results.get("CHAINS-GIT_URL", "")
         git_commit = results.get("CHAINS-GIT_COMMIT", "")
+        if not git_url or not git_commit:
+            print(
+                f"WARNING: PipelineRun {pr_name} has no chains git results; the "
+                "release pipeline's source-reference policy will fail",
+                file=sys.stderr,
+            )
         annotations = {
             "test.appstudio.openshift.io/integration-workflow": "push",
             "test.appstudio.openshift.io/ignore-supersession": "true",
             "test.appstudio.openshift.io/source-repo-url": git_url,
+            # Marks this Snapshot as orchestrator-created so the ITS gate
+            # knows it may stamp the test-succeeded condition itself if no
+            # controller ever does (backlogged integration service).
+            "lightwell.dev/snapshot-source": "orchestrator-fallback",
         }
         for result_name, annotation in self._SNAPSHOT_RESULT_ANNOTATIONS.items():
             if result_name in results:
@@ -568,8 +578,26 @@ class KubeClient:
         except KeyError:
             return None
 
-    def get_snapshot_test_status(
-        self, snapshot_name: str, snap: dict | None = None
+    def list_integration_test_scenarios(self, application: str) -> list[dict] | None:
+        """IntegrationTestScenarios bound to an application (None on API error).
+
+        Scenarios select their application via the
+        ``test.appstudio.openshift.io/application`` label; an empty list
+        means nothing applies, which is the precondition for treating an
+        orchestrator-created Snapshot's tests as skipped when no
+        controller ever stamps the verdict condition.
+        """
+        try:
+            result = self._api.list(
+                f"/apis/appstudio.redhat.com/v1alpha1/namespaces/{self.namespace}/integrationtestscenarios",
+                labelSelector=f"test.appstudio.openshift.io/application={application}",
+            )
+            return result.get("items", [])
+        except requests.RequestException as e:
+            self._log_api_error(f"list IntegrationTestScenarios for {application}", e)
+            return None
+
+    def get_snapshot_test_status(        self, snapshot_name: str, snap: dict | None = None
     ) -> Literal["passed", "failed", "pending", "none"] | None:
         """Return the overall IntegrationTestScenario verdict for a Snapshot.
 

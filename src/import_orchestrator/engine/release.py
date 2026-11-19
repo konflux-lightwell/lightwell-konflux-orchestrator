@@ -77,6 +77,11 @@ class ReleaseMonitor:
         # ourselves from the PipelineRun's results. Overridable for
         # incidents (a backlogged integration service) without a code change.
         self.snapshot_fallback_seconds = int(os.environ.get("IMPORT_SNAPSHOT_FALLBACK_SECONDS", "180"))
+        # How long an orchestrator-created Snapshot may sit without a
+        # controller-stamped test verdict before we decide "no scenario
+        # applies" locally (the integration service's own conclusion for
+        # applications without IntegrationTestScenarios).
+        self.its_fallback_seconds = int(os.environ.get("IMPORT_ITS_FALLBACK_SECONDS", "900"))
 
     def update_statuses(self) -> None:
         """For Requests past a successful intake, drive snapshot -> ITS -> release."""
@@ -121,7 +126,7 @@ class ReleaseMonitor:
 
             # Step 2: gate on the snapshot's IntegrationTestScenario results. Only a
             # pass (or no applicable scenario) lets the workflow proceed to release.
-            if not self._check_integration_tests(attempt_id, snapshot.reference_id, tag, phases):
+            if not self._check_integration_tests(attempt_id, snapshot.reference_id, tag, phases, application):
                 continue
 
             # Scratch/skip-release targets stop here: the ITS result is their terminal
@@ -144,6 +149,21 @@ class ReleaseMonitor:
     def _has_reference(phase: AttemptPhase | None) -> bool:
         return phase is not None and phase.reference_id is not None
 
+    @staticmethod
+    def _snapshot_fallback_verdict_possible(snap: dict | None, phases: dict[Phase, AttemptPhase]) -> bool:
+        """True for an orchestrator-created Snapshot with a recorded snapshot phase.
+
+        Only those may get a locally-decided SKIPPED verdict: integration
+        service-created Snapshots get their verdict from the cluster as
+        usual, and without a recorded snapshot phase there is no anchor
+        for the timeout.
+        """
+        ann = (snap or {}).get("metadata", {}).get("annotations", {}) or {}
+        return (
+            ann.get("lightwell.dev/snapshot-source") == "orchestrator-fallback"
+            and phases.get(Phase.SNAPSHOT) is not None
+        )
+
     def _is_terminal(self, phases: dict[Phase, AttemptPhase]) -> bool:
         """Whether the latest Attempt has reached a terminal post-build state.
 
@@ -161,7 +181,7 @@ class ReleaseMonitor:
         return release is not None and release.status in (PhaseStatus.SUCCESS, PhaseStatus.FAILED)
 
     def _check_integration_tests(
-        self, attempt_id: int, snapshot_name: str, tag: str, phases: dict[Phase, AttemptPhase]
+        self, attempt_id: int, snapshot_name: str, tag: str, phases: dict[Phase, AttemptPhase], application: str = ""
     ) -> bool:
         """Advance the integration-tests phase from the Snapshot's test results.
 
@@ -185,6 +205,27 @@ class ReleaseMonitor:
             self.db.upsert_phase(attempt_id, Phase.INTEGRATION_TESTS, PhaseStatus.SKIPPED)
             return True
         if status == "pending":
+            # An orchestrator-created Snapshot whose verdict condition no
+            # controller has stamped yet: if the application has no
+            # applicable IntegrationTestScenario and the condition has
+            # stayed absent past the ITS fallback timeout, decide SKIPPED
+            # locally - the same conclusion the integration service
+            # records ("No required IntegrationTestScenarios found") -
+            # instead of waiting out the import timeout. Cluster status
+            # cannot be patched (RBAC), and none is needed: the verdict
+            # only gates this workflow.
+            if self._snapshot_fallback_verdict_possible(snap, phases):
+                waited = _seconds_since(phases.get(Phase.SNAPSHOT).updated_at if phases.get(Phase.SNAPSHOT) else None)
+                if waited is not None and waited >= self.its_fallback_seconds:
+                    scenarios = self.kube.list_integration_test_scenarios(application)
+                    if scenarios is not None and not scenarios:
+                        self.db.upsert_phase(attempt_id, Phase.INTEGRATION_TESTS, PhaseStatus.SKIPPED)
+                        print(
+                            f"  No IntegrationTestScenario applies and no controller stamped the "
+                            f"verdict after {waited:.0f}s - treating tests as skipped for {tag}",
+                            file=sys.stderr,
+                        )
+                        return True
             self.db.upsert_phase(attempt_id, Phase.INTEGRATION_TESTS, PhaseStatus.RUNNING)
             print(f"  Waiting for integration tests for {tag}...", file=sys.stderr)
             return False
@@ -235,8 +276,8 @@ class ReleaseMonitor:
             if waited is not None and waited >= self.snapshot_fallback_seconds:
                 snapshot_name = self.kube.create_snapshot_from_pipelinerun(
                     pipelinerun_name,
-                    application or self.prefix.rstrip("-"),
-                    f"{self.prefix}{time.strftime('%Y%m%d-%H%M%S')}-{attempt_id:03d}",
+                    application,
+                    f"{self.prefix}{time.strftime('%Y%m%d-%H%M%S', time.gmtime())}-{attempt_id:03d}",
                 )
                 if snapshot_name:
                     print(
