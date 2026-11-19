@@ -65,7 +65,7 @@ spec:
     - name: PYTHON_BUILDER_IMAGE
       description: Digest-pinned python-builder image containing the Lightwell task CLIs.
       type: string
-      default: quay.io/light-factory/python-builder-cli@sha256:62b116971cd02dcf4a8e91889b6bfd9de2a45e31a31313454b34313890d3d28f
+      default: quay.io/light-factory/python-builder-cli@sha256:1f3ad55356ecbcba950d67b6b0ec312c8c84cfb135309343bed0d6af02192c01
 
     - name: FATH_CUAN_IMAGE
       description: Digest-pinned fath-cuan image.
