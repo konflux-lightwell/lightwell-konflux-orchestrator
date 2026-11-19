@@ -21,6 +21,7 @@ from typing import Any
 from import_orchestrator.ecosystems.base import DEFAULT_PIPELINERUN_ANNOTATIONS, ai_attribution_params
 from import_orchestrator.ecosystems.python import config
 from import_orchestrator.ecosystems.python.build_config import get_build_config_revision, get_build_config_source
+from import_orchestrator.ecosystems.python.identifiers import image_tag, version_label
 from import_orchestrator.engine.errors import TriggerError
 
 __all__ = ["TriggerError", "build_pipelinerun_manifest", "parse_ref"]
@@ -94,7 +95,7 @@ def build_pipelinerun_manifest(
     # Push to the Konflux component repository (<tenant>/<application>/<component>),
     # which is the only repo the build service account can push to. The package and
     # version are encoded in the tag rather than a per-package repo.
-    image = f"{image_repo_base}/{application}/{component}:{package}-{version}"
+    image = f"{image_repo_base}/{application}/{component}:{image_tag(package, version)}"
     tag = builds_tag or f"{package}/{version}"
     effective_wheel_server = config.WHEEL_SERVER_URL if wheel_server_url is None else wheel_server_url
     spec: dict[str, Any] = {
@@ -134,7 +135,7 @@ def build_pipelinerun_manifest(
                 "pipelines.appstudio.openshift.io/type": "build",
                 # Package identity, so builds can be queried/filtered by package.
                 "lightwell.redhat.com/package": package,
-                "lightwell.redhat.com/version": version,
+                "lightwell.redhat.com/version": version_label(version),
             },
         },
         "spec": spec,
