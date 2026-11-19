@@ -495,3 +495,66 @@ class TestIntegration:
         mock_kube.get_release_status.return_value = "True"
         monitor.update_statuses()
         assert monitor.view.state(request) == RequestState.SUCCESS
+
+
+class TestSnapshotFallback:
+    """Creating the Snapshot ourselves when the integration service doesn't."""
+
+    def test_creates_snapshot_after_grace(
+        self, monitor: ReleaseMonitor, db: WorkflowDatabase, mock_kube: MagicMock
+    ):
+        """When the integration service has not created a Snapshot within the
+        grace window, the monitor builds one from the PipelineRun's results."""
+        request = _seed(db, "r1")
+        monitor.snapshot_fallback_seconds = 0  # grace elapsed
+        mock_kube.find_snapshot_by_pipelinerun.return_value = None
+        mock_kube.create_snapshot_from_pipelinerun.return_value = "snapshot-created"
+
+        monitor.update_statuses()
+
+        mock_kube.create_snapshot_from_pipelinerun.assert_called_once()
+        args = mock_kube.create_snapshot_from_pipelinerun.call_args[0]
+        assert args[0] == "pr-r1"  # the intake PipelineRun
+        snapshot = _phase(db, request, Phase.SNAPSHOT)
+        assert snapshot is not None
+        assert snapshot.status == PhaseStatus.SUCCESS
+        assert snapshot.reference_id == "snapshot-created"
+
+    def test_does_not_create_snapshot_within_grace(
+        self, monitor: ReleaseMonitor, db: WorkflowDatabase, mock_kube: MagicMock
+    ):
+        """A freshly finished intake waits for the integration service."""
+        request = _seed(db, "r1")  # intake recorded now
+        mock_kube.find_snapshot_by_pipelinerun.return_value = None
+        monitor.snapshot_fallback_seconds = 3600
+
+        monitor.update_statuses()
+
+        mock_kube.create_snapshot_from_pipelinerun.assert_not_called()
+        assert _phase(db, request, Phase.SNAPSHOT) is None
+
+    def test_existing_snapshot_wins_no_fallback(
+        self, monitor: ReleaseMonitor, db: WorkflowDatabase, mock_kube: MagicMock
+    ):
+        """When the integration service delivered, we never create our own."""
+        _seed(db, "r1")
+        monitor.snapshot_fallback_seconds = 0
+        mock_kube.find_snapshot_by_pipelinerun.return_value = "snapshot-its"
+
+        monitor.update_statuses()
+
+        mock_kube.create_snapshot_from_pipelinerun.assert_not_called()
+
+    def test_failed_fallback_keeps_waiting(
+        self, monitor: ReleaseMonitor, db: WorkflowDatabase, mock_kube: MagicMock
+    ):
+        """If the fallback create fails (e.g. results unavailable), the
+        request keeps waiting instead of crashing or failing."""
+        request = _seed(db, "r1")
+        monitor.snapshot_fallback_seconds = 0
+        mock_kube.find_snapshot_by_pipelinerun.return_value = None
+        mock_kube.create_snapshot_from_pipelinerun.return_value = None
+
+        monitor.update_statuses()
+
+        assert _phase(db, request, Phase.SNAPSHOT) is None

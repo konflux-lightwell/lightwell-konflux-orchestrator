@@ -297,6 +297,102 @@ class KubeClient:
         except (KeyError, IndexError):
             return None
 
+    # Result names emitted by the intake pipeline and consumed when
+    # building a Snapshot by hand (same mapping the integration service
+    # applies when it creates the Snapshot itself).
+    _SNAPSHOT_RESULT_ANNOTATIONS = {
+        "IMAGE_URL": "test.appstudio.openshift.io/result-image-url",
+        "IMAGE_DIGEST": "test.appstudio.openshift.io/result-image-digest",
+        "IMAGE_REF": "test.appstudio.openshift.io/result-image-ref",
+        "SBOM_BLOB_URL": "test.appstudio.openshift.io/result-sbom-blob-url",
+        "CHAINS-GIT_URL": "test.appstudio.openshift.io/result-chains-git-url",
+        "CHAINS-GIT_COMMIT": "test.appstudio.openshift.io/result-chains-git-commit",
+        "SOURCE_ARTIFACT": "test.appstudio.openshift.io/result-source-artifact",
+        "INDEX_BUILD_JSON_ARTIFACT": "test.appstudio.openshift.io/result-index-build-json-artifact",
+    }
+
+    def get_pipelinerun_results(self, pr_name: str) -> dict[str, str] | None:
+        """PipelineRun results by name, from the live cluster or KubeArchive.
+
+        The live cluster is checked first (the usual case while a PR is
+        young); KubeArchive backs it for PRs the tekton pruner has already
+        removed, so results survive aggressive retention. Returns None
+        when neither source has the PipelineRun.
+        """
+        for api in (self._api, self._ka_api):
+            if api is None:
+                continue
+            try:
+                data = api.get(f"/apis/tekton.dev/v1/namespaces/{self.namespace}/pipelineruns/{pr_name}")
+                results = data.get("status", {}).get("results", [])
+                if results:
+                    return {r["name"]: r["value"] for r in results if "name" in r and "value" in r}
+            except requests.RequestException as e:
+                self._log_api_error(
+                    f"get PipelineRun {pr_name} results",
+                    e,
+                    source="KubeArchive" if api is self._ka_api else "cluster",
+                    ignore_not_found=True,
+                )
+        return None
+
+    def create_snapshot_from_pipelinerun(self, pr_name: str, app: str, snapshot_name: str) -> str | None:
+        """Create the Snapshot for a completed intake PipelineRun ourselves.
+
+        Normally the Konflux integration service creates a Snapshot for each
+        completed build PipelineRun; when it is backlogged (or loses the race
+        against the tekton pruner deleting the PipelineRun), releases stall
+        forever in snapshot discovery. This builds the same object the
+        integration service would: results become annotations, the chains git
+        results become the component's source reference, and the
+        build-pipelinerun label keeps discovery working. Returns the created
+        Snapshot's name, or None when the results cannot be fetched.
+        """
+        results = self.get_pipelinerun_results(pr_name)
+        if results is None or "IMAGE_REF" not in results:
+            print(f"ERROR: no results available to build a Snapshot for {pr_name}", file=sys.stderr)
+            return None
+        git_url = results.get("CHAINS-GIT_URL", "")
+        git_commit = results.get("CHAINS-GIT_COMMIT", "")
+        annotations = {
+            "test.appstudio.openshift.io/integration-workflow": "push",
+            "test.appstudio.openshift.io/ignore-supersession": "true",
+            "test.appstudio.openshift.io/source-repo-url": git_url,
+        }
+        for result_name, annotation in self._SNAPSHOT_RESULT_ANNOTATIONS.items():
+            if result_name in results:
+                annotations[annotation] = results[result_name]
+        component: dict = {"containerImage": results["IMAGE_REF"], "name": app}
+        if git_url and git_commit:
+            # The source reference is what the release pipeline's
+            # slsa_source_correlated policy checks; without it the
+            # managed release fails EC validation.
+            component["source"] = {"git": {"url": git_url, "revision": git_commit}}
+        manifest = {
+            "apiVersion": "appstudio.redhat.com/v1alpha1",
+            "kind": "Snapshot",
+            "metadata": {
+                "name": snapshot_name,
+                "namespace": self.namespace,
+                "labels": {
+                    "appstudio.openshift.io/application": app,
+                    "appstudio.openshift.io/build-pipelinerun": pr_name,
+                    "appstudio.openshift.io/component": app,
+                    "test.appstudio.openshift.io/type": "component",
+                },
+                "annotations": annotations,
+            },
+            "spec": {"application": app, "artifacts": {}, "components": [component]},
+        }
+        try:
+            result = self._api.create(
+                f"/apis/appstudio.redhat.com/v1alpha1/namespaces/{self.namespace}/snapshots", manifest
+            )
+            return result["metadata"]["name"]
+        except requests.RequestException as e:
+            self._log_api_error(f"create Snapshot for PipelineRun {pr_name}", e)
+            return None
+
     def find_release_plan_for_snapshot(self, snapshot_name: str) -> str | None:
         """Find the single auto-releasing ReleasePlan for the snapshot's application.
 

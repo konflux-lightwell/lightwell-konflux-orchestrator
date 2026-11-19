@@ -16,13 +16,26 @@ limitations under the License.
 
 from __future__ import annotations
 
+import os
 import sys
+import time
+from datetime import datetime, timezone
 
 from import_orchestrator.clients import KubeClient
 from import_orchestrator.engine.errors import ReleaseError
 from import_orchestrator.engine.request_view import RequestView
 from import_orchestrator.models import AttemptPhase, ClusterResource, Fingerprint, Phase, PhaseStatus
 from import_orchestrator.utils import extract_tag
+
+
+def _seconds_since(moment: datetime | None) -> float | None:
+    """Seconds elapsed since ``moment`` (None when unknown)."""
+    if moment is None:
+        return None
+    now = datetime.now(timezone.utc)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return (now - moment).total_seconds()
 
 
 class ReleaseMonitor:
@@ -59,6 +72,11 @@ class ReleaseMonitor:
         self.prefix = prefix
         self.skip_release = view.skip_release
         self.release_plan = release_plan
+        # How long to wait for the Konflux integration service to create a
+        # Snapshot for a completed intake PipelineRun before creating it
+        # ourselves from the PipelineRun's results. Overridable for
+        # incidents (a backlogged integration service) without a code change.
+        self.snapshot_fallback_seconds = int(os.environ.get("IMPORT_SNAPSHOT_FALLBACK_SECONDS", "180"))
 
     def update_statuses(self) -> None:
         """For Requests past a successful intake, drive snapshot -> ITS -> release."""
@@ -66,7 +84,7 @@ class ReleaseMonitor:
         # create for it is stamped with the same label as its intake PipelineRun
         # (ADR-0001). The hash is computed here, where the full Request is in
         # scope, and threaded through to create_release.
-        eligible: list[tuple[int, str, str, dict[Phase, AttemptPhase]]] = []
+        eligible: list[tuple[int, str, str, dict[Phase, AttemptPhase], str]] = []
         for request in self.view.requests():
             assert request.id is not None
             phases = self.db.latest_phase_map(request.id)
@@ -76,7 +94,7 @@ class ReleaseMonitor:
             if self._is_terminal(phases):
                 continue
             fingerprint = Fingerprint.from_request(request).hash()
-            eligible.append((intake.attempt_id, extract_tag(request.artifact), fingerprint, phases))
+            eligible.append((intake.attempt_id, extract_tag(request.artifact), fingerprint, phases, request.application))
 
         # Cap newly created releases at max_parallel to avoid flooding the release
         # pipeline. This is a defense-in-depth backstop: the trigger already bounds
@@ -84,15 +102,21 @@ class ReleaseMonitor:
         # normal run this cap is rarely the binding constraint. Adopting a release
         # that already exists on the cluster is not gated by it (adoption adds no new
         # cluster load).
-        active_releases = sum(1 for *_, phases in eligible if self._has_reference(phases.get(Phase.RELEASE)))
+        active_releases = sum(1 for *_, phases, _app in eligible if self._has_reference(phases.get(Phase.RELEASE)))
 
-        for attempt_id, tag, fingerprint, phases in eligible:
+        for attempt_id, tag, fingerprint, phases, application in eligible:
             # Step 1: discover the snapshot if not already recorded.
             snapshot = phases.get(Phase.SNAPSHOT)
             if snapshot is None or snapshot.status != PhaseStatus.SUCCESS or not snapshot.reference_id:
                 intake = phases[Phase.INTAKE]
                 assert intake.reference_id is not None
-                self._discover_snapshot(attempt_id, intake.reference_id, tag)
+                self._discover_snapshot(
+                    attempt_id,
+                    intake.reference_id,
+                    tag,
+                    application=application,
+                    intake_finished_at=intake.updated_at,
+                )
                 continue
 
             # Step 2: gate on the snapshot's IntegrationTestScenario results. Only a
@@ -180,17 +204,49 @@ class ReleaseMonitor:
             print(f"    {detail}", file=sys.stderr)
         return False
 
-    def _discover_snapshot(self, attempt_id: int, pipelinerun_name: str, tag: str) -> bool:
+    def _discover_snapshot(
+        self,
+        attempt_id: int,
+        pipelinerun_name: str,
+        tag: str,
+        application: str = "",
+        intake_finished_at: datetime | None = None,
+    ) -> bool:
         """Discover and record the snapshot for an intake PipelineRun.
+
+        Normally the Konflux integration service creates the Snapshot for a
+        completed build PipelineRun. When it has not appeared within
+        ``snapshot_fallback_seconds`` of the intake finishing (integration
+        service backlogged, or it lost the race against the tekton pruner
+        deleting the PipelineRun), the Snapshot is created here from the
+        PipelineRun's results -- the same result-to-annotation mapping the
+        integration service applies -- so the release is not blocked forever.
+        Our Snapshot carries the same build-pipelinerun label, so discovery
+        finds it on the next poll and a late integration-service Snapshot
+        would simply be a sibling: release creation adopts an existing
+        Release per snapshot, never duplicating one for ours.
 
         Returns:
             True if the snapshot was found and the snapshot phase recorded SUCCESS.
         """
         snapshot_name = self.kube.find_snapshot_by_pipelinerun(pipelinerun_name)
         if not snapshot_name:
-            print(f"  Waiting for snapshot for {tag}...", file=sys.stderr)
-            return False
-
+            waited = _seconds_since(intake_finished_at)
+            if waited is not None and waited >= self.snapshot_fallback_seconds:
+                snapshot_name = self.kube.create_snapshot_from_pipelinerun(
+                    pipelinerun_name,
+                    application or self.prefix.rstrip("-"),
+                    f"{self.prefix}{time.strftime('%Y%m%d-%H%M%S')}-{attempt_id:03d}",
+                )
+                if snapshot_name:
+                    print(
+                        f"  Created snapshot {snapshot_name} for {tag} "
+                        f"(integration service did not after {waited:.0f}s)",
+                        file=sys.stderr,
+                    )
+            if not snapshot_name:
+                print(f"  Waiting for snapshot for {tag}...", file=sys.stderr)
+                return False
         self.db.upsert_phase(
             attempt_id,
             Phase.SNAPSHOT,
