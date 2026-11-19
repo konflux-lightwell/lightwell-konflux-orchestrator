@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import os
 
+from import_orchestrator.commands.orchestrate import add_prune_failed_arg
 from import_orchestrator.commands.run import run_single
 from import_orchestrator.constants import DEFAULT_MAX_RETRIES, DEFAULT_POLL_INTERVAL
 from import_orchestrator.ecosystems.base import Ecosystem
@@ -83,6 +84,7 @@ def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> No
         default=DEFAULT_MAX_RETRIES,
         help=f"Max retry attempts for a failed import (default: {DEFAULT_MAX_RETRIES})",
     )
+    add_prune_failed_arg(parser)
     parser.add_argument(
         "--output-json",
         default=None,

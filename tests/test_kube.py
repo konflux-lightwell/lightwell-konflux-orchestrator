@@ -22,8 +22,8 @@ import requests
 
 from import_orchestrator.clients import KubeClient
 from import_orchestrator.clients.kube_api import KubeAuth
-from import_orchestrator.constants import FINGERPRINT_LABEL
 from import_orchestrator.engine.errors import ReleaseError, TriggerError
+from import_orchestrator.models import PruneOutcome
 
 
 def _make_kube_client(monkeypatch, token=None, kubearchive_api=""):
@@ -1025,38 +1025,65 @@ class TestCreateRelease:
         assert "/namespaces/test-ns/" in api_path
 
 
-class TestPruneRequestResources:
-    def test_deletes_all_three_kinds_by_fingerprint(self, kube: KubeClient):
-        kube._mock_api.delete_collection.return_value = {"kind": "Status", "status": "Success"}
+def _http_error(status_code: int) -> requests.HTTPError:
+    response = requests.Response()
+    response.status_code = status_code
+    return requests.HTTPError(f"{status_code} error", response=response)
 
-        assert kube.prune_request_resources("fp123") is True
 
-        selector = f"{FINGERPRINT_LABEL}=fp123"
-        called_paths = [call.args[0] for call in kube._mock_api.delete_collection.call_args_list]
-        assert any(path.endswith("/namespaces/test-ns/releases") for path in called_paths)
-        assert any(path.endswith("/namespaces/test-ns/snapshots") for path in called_paths)
-        assert any(path.endswith("/namespaces/test-ns/pipelineruns") for path in called_paths)
-        assert len(called_paths) == 3
-        for call in kube._mock_api.delete_collection.call_args_list:
-            assert call.kwargs == {"labelSelector": selector}
+class TestDeleteRequestResources:
+    def test_deletes_releases_and_snapshots_by_name(self, kube: KubeClient):
+        kube._mock_api.delete.return_value = {"kind": "Status", "status": "Success"}
 
-    def test_returns_true_when_nothing_matches(self, kube: KubeClient):
-        # delete-collection returns 200 with an empty result even when no object carries
-        # the label (resources already pruned/absent); that is still success.
-        kube._mock_api.delete_collection.return_value = {"kind": "Status", "status": "Success", "items": []}
+        outcome = kube.delete_request_resources(releases=["rel-2", "rel-1"], snapshots=["snap-1"])
+        assert outcome is PruneOutcome.DELETED
 
-        assert kube.prune_request_resources("fp-none") is True
-        assert kube._mock_api.delete_collection.call_count == 3
+        paths = [call.args[0] for call in kube._mock_api.delete.call_args_list]
+        # Names are deduped and sorted; releases before snapshots.
+        assert paths == [
+            "/apis/appstudio.redhat.com/v1alpha1/namespaces/test-ns/releases/rel-1",
+            "/apis/appstudio.redhat.com/v1alpha1/namespaces/test-ns/releases/rel-2",
+            "/apis/appstudio.redhat.com/v1alpha1/namespaces/test-ns/snapshots/snap-1",
+        ]
 
-    def test_returns_false_when_a_kind_fails_but_still_tries_the_rest(self, kube: KubeClient, capsys):
-        def delete_side_effect(api_path, **_):
-            if api_path.endswith("/snapshots"):
-                raise requests.HTTPError("403 Forbidden")
-            return {"kind": "Status", "status": "Success"}
+    def test_dedupes_repeated_names(self, kube: KubeClient):
+        kube._mock_api.delete.return_value = {"kind": "Status"}
 
-        kube._mock_api.delete_collection.side_effect = delete_side_effect
+        assert kube.delete_request_resources(snapshots=["snap-1", "snap-1"]) is PruneOutcome.DELETED
+        assert kube._mock_api.delete.call_count == 1
 
-        assert kube.prune_request_resources("fp123") is False
-        # All three kinds were attempted even though the middle one failed.
-        assert kube._mock_api.delete_collection.call_count == 3
-        assert "prune Snapshots for fingerprint fp123" in capsys.readouterr().err
+    def test_no_targets_is_deleted_without_api_calls(self, kube: KubeClient):
+        assert kube.delete_request_resources() is PruneOutcome.DELETED
+        kube._mock_api.delete.assert_not_called()
+
+    def test_404_is_treated_as_deleted(self, kube: KubeClient):
+        kube._mock_api.delete.side_effect = _http_error(404)
+
+        assert kube.delete_request_resources(releases=["rel-1"], snapshots=["snap-1"]) is PruneOutcome.DELETED
+
+    def test_403_returns_forbidden(self, kube: KubeClient, capsys):
+        kube._mock_api.delete.side_effect = _http_error(403)
+
+        assert kube.delete_request_resources(releases=["rel-1"]) is PruneOutcome.FORBIDDEN
+        assert "prune Release rel-1" in capsys.readouterr().err
+
+    def test_transient_error_returns_retry_but_attempts_all(self, kube: KubeClient):
+        def side_effect(api_path):
+            if api_path.endswith("/snapshots/snap-1"):
+                raise _http_error(500)
+            return {"kind": "Status"}
+
+        kube._mock_api.delete.side_effect = side_effect
+
+        assert kube.delete_request_resources(releases=["rel-1"], snapshots=["snap-1"]) is PruneOutcome.RETRY
+        assert kube._mock_api.delete.call_count == 2  # both attempted despite the middle failure
+
+    def test_forbidden_takes_precedence_over_retry(self, kube: KubeClient):
+        def side_effect(api_path):
+            if api_path.endswith("/releases/rel-1"):
+                raise _http_error(500)  # transient
+            raise _http_error(403)  # forbidden
+
+        kube._mock_api.delete.side_effect = side_effect
+
+        assert kube.delete_request_resources(releases=["rel-1"], snapshots=["snap-1"]) is PruneOutcome.FORBIDDEN

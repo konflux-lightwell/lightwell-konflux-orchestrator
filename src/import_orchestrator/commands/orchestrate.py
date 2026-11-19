@@ -40,6 +40,33 @@ from import_orchestrator.engine.errors import TriggerError
 from import_orchestrator.release_data import ReleaseDataError, ReleaseDataResolver, application_of
 
 
+class _RemovedPruneFlag(argparse.Action):
+    """Reject the old ``--prune`` / ``--no-prune`` switches with a direct error."""
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        parser.error(
+            f"{option_string} was removed; successful Requests are always pruned. "
+            "Pass --prune-failed to also prune exhausted failures."
+        )
+
+
+def add_prune_failed_arg(parser: argparse.ArgumentParser) -> None:
+    """Add ``--prune-failed``, shared by ``orchestrate`` and ``run``.
+
+    Successful Requests are always pruned. This flag also deletes the Release and
+    Snapshot of a failure whose retries are exhausted. PipelineRuns are never deleted
+    here; the platform Tekton pruner owns them. The old ``--prune`` / ``--no-prune``
+    switches error, so ``--prune`` cannot be read as an abbreviation of this flag.
+    """
+    parser.add_argument(
+        "--prune-failed",
+        action="store_true",
+        help="Also prune a Request that has failed with its retries exhausted (its "
+        "objects are never referenced again). Default: only successful Requests are pruned.",
+    )
+    parser.add_argument("--prune", "--no-prune", action=_RemovedPruneFlag, nargs=0, help=argparse.SUPPRESS)
+
+
 def add_common_orchestrate_args(parser: argparse.ArgumentParser) -> None:
     """Add the flags shared by every ecosystem's ``orchestrate`` subcommand.
 
@@ -85,14 +112,7 @@ def add_common_orchestrate_args(parser: argparse.ArgumentParser) -> None:
             "resolving one based on the Konflux application."
         ),
     )
-    parser.add_argument(
-        "--prune",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="After a Request succeeds, delete its cluster resources (intake and "
-        "integration-test PipelineRuns, Snapshot, Release) to reclaim namespace quota; "
-        "KubeArchive retains them. Use --no-prune to keep them (default: enabled).",
-    )
+    add_prune_failed_arg(parser)
 
 
 def _is_database_empty(db: WorkflowDatabase) -> bool:
@@ -149,7 +169,12 @@ def run_orchestrate(args: argparse.Namespace, empty_db_warning: str) -> int:
             release_plan=getattr(args, "release_plan", None),
         )
 
-        prune_monitor = PruneMonitor(view=view, kube=kube) if getattr(args, "prune", True) else None
+        prune_monitor = PruneMonitor(
+            view=view,
+            kube=kube,
+            max_retries=args.max_retries,
+            prune_failed=getattr(args, "prune_failed", False),
+        )
 
         orchestrator = ImportOrchestrator(
             view=view,

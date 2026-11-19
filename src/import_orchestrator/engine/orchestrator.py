@@ -63,7 +63,7 @@ class ImportOrchestrator:
         self._release_monitor.update_statuses()
 
     def prune_completed(self) -> None:
-        """Prune successful Requests; no-op when pruning is disabled (``--no-prune``)."""
+        """Prune terminal Requests; no-op when no monitor is wired."""
         if self._prune_monitor is not None:
             self._prune_monitor.prune_completed()
 
@@ -126,19 +126,19 @@ class ImportOrchestrator:
         return 0 if final_stats.get(RequestState.FAILED.value, 0) == 0 else 1
 
     def _warn_if_unpruned(self) -> None:
-        """Warn once on stderr if any successful Request is still unpruned.
+        """Warn once on stderr if any terminal Request is still unpruned.
 
         Per-cycle prune errors scroll away, and the run still exits 0 when the
         imports succeeded. This says the quota reclaim never happened, for example
-        because ``deletecollection`` RBAC is missing. It does not retry the delete
-        or change the exit code.
+        because delete RBAC is missing. It does not retry the delete or change the
+        exit code.
         """
         if self._prune_monitor is None:
             return
-        remaining = self._prune_monitor.unpruned_successful_count()
+        remaining = self._prune_monitor.unpruned_count()
         if remaining:
             print(
-                f"WARNING: {remaining} successful request(s) could not be pruned; their cluster "
-                "resources remain. See the prune errors above (e.g. missing deletecollection RBAC).",
+                f"WARNING: {remaining} terminal request(s) could not be pruned; their cluster "
+                "resources remain. See the prune errors above (e.g. missing delete RBAC).",
                 file=sys.stderr,
             )

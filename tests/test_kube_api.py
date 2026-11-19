@@ -321,28 +321,24 @@ class TestKubeAPI:
         with pytest.raises(requests.HTTPError):
             api.create("/apis/tekton.dev/v1/namespaces/ns/pipelineruns", {})
 
-    def test_delete_collection_passes_query_params(self, api):
+    def test_delete_constructs_url(self, api):
         mock_resp = MagicMock()
         mock_resp.json.return_value = {"kind": "Status", "status": "Success"}
         api._mock_session.delete.return_value = mock_resp
 
-        result = api.delete_collection(
-            "/apis/tekton.dev/v1/namespaces/ns/pipelineruns",
-            labelSelector="custom.appstudio.openshift.io/lightwell-fingerprint=abc",
-        )
+        result = api.delete("/apis/appstudio.redhat.com/v1alpha1/namespaces/ns/releases/rel-1")
 
         api._mock_session.delete.assert_called_once_with(
-            "https://api.example.com:6443/apis/tekton.dev/v1/namespaces/ns/pipelineruns",
-            params={"labelSelector": "custom.appstudio.openshift.io/lightwell-fingerprint=abc"},
+            "https://api.example.com:6443/apis/appstudio.redhat.com/v1alpha1/namespaces/ns/releases/rel-1",
             timeout=30,
         )
         mock_resp.raise_for_status.assert_called_once()
         assert result == {"kind": "Status", "status": "Success"}
 
-    def test_delete_collection_raises_on_http_error(self, api):
+    def test_delete_raises_on_http_error(self, api):
         mock_resp = MagicMock()
         mock_resp.raise_for_status.side_effect = requests.HTTPError("403 Forbidden")
         api._mock_session.delete.return_value = mock_resp
 
         with pytest.raises(requests.HTTPError):
-            api.delete_collection("/apis/tekton.dev/v1/namespaces/ns/pipelineruns", labelSelector="x=y")
+            api.delete("/apis/tekton.dev/v1/namespaces/ns/pipelineruns/pr-1")

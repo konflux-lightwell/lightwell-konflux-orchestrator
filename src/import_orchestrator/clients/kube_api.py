@@ -148,8 +148,8 @@ class KubeAPI:
         resp.raise_for_status()
         return resp.json()
 
-    def delete_collection(self, api_path: str, **params) -> dict:
-        """DELETE every object in a collection matching the given query params."""
-        resp = self._session.delete(self._url(api_path), params=params, timeout=self._timeout)
+    def delete(self, api_path: str) -> dict:
+        """DELETE a single object by its resource path."""
+        resp = self._session.delete(self._url(api_path), timeout=self._timeout)
         resp.raise_for_status()
         return resp.json()

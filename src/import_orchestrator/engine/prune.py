@@ -20,62 +20,97 @@ import sys
 
 from import_orchestrator.clients import KubeClient
 from import_orchestrator.engine.request_view import RequestView
-from import_orchestrator.models import Fingerprint, RequestState
+from import_orchestrator.models import ClusterResource, PruneOutcome, Request, RequestState
 from import_orchestrator.utils import extract_tag
 
 
 class PruneMonitor:
-    """Deletes the cluster objects of successful Requests to reclaim namespace quota.
+    """Deletes the cluster objects of terminal Requests to reclaim namespace quota.
 
-    Once a Request reaches terminal SUCCESS its PipelineRuns, Snapshot and Release are
-    no longer needed on the cluster (KubeArchive retains them), so they are deleted.
-    Objects are located by the fingerprint label, so one delete per kind also sweeps
-    the integration-test PipelineRuns the phase model never records by name. Pruning is
-    idempotent and resumable: each Request is pruned at most once (guarded by
-    ``pruned_at``), and a partial failure leaves it unmarked so the next cycle retries.
+    Deletes each Request's Release and Snapshot by name across all attempts. Completed
+    PipelineRuns are left to the platform's Tekton pruner. Prunes SUCCESS Requests, plus
+    (with ``prune_failed``) FAILED ones whose retries are exhausted -- never a
+    still-retriable failure. Once pruned, ``pruned_at`` blocks a later retry, including
+    one opened by a higher ``--max-retries``. Idempotent via ``pruned_at``; a transient
+    failure retries next cycle; a 403 disables pruning for the run (KubeArchive retains
+    everything deleted).
     """
 
-    def __init__(self, view: RequestView, kube: KubeClient):
+    def __init__(
+        self,
+        view: RequestView,
+        kube: KubeClient,
+        max_retries: int,
+        *,
+        prune_failed: bool = False,
+    ):
         self.view = view
         self.db = view.db
         self.kube = kube
+        self.max_retries = max_retries
+        self.prune_failed = prune_failed
+        # Set once a delete is RBAC-denied; disables pruning for the rest of the run.
+        self._forbidden = False
 
     def prune_completed(self) -> int:
-        """Prune every successful, not-yet-pruned Request; return the count pruned."""
+        """Prune every prunable, not-yet-pruned Request; return the count pruned."""
+        if self._forbidden:
+            return 0
         pruned = 0
         for request in self.view.requests():
             assert request.id is not None
-            if request.pruned_at is not None:
-                continue
-            if self.view.state(request) != RequestState.SUCCESS:
+            if request.pruned_at is not None or not self._is_prunable(request):
                 continue
 
             tag = extract_tag(request.artifact)
-            # Deleting by fingerprint label is safe against hitting another in-flight
-            # Request's objects: the fingerprint omits source_repo, but within one run
-            # the CLI args are fixed, so source_repo is a pure function of the artifact
-            # (python) or a constant (javascript). Two Requests in this run with the
-            # same artifact therefore resolve to the same source_repo and dedupe to one
-            # Request -- so no two distinct in-run Requests can share a fingerprint.
-            fingerprint = Fingerprint.from_request(request).hash()
-            if self.kube.prune_request_resources(fingerprint):
+            releases, snapshots = self._resources(request.id)
+            outcome = self.kube.delete_request_resources(releases=releases, snapshots=snapshots)
+            if outcome is PruneOutcome.DELETED:
                 self.db.mark_pruned(request.id)
                 pruned += 1
                 print(f"  Pruned cluster resources for {tag}", file=sys.stderr)
-            else:
+            elif outcome is PruneOutcome.FORBIDDEN:
+                self._forbidden = True
+                print(
+                    "WARNING: pruning disabled for this run -- the service account lacks delete "
+                    "permission on these resources (see errors above).",
+                    file=sys.stderr,
+                )
+                break
+            else:  # RETRY
                 print(f"  Prune incomplete for {tag}; will retry on the next cycle or a later run", file=sys.stderr)
         return pruned
 
-    def unpruned_successful_count(self) -> int:
-        """Count successful Requests whose resources are not yet pruned.
+    def unpruned_count(self) -> int:
+        """Count prunable Requests not yet pruned (for the end-of-run warning)."""
+        return sum(1 for request in self.view.requests() if request.pruned_at is None and self._is_prunable(request))
 
-        Lets the caller surface a single warning when a run ends with cluster
-        resources still live despite the Request having succeeded (e.g. a persistent
-        delete failure such as missing ``deletecollection`` RBAC), which otherwise
-        only shows up as per-cycle error lines.
+    def _is_prunable(self, request: Request) -> bool:
+        """Whether a Request's cluster resources may be pruned now."""
+        state = self.view.state(request)
+        if state is RequestState.SUCCESS:
+            return True
+        # Only once retries are exhausted: a retriable failure will start a fresh
+        # Attempt, so pruning now would stamp pruned_at and suppress pruning its objects.
+        if self.prune_failed and state is RequestState.FAILED:
+            return not self.view.is_retriable(request, self.max_retries)
+        return False
+
+    def _resources(self, request_id: int) -> tuple[set[str], set[str]]:
+        """Collect Release and Snapshot names across all attempts.
+
+        A retry creates fresh objects, so every attempt's resources are pruned, not just
+        the latest's. PipelineRuns are left to the platform's Tekton pruner.
         """
-        return sum(
-            1
-            for request in self.view.requests()
-            if request.pruned_at is None and self.view.state(request) == RequestState.SUCCESS
-        )
+        releases: set[str] = set()
+        snapshots: set[str] = set()
+        for attempt in self.db.list_attempts(request_id):
+            assert attempt.id is not None
+            for phase in self.db.list_phases(attempt.id):
+                if phase.reference_id is None:
+                    continue
+                if phase.reference_type is ClusterResource.RELEASE:
+                    releases.add(phase.reference_id)
+                elif phase.reference_type is ClusterResource.SNAPSHOT:
+                    snapshots.add(phase.reference_id)
+        return releases, snapshots

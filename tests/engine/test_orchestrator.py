@@ -30,7 +30,7 @@ from import_orchestrator.engine import (
     ReleaseMonitor,
     RequestView,
 )
-from import_orchestrator.models import ClusterResource, Fingerprint, Phase, PhaseStatus, PipelineRunStatus, Request
+from import_orchestrator.models import ClusterResource, Phase, PhaseStatus, PipelineRunStatus, PruneOutcome, Request
 
 
 def _identity(ref: str) -> dict[str, str]:
@@ -235,7 +235,7 @@ class TestStatistics:
 def _pruning_orchestrator(db: WorkflowDatabase, mock_kube: MagicMock) -> ImportOrchestrator:
     """An orchestrator wired with a real PruneMonitor over the mock cluster."""
     mock_kube.create_pipelinerun.return_value = "pnc-import-xxx"
-    mock_kube.prune_request_resources.return_value = True
+    mock_kube.delete_request_resources.return_value = PruneOutcome.DELETED
     view = RequestView(db, skip_release=False)
     trigger = ImportTrigger(
         view=view,
@@ -251,13 +251,13 @@ def _pruning_orchestrator(db: WorkflowDatabase, mock_kube: MagicMock) -> ImportO
         release_monitor=ReleaseMonitor(view=view, kube=mock_kube, max_parallel=5, prefix="pnc-import-"),
         poll_interval=0,
         max_retries=3,
-        prune_monitor=PruneMonitor(view=view, kube=mock_kube),
+        prune_monitor=PruneMonitor(view=view, kube=mock_kube, max_retries=3),
     )
 
 
 class TestPruneWiring:
     def test_prune_completed_is_noop_without_monitor(self, orchestrator: ImportOrchestrator, db: WorkflowDatabase):
-        """The default orchestrator has no prune monitor (--no-prune); pruning is skipped."""
+        """An orchestrator with no monitor wired does not prune."""
         request = _seed_success(db, "r1")
         orchestrator.prune_completed()
         assert db.get_request(request.id).pruned_at is None
@@ -269,7 +269,7 @@ class TestPruneWiring:
 
         assert orchestrator.run_until_complete() == 0
 
-        mock_kube.prune_request_resources.assert_called_once_with(Fingerprint.from_request(request).hash())
+        mock_kube.delete_request_resources.assert_called_once_with(releases={"rel-r1"}, snapshots=set())
         assert db.get_request(request.id).pruned_at is not None
 
     def test_run_until_complete_prunes_request_that_succeeds_mid_run(self, db: WorkflowDatabase, mock_kube: MagicMock):
@@ -284,12 +284,12 @@ class TestPruneWiring:
         assert orchestrator.run_until_complete() == 0
         request = db.list_requests()[0]
         assert request.pruned_at is not None
-        mock_kube.prune_request_resources.assert_called_with(Fingerprint.from_request(request).hash())
+        mock_kube.delete_request_resources.assert_called_with(releases={"release-abc"}, snapshots={"snapshot-abc"})
 
     def test_persistent_prune_failure_warns_and_still_exits_zero(self, db: WorkflowDatabase, mock_kube, capsys):
         _seed_success(db, "r1")
         orchestrator = _pruning_orchestrator(db, mock_kube)
-        mock_kube.prune_request_resources.return_value = False  # every prune attempt fails
+        mock_kube.delete_request_resources.return_value = PruneOutcome.RETRY  # every prune attempt fails
 
         assert orchestrator.run_until_complete() == 0  # exit code tracks FAILED requests, not prune
         assert db.list_requests()[0].pruned_at is None

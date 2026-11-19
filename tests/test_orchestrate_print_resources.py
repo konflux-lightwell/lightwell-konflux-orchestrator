@@ -199,12 +199,17 @@ class TestPruneFlag:
 
         parser = argparse.ArgumentParser()
         add_common_orchestrate_args(parser)
-        assert parser.parse_args([]).prune is True
-        assert parser.parse_args(["--no-prune"]).prune is False
-        assert parser.parse_args(["--prune"]).prune is True
+        defaults = parser.parse_args([])
+        assert defaults.prune_failed is False
+        assert parser.parse_args(["--prune-failed"]).prune_failed is True
+        with pytest.raises(SystemExit):
+            parser.parse_args(["--prune"])
+        with pytest.raises(SystemExit):
+            parser.parse_args(["--no-prune"])
+        with pytest.raises(SystemExit):
+            parser.parse_args(["--prune-pipelineruns"])
 
-    @pytest.mark.parametrize("prune,expect_monitor", [(True, True), (False, False)])
-    def test_run_orchestrate_wires_prune_monitor_per_flag(self, tmp_path: Path, prune: bool, expect_monitor: bool):
+    def test_run_orchestrate_always_wires_prune_monitor(self, tmp_path: Path):
         eco = SimpleNamespace(
             namespace=_NS,
             pipelinerun_prefix="pnc-import-",
@@ -219,7 +224,7 @@ class TestPruneFlag:
             max_retries=3,
             poll_interval=0,
             release_plan=None,
-            prune=prune,
+            prune_failed=True,
         )
 
         with (
@@ -231,4 +236,5 @@ class TestPruneFlag:
 
         assert rc == 0
         prune_monitor = mock_orch.call_args.kwargs["prune_monitor"]
-        assert (prune_monitor is not None) is expect_monitor
+        assert prune_monitor is not None
+        assert prune_monitor.prune_failed is True

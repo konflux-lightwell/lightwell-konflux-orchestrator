@@ -18,13 +18,14 @@ from __future__ import annotations
 
 import json
 import sys
+from collections.abc import Iterable
 from typing import Literal
 
 import requests
 
 from import_orchestrator.clients.kube_api import KubeAPI, KubeAuth, resolve_auth
 from import_orchestrator.constants import FINGERPRINT_LABEL, KONFLUX_RELEASE_URL_TEMPLATE
-from import_orchestrator.models import PipelineRunStatus
+from import_orchestrator.models import PipelineRunStatus, PruneOutcome
 
 
 def _api_error_detail(exc: requests.RequestException) -> str:
@@ -265,27 +266,48 @@ class KubeClient:
         running_prs = self.get_running_pipelineruns()
         return sum(1 for pr in running_prs if pr.name.startswith(prefix))
 
-    def prune_request_resources(self, fingerprint: str) -> bool:
-        """Delete the Releases, Snapshots, and PipelineRuns with this fingerprint.
+    def delete_request_resources(
+        self,
+        *,
+        releases: Iterable[str] = (),
+        snapshots: Iterable[str] = (),
+    ) -> PruneOutcome:
+        """Delete the given Releases and Snapshots, one ``DELETE`` per name.
 
-        Tries each kind even if another fails. Returns True only when every delete
-        was accepted. Finalizers can leave objects Terminating, so True does not
-        mean they are gone.
+        A 404 counts as gone. ``DELETED`` means every delete was accepted;
+        finalizers may still leave the object Terminating. A 403 returns
+        ``FORBIDDEN`` and takes precedence over any other error, which returns
+        ``RETRY``.
         """
-        selector = f"{FINGERPRINT_LABEL}={fingerprint}"
-        collections = (
-            ("Releases", f"/apis/appstudio.redhat.com/v1alpha1/namespaces/{self.namespace}/releases"),
-            ("Snapshots", f"/apis/appstudio.redhat.com/v1alpha1/namespaces/{self.namespace}/snapshots"),
-            ("PipelineRuns", f"/apis/tekton.dev/v1/namespaces/{self.namespace}/pipelineruns"),
-        )
-        all_ok = True
-        for kind, api_path in collections:
+        targets = [
+            (kind, name, f"/apis/{group}/namespaces/{self.namespace}/{plural}/{name}")
+            for kind, names, group, plural in (
+                ("Release", releases, "appstudio.redhat.com/v1alpha1", "releases"),
+                ("Snapshot", snapshots, "appstudio.redhat.com/v1alpha1", "snapshots"),
+            )
+            for name in sorted(set(names))
+        ]
+
+        forbidden = False
+        retry = False
+        for kind, name, api_path in targets:
             try:
-                self._api.delete_collection(api_path, labelSelector=selector)
+                self._api.delete(api_path)
             except requests.RequestException as e:
-                self._log_api_error(f"prune {kind} for fingerprint {fingerprint}", e)
-                all_ok = False
-        return all_ok
+                status = getattr(getattr(e, "response", None), "status_code", None)
+                if status == 404:
+                    continue  # already gone -- treat as deleted
+                self._log_api_error(f"prune {kind} {name}", e)
+                if status == 403:
+                    forbidden = True
+                else:
+                    retry = True
+
+        if forbidden:
+            return PruneOutcome.FORBIDDEN
+        if retry:
+            return PruneOutcome.RETRY
+        return PruneOutcome.DELETED
 
     def find_snapshot_by_pipelinerun(self, pr_name: str) -> str | None:
         """Find the Snapshot created by a specific PipelineRun via its label."""

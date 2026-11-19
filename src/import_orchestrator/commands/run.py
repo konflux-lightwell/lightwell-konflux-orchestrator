@@ -31,6 +31,7 @@ from import_orchestrator.engine import (
     ImportTrigger,
     Ingest,
     PipelineMonitor,
+    PruneMonitor,
     ReleaseMonitor,
     RequestView,
 )
@@ -166,6 +167,12 @@ def run_single(args: argparse.Namespace, ref: str) -> int:
                 release_monitor=release_monitor,
                 poll_interval=args.poll_interval,
                 max_retries=args.max_retries,
+                prune_monitor=PruneMonitor(
+                    view=view,
+                    kube=kube,
+                    max_retries=args.max_retries,
+                    prune_failed=getattr(args, "prune_failed", False),
+                ),
             )
 
             rc = orchestrator.run_until_complete()
