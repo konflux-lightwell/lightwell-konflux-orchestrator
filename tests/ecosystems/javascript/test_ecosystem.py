@@ -104,6 +104,21 @@ def test_build_pipelinerun_tl_registry_cli_override(monkeypatch, tmp_path):
     assert params["tl-npm-registry-url"] == "https://example.test/javascript"
 
 
+def test_build_pipelinerun_publish_version_suffix(monkeypatch, tmp_path):
+    """--publish-version-suffix reaches the pipeline as a per-ref version override."""
+    pipeline_file = tmp_path / "tekton" / "pipelines" / "javascript-validated-build" / "javascript-validated-build.yaml"
+    pipeline_file.parent.mkdir(parents=True)
+    pipeline_file.write_text("spec:\n  tasks: []\n")
+    monkeypatch.setenv("TEKTON_PIPELINE_DIR", str(tmp_path / "tekton"))
+
+    manifest = JavaScriptEcosystem().build_pipelinerun(
+        "bluebird==3.7.2",
+        argparse.Namespace(target="SCRATCH", publish_version_suffix="lwci.0"),
+    )
+    params = {p["name"]: p["value"] for p in manifest["spec"]["params"]}
+    assert params["lightwell-publish-version-override"] == "3.7.2-lwci.0"
+
+
 def test_build_pipelinerun_scoped_package(monkeypatch, tmp_path):
     """Scoped refs keep packages/@scope/name path; tag/label use a slug."""
     pipeline_file = tmp_path / "tekton" / "pipelines" / "javascript-validated-build" / "javascript-validated-build.yaml"

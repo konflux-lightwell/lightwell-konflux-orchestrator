@@ -70,6 +70,7 @@ def build_pipelinerun_manifest(
     tl_npm_registry_url: str = config.DEFAULT_TL_NPM_REGISTRY_URL,
     pulp_read_secret_name: str = config.DEFAULT_PULP_READ_SECRET_NAME,
     git_auth_secret: str = config.GIT_AUTH_SECRET,
+    publish_version_suffix: str | None = None,
     service_account: str | None = None,
 ) -> dict[str, Any]:
     """Build a javascript-validated-build PipelineRun for one package/version.
@@ -80,10 +81,14 @@ def build_pipelinerun_manifest(
 
     ``git_auth_secret`` names the secret bound to the ``git-auth`` workspace,
     which the clone task uses to authenticate against the recipe monorepo.
+
+    ``publish_version_suffix`` makes the recipes publish ``<version>-<suffix>``
+    instead of ``version``; when unset they publish ``version`` unchanged.
     """
     package_path = config.package_dir(package, version)
     package_slug = sanitize_package_for_resource(package)
     image = f"{image_repo_base}/{application}/{component}:{package_slug}-{version}"
+    publish_version_override = f"{version}-{publish_version_suffix}" if publish_version_suffix else ""
     params: list[dict[str, Any]] = [
         {"name": "git-url", "value": source_git_url},
         {"name": "revision", "value": source_revision},
@@ -94,6 +99,7 @@ def build_pipelinerun_manifest(
         {"name": "task-assess-npm-compliance-bundle", "value": task_assess_npm_compliance_bundle},
         {"name": "tl-npm-registry-url", "value": tl_npm_registry_url},
         {"name": "pulp-read-secret-name", "value": pulp_read_secret_name},
+        {"name": "lightwell-publish-version-override", "value": publish_version_override},
     ]
 
     spec: dict[str, Any] = {

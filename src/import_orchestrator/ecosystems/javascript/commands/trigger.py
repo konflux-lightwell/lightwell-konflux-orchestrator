@@ -20,7 +20,7 @@ import argparse
 
 from import_orchestrator.commands.trigger import run_trigger
 from import_orchestrator.ecosystems.base import Ecosystem
-from import_orchestrator.ecosystems.javascript.commands.build_args import add_build_args
+from import_orchestrator.ecosystems.javascript.commands.build_args import add_build_args, check_build_args
 
 
 def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> None:
@@ -43,4 +43,6 @@ def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> No
 
 def run(args: argparse.Namespace) -> int:
     """Execute the trigger subcommand."""
+    if not check_build_args(args):
+        return 2
     return run_trigger(args, args.ref)

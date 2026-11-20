@@ -36,6 +36,7 @@ TARGET_CONFIGS: dict[str, dict] = {
         "service_account": "build-pipeline-javascript-validated-stage-build",
         "tl_npm_registry_url": TL_NPM_REGISTRY_URL_STAGE,
         "skip_release": True,
+        "allow_publish_version_suffix": True,
     },
     "VALIDATED_STAGE": {
         "app": "javascript-validated-stage",
@@ -75,7 +76,7 @@ DEFAULT_BUILDER_IMAGE = (
 DEFAULT_TASK_BUILD_NPM_PACKAGE_BUNDLE = (
     "quay.io/konflux-ci/tekton-catalog/task-build-npm-package:"
     "0.1-1793720581@"
-    "sha256:b337fb2f684bf6fb45bc6c880fda9269fba088458dad281196e74435be1bf706"
+    "sha256:57411609b4731f79af966ade016492cb44baceef4ca0e23a6a28d95b2188a6b7"
 )
 DEFAULT_TASK_ASSESS_NPM_COMPLIANCE_BUNDLE = (
     "quay.io/konflux-ci/tekton-catalog/task-assess-npm-compliance:"

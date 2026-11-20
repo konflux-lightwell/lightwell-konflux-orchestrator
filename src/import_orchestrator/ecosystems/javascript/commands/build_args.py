@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 
 from import_orchestrator.ecosystems.javascript import config
 
@@ -77,3 +78,26 @@ def add_build_args(parser: argparse.ArgumentParser) -> None:
         ),
         help="K8s Secret name with Pulp read basic-auth for TL registry",
     )
+    parser.add_argument(
+        "--publish-version-suffix",
+        default=None,
+        metavar="SUFFIX",
+        help=(
+            "Have the recipes publish <version>-SUFFIX instead of <version> (e.g. lwci.0), "
+            "to exercise re-versioning without editing the manifest. SCRATCH target only."
+        ),
+    )
+
+
+def check_build_args(args: argparse.Namespace) -> bool:
+    """Reject build flag combinations argparse cannot express; print the error to stderr."""
+    suffix = getattr(args, "publish_version_suffix", None)
+    target = getattr(args, "target", config.DEFAULT_TARGET)
+    if suffix and not config.TARGET_CONFIGS[target].get("allow_publish_version_suffix", False):
+        allowed = ", ".join(t for t, cfg in config.TARGET_CONFIGS.items() if cfg.get("allow_publish_version_suffix"))
+        print(
+            f"ERROR: --publish-version-suffix is not allowed for target {target} (allowed: {allowed})",
+            file=sys.stderr,
+        )
+        return False
+    return True
