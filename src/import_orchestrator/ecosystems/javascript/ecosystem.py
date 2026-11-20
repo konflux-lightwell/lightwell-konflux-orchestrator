@@ -66,6 +66,7 @@ class JavaScriptEcosystem:
             ),
             pulp_read_secret_name=getattr(args, "pulp_read_secret_name", config.DEFAULT_PULP_READ_SECRET_NAME),
             git_auth_secret=getattr(args, "git_auth_secret", config.GIT_AUTH_SECRET),
+            publish_version_suffix=getattr(args, "publish_version_suffix", None),
         )
 
     def request_identity(self, ref: str, args: argparse.Namespace) -> dict[str, str]:

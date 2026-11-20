@@ -70,6 +70,13 @@ spec:
         not mount credentials.
       type: string
       default: lightwell-pulp-read-secret
+    - name: lightwell-publish-version-override
+      description: >-
+        Version the recipes publish instead of manifest.version (e.g.
+        <manifest.version>-lwci.0), so SCRATCH builds exercise re-versioning
+        without editing the manifest. Empty for production builds.
+      type: string
+      default: ""
     - name: npm-publish-secret-name
       type: string
       default: rhtl-pulp-npm-stage-credentials
@@ -152,6 +159,8 @@ spec:
           value: $(params.npm-publish-secret-name)
         - name: PUBLISH_TO_PULP
           value: $(params.publish-to-pulp)
+        - name: LIGHTWELL_PUBLISH_VERSION_OVERRIDE
+          value: $(params.lightwell-publish-version-override)
       taskRef:
         resolver: bundles
         params:
