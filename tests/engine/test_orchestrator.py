@@ -222,6 +222,39 @@ class TestRunUntilComplete:
         exit_code = orchestrator.run_until_complete()
         assert exit_code == 1
 
+    def test_unchanged_status_logged_once_in_loop(self, db: WorkflowDatabase, capsys):
+        """A quiet run with no state change logs the status once, not per poll."""
+        _seed_running(db, "r1")
+        orchestrator = _quiet_orchestrator(db)
+
+        # Three poll iterations, then complete; stats never change across them.
+        with patch.object(orchestrator, "is_complete", side_effect=[False] * 6 + [True]):
+            orchestrator.run_until_complete()
+
+        err = capsys.readouterr().err
+        assert "=== Iteration" not in err
+        assert "Sleeping" not in err
+        # One timestamped in-loop line + the final (untimestamped) summary line.
+        assert err.count("Status: pending") == 2
+        assert err.count("] Status: pending") == 1
+
+    def test_heartbeat_logged_when_quiet_exceeds_interval(self, db: WorkflowDatabase, capsys):
+        """When nothing changes but the heartbeat interval elapses, re-log the status."""
+        _seed_running(db, "r1")
+        orchestrator = _quiet_orchestrator(db)
+
+        # monotonic() is called once per iteration: the 3rd poll crosses the 300s gap.
+        with (
+            patch.object(orchestrator, "is_complete", side_effect=[False] * 6 + [True]),
+            patch("import_orchestrator.engine.orchestrator.time.monotonic", side_effect=[10.0, 20.0, 400.0]),
+        ):
+            orchestrator.run_until_complete()
+
+        err = capsys.readouterr().err
+        # Two timestamped in-loop lines (first change + one heartbeat) + final summary.
+        assert err.count("] Status: pending") == 2
+        assert err.count("Status: pending") == 3
+
 
 class TestStatistics:
     def test_statistics_has_no_triggered_key(self, orchestrator: ImportOrchestrator, db: WorkflowDatabase):
@@ -230,6 +263,20 @@ class TestStatistics:
         stats = orchestrator.view.statistics()
         assert set(stats) == {"pending", "running", "releasing", "success", "failed"}
         assert stats["running"] == 1
+
+
+def _quiet_orchestrator(db: WorkflowDatabase) -> ImportOrchestrator:
+    """An orchestrator whose monitors/trigger are no-ops, so statistics stay stable."""
+    trigger = MagicMock()
+    trigger.trigger_next_batch.return_value = 0
+    return ImportOrchestrator(
+        view=RequestView(db, skip_release=False),
+        trigger=trigger,
+        pipeline_monitor=MagicMock(),
+        release_monitor=MagicMock(),
+        poll_interval=0,
+        max_retries=3,
+    )
 
 
 def _pruning_orchestrator(db: WorkflowDatabase, mock_kube: MagicMock) -> ImportOrchestrator:

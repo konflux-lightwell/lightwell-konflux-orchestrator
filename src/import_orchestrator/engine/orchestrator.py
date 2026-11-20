@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import sys
 import time
+from datetime import datetime, timezone
 
 from import_orchestrator.engine.pipeline import PipelineMonitor
 from import_orchestrator.engine.prune import PruneMonitor
@@ -25,6 +26,10 @@ from import_orchestrator.engine.release import ReleaseMonitor
 from import_orchestrator.engine.request_view import RequestView
 from import_orchestrator.engine.trigger import ImportTrigger
 from import_orchestrator.models import RequestState
+
+# Max seconds to stay silent while the status is unchanged before emitting a
+# heartbeat line, so a long quiet run still shows it is alive.
+HEARTBEAT_INTERVAL_SECONDS = 300
 
 
 class ImportOrchestrator:
@@ -79,10 +84,15 @@ class ImportOrchestrator:
         """Check if all requests are either successful or permanently failed."""
         return self.view.is_complete(self.max_retries)
 
-    def _print_statistics(self, stats: dict[str, int]) -> None:
-        """Print current statistics to stderr."""
+    def _print_statistics(self, stats: dict[str, int], *, timestamped: bool = False) -> None:
+        """Print current statistics to stderr.
+
+        When ``timestamped`` is set, the line is prefixed with the UTC time so
+        change events and heartbeats are self-contained in a long-running log.
+        """
+        prefix = f"[{datetime.now(timezone.utc).isoformat(timespec='seconds')}] " if timestamped else ""
         print(
-            f"Status: pending={stats[RequestState.PENDING.value]}, "
+            f"{prefix}Status: pending={stats[RequestState.PENDING.value]}, "
             f"running={stats[RequestState.RUNNING.value]}, "
             f"releasing={stats[RequestState.AWAITING_RELEASE.value]}, "
             f"success={stats[RequestState.SUCCESS.value]}, "
@@ -96,12 +106,10 @@ class ImportOrchestrator:
         Returns:
             Exit code: 0 if all imports succeeded, 1 if any failed.
         """
-        iteration = 0
+        last_stats: dict[str, int] | None = None
+        last_log_time = 0.0
 
         while not self.is_complete():
-            iteration += 1
-            print(f"\n=== Iteration {iteration} ===", file=sys.stderr)
-
             self.update_pipelinerun_statuses()
             self.update_release_statuses()
             self.prune_completed()
@@ -110,10 +118,16 @@ class ImportOrchestrator:
             if triggered > 0:
                 print(f"Triggered {triggered} new import(s)", file=sys.stderr)
 
-            self._print_statistics(self.view.statistics())
+            # Log the status only when it actually changed, or as a periodic
+            # heartbeat during long quiet stretches, to keep the log readable.
+            stats = self.view.statistics()
+            now = time.monotonic()
+            if stats != last_stats or (now - last_log_time) >= HEARTBEAT_INTERVAL_SECONDS:
+                self._print_statistics(stats, timestamped=True)
+                last_stats = stats
+                last_log_time = now
 
             if not self.is_complete():
-                print(f"Sleeping {self.poll_interval}s...", file=sys.stderr)
                 time.sleep(self.poll_interval)
 
         self.prune_completed()
