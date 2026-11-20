@@ -22,13 +22,14 @@ import time
 
 from import_orchestrator.clients import KubeClient
 from import_orchestrator.commands.run import _emit_result
-from import_orchestrator.constants import CLUSTER_API, DEFAULT_POLL_INTERVAL, KUBEARCHIVE_API
+from import_orchestrator.constants import CLUSTER_API, DEFAULT_POLL_INTERVAL, EXIT_DEFERRED, KUBEARCHIVE_API
 from import_orchestrator.ecosystems.base import Ecosystem
-from import_orchestrator.engine.errors import ReleaseError
+from import_orchestrator.engine.errors import QuotaDeferred, ReleaseError
 
 EXIT_OK = 0
 EXIT_FAILED = 1
 EXIT_TIMEOUT = 2
+
 
 # Matches the `pipeline` timeout on the production ReleasePlanAdmission. Polling
 # for less than that would report a timeout on a release that is still healthy.
@@ -92,13 +93,27 @@ def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> No
     parser.set_defaults(func=promote, ecosystem=ecosystem)
 
 
-def _payload(snapshot: str, release_plan: str, release_name: str | None, status: str, adopted: bool) -> dict:
+def _payload(
+    snapshot: str,
+    release_plan: str,
+    release_name: str | None,
+    status: str,
+    adopted: bool,
+    reason: str | None = None,
+) -> dict:
+    """Build a promote result payload.
+
+    ``reason`` carries the cause of a non-success outcome (the cluster's own
+    error or quota description) so downstream consumers can surface *why*
+    without scraping stderr; it is None for successes.
+    """
     return {
         "snapshot": snapshot,
         "release_plan": release_plan,
         "release_name": release_name,
         "status": status,
         "adopted": adopted,
+        "reason": reason,
     }
 
 
@@ -131,13 +146,23 @@ def promote(args: argparse.Namespace) -> int:
             release_name = kube.create_release(
                 args.snapshot, args.release_plan, eco.pipelinerun_prefix, fingerprint=fingerprint
             )
+        except QuotaDeferred as e:
+            print(
+                f"DEFERRED: {e} Re-run to adopt or retry once quota headroom returns.",
+                file=sys.stderr,
+            )
+            _emit_result(
+                _payload(args.snapshot, args.release_plan, None, "Deferred", False, reason=str(e)),
+                args.output_json,
+            )
+            return EXIT_DEFERRED
         except ReleaseError as e:
             print(
                 f"ERROR: failed to create a Release for {args.snapshot} against {args.release_plan}: {e}",
                 file=sys.stderr,
             )
             _emit_result(
-                _payload(args.snapshot, args.release_plan, None, "CreateFailed", False),
+                _payload(args.snapshot, args.release_plan, None, "CreateFailed", False, reason=str(e)),
                 args.output_json,
             )
             return EXIT_FAILED
@@ -147,7 +172,14 @@ def promote(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             _emit_result(
-                _payload(args.snapshot, args.release_plan, None, "CreateFailed", False),
+                _payload(
+                    args.snapshot,
+                    args.release_plan,
+                    None,
+                    "CreateFailed",
+                    False,
+                    reason="Release created but its name was absent from the API response",
+                ),
                 args.output_json,
             )
             return EXIT_FAILED
@@ -166,15 +198,43 @@ def promote(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             _emit_result(
-                _payload(args.snapshot, args.release_plan, release_name, "Timeout", adopted),
+                _payload(
+                    args.snapshot,
+                    args.release_plan,
+                    release_name,
+                    "Timeout",
+                    adopted,
+                    reason=f"no verdict after {args.timeout}s",
+                ),
                 args.output_json,
             )
             return EXIT_TIMEOUT
+        # A Release with no verdict while the PipelineRun count quota is
+        # exhausted is almost certainly stalled behind it (its release
+        # PipelineRun cannot start). Runs finish and free the count, so this
+        # is worth waiting out: attribute it now instead of blind-polling to
+        # the timeout, emitting the same Deferred signal as a quota-rejected
+        # create and carrying the in-flight Release so a re-run adopts it
+        # rather than recreating.
+        if status == "Unknown":
+            quota = kube.is_pipelinerun_quota_exhausted()
+            if quota is not None:
+                print(
+                    f"DEFERRED: Release {release_name} has no verdict and the namespace "
+                    f"quota is exhausted ({quota}). Re-run to adopt it once headroom returns.",
+                    file=sys.stderr,
+                )
+                _emit_result(
+                    _payload(args.snapshot, args.release_plan, release_name, "Deferred", adopted, reason=quota),
+                    args.output_json,
+                )
+                return EXIT_DEFERRED
         print(f"Release {release_name} still in progress, sleeping {args.poll_interval}s...", file=sys.stderr)
         time.sleep(args.poll_interval)
 
+    failure_detail = kube.get_release_failure_detail(release_name) if status == "False" else None
     _emit_result(
-        _payload(args.snapshot, args.release_plan, release_name, status, adopted),
+        _payload(args.snapshot, args.release_plan, release_name, status, adopted, reason=failure_detail),
         args.output_json,
     )
 

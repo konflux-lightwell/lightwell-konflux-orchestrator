@@ -31,3 +31,18 @@ class ReleaseError(Exception):
     failed, retry-bounded release phase instead of looping forever with no
     state change (LWLP-3937).
     """
+
+
+class QuotaDeferred(Exception):
+    """A create call was rejected because the PipelineRun quota is exhausted.
+
+    Unlike a permissions gap or an invalid reference, a PipelineRun count
+    quota rejection (403 ``exceeded quota`` / 429) is transient: runs
+    finish and free their count, typically minutes later. Quotas on
+    growing object counts (snapshots, releases) do not self-recover and
+    are deliberately not deferred.
+    Raising this distinct error lets callers defer and retry on a later
+    poll/tick instead of recording a terminal, retry-bounded failure. It
+    deliberately does NOT subclass TriggerError or ReleaseError so no
+    existing failure path can accidentally absorb it.
+    """

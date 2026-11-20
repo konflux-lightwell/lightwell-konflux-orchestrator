@@ -19,10 +19,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from import_orchestrator.constants import FINGERPRINT_LABEL
+from import_orchestrator.constants import FINGERPRINT_LABEL, MAX_QUOTA_DEFERRALS
 from import_orchestrator.database import WorkflowDatabase
 from import_orchestrator.ecosystems.java.pipelinerun import TriggerError
 from import_orchestrator.engine import ImportTrigger, RequestView
+from import_orchestrator.engine.errors import QuotaDeferred
 from import_orchestrator.models import ClusterResource, Fingerprint, Phase, PhaseStatus, Request, RequestState
 
 
@@ -147,6 +148,37 @@ class TestTriggerNextBatch:
         intake = db.latest_phase_map(request.id)[Phase.INTAKE]
         assert intake.status == PhaseStatus.FAILED
         assert "connection refused" in intake.error_message
+
+    def test_quota_deferral_records_no_phase(
+        self, trigger: ImportTrigger, db: WorkflowDatabase, mock_kube: MagicMock, capsys
+    ):
+        """A quota rejection is transient: no phase is recorded and no retry slot
+        is burned, so the request stays pending for a later poll."""
+        request = _seed_request(db, "tag-quota")
+        mock_kube.create_pipelinerun.side_effect = QuotaDeferred(
+            "PipelineRun creation deferred: 403 Forbidden: exceeded quota: pr-count"
+        )
+
+        assert trigger.trigger_next_batch() == 0
+
+        assert "DEFERRED (quota, 1)" in capsys.readouterr().err
+        assert Phase.INTAKE not in db.latest_phase_map(request.id)
+
+    def test_quota_deferral_escalates_to_failure_at_cap(
+        self, trigger: ImportTrigger, db: WorkflowDatabase, mock_kube: MagicMock
+    ):
+        """A quota condition that never clears must not spin the run forever:
+        past MAX_QUOTA_DEFERRALS the deferral is recorded as a retriable
+        FAILED intake (bounded like any other trigger failure)."""
+        request = _seed_request(db, "tag-quota-forever")
+        mock_kube.create_pipelinerun.side_effect = QuotaDeferred("exceeded quota: pr-count")
+
+        for _ in range(MAX_QUOTA_DEFERRALS):
+            trigger.trigger_next_batch()
+
+        intake = db.latest_phase_map(request.id)[Phase.INTAKE]
+        assert intake.status == PhaseStatus.FAILED
+        assert "namespace quota" in intake.error_message
 
     def test_logs_full_admission_webhook_error(
         self, trigger: ImportTrigger, db: WorkflowDatabase, mock_kube: MagicMock, capsys

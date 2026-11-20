@@ -40,6 +40,27 @@ DEFAULT_MAX_PARALLEL = 1
 DEFAULT_POLL_INTERVAL = 30  # seconds
 DEFAULT_MAX_RETRIES = 3
 
+# Consecutive quota deferrals tolerated per request within one run before the
+# deferral is recorded as an ordinary, retry-bounded failure. Bounds the poll
+# loop against a namespace quota that never clears.
+MAX_QUOTA_DEFERRALS = 20
+
+# Quota resources whose exhaustion is self-recovering: the counted objects
+# finish/terminate on their own and free the count, so waiting is the correct
+# action (deferred via QuotaDeferred). Matching is substring-based so naming
+# variants of the same resource (e.g. a "count/pipelineruns.tekton.dev"
+# quota) are covered. Anything NOT listed is classified non-recoverable:
+# unknown quotas fail loudly rather than wait silently, because a wrong
+# failure is visible and caller-retryable while a wrong deferral is a quiet
+# stall. Extending this list is a one-line change plus a test -- never a new
+# exception type.
+DEFERRABLE_QUOTA_RESOURCES = ("pipelineruns.tekton.dev",)
+
+# Exit code for a transient quota deferral from the promote and trigger
+# subcommands. Lives here (not in the subcommand modules) because it is a
+# cross-repo contract: downstream consumers match on it.
+EXIT_DEFERRED = 3
+
 # ---------------------------------------------------------------------------
 # konflux-release-data (GitOps source of truth for ReleasePlan / RPA).
 # Used by `orchestrate --print-resources` to resolve the release chain offline.

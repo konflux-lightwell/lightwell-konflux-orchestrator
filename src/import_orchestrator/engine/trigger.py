@@ -21,7 +21,8 @@ from collections.abc import Callable
 
 from import_orchestrator.clients.kube import KubeClient
 from import_orchestrator.constants import FINGERPRINT_LABEL
-from import_orchestrator.engine.errors import TriggerError
+from import_orchestrator.engine.deferrals import QuotaDeferralCounter
+from import_orchestrator.engine.errors import QuotaDeferred, TriggerError
 from import_orchestrator.engine.request_view import RequestView
 from import_orchestrator.models import Attempt, ClusterResource, Fingerprint, Phase, PhaseStatus, Request
 from import_orchestrator.utils import extract_tag
@@ -57,6 +58,7 @@ class ImportTrigger:
         # Requests the reconciler could not read from the cluster this run; never
         # triggered here, so a failed reconcile cannot duplicate in-flight work.
         self._skipped: set[int] = set()
+        self._quota_deferrals = QuotaDeferralCounter()
 
     def skip_requests(self, request_ids: set[int]) -> None:
         """Exclude these Requests from triggering this run (their reconcile failed)."""
@@ -122,6 +124,27 @@ class ImportTrigger:
             pr_name = self.kube.create_pipelinerun(manifest)
             if pr_name is None:
                 raise TriggerError("PipelineRun creation failed (API returned no name)")
+        except QuotaDeferred as e:
+            # Transient capacity condition: record nothing so the request stays
+            # pending and is retried on a later poll once quota headroom
+            # returns, rather than burning a retry slot. Past the deferral cap
+            # (a quota condition that never clears within this run), record a
+            # normal retriable failure so the run cannot spin forever.
+            count = self._quota_deferrals.increment(request.id)
+            if self._quota_deferrals.at_cap(count):
+                self.db.upsert_phase(
+                    attempt.id,
+                    Phase.INTAKE,
+                    PhaseStatus.FAILED,
+                    error_message=f"PipelineRun trigger deferred {count}x by namespace quota: {e}",
+                )
+                print(
+                    f"  ERROR: {tag} deferred by quota {count}x, recording failure: {e}",
+                    file=sys.stderr,
+                )
+                return 0
+            print(f"  DEFERRED (quota, {count}): {tag}: {e}", file=sys.stderr)
+            return 0
         except TriggerError as e:  # an expected build/submit failure leaves a recorded, retriable FAILED intake
             self.db.upsert_phase(
                 attempt.id,
@@ -132,6 +155,9 @@ class ImportTrigger:
             print(f"  ERROR: Failed to trigger {tag}: {e}", file=sys.stderr)
             return 0
 
+        # A successful create means the quota episode (if any) is over: reset
+        # the consecutive-deferral counter so later blips start from zero.
+        self._quota_deferrals.reset(request.id)
         self.db.upsert_phase(
             attempt.id,
             Phase.INTAKE,

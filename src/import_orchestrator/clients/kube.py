@@ -17,6 +17,7 @@ limitations under the License.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from collections.abc import Iterable
 from typing import Literal
@@ -24,7 +25,11 @@ from typing import Literal
 import requests
 
 from import_orchestrator.clients.kube_api import KubeAPI, KubeAuth, resolve_auth
-from import_orchestrator.constants import FINGERPRINT_LABEL, KONFLUX_RELEASE_URL_TEMPLATE
+from import_orchestrator.constants import (
+    DEFERRABLE_QUOTA_RESOURCES,
+    FINGERPRINT_LABEL,
+    KONFLUX_RELEASE_URL_TEMPLATE,
+)
 from import_orchestrator.models import PipelineRunStatus, PruneOutcome
 
 
@@ -46,6 +51,38 @@ def _api_error_detail(exc: requests.RequestException) -> str:
         return f"{exc}: {body['message']}"
     text = (getattr(response, "text", "") or "").strip()
     return f"{exc}: {text}" if text else str(exc)
+
+
+def _is_quota_rejection(exc: requests.RequestException) -> bool:
+    """Whether a failed Kubernetes API response is a PipelineRun quota rejection.
+
+    A namespace whose ResourceQuota is exhausted rejects creates with 403
+    (occasionally 429) and a Status message of the form
+    ``pipelineruns.tekton.dev "..." is forbidden: exceeded quota: ...``.
+
+    Only quotas on resources in DEFERRABLE_QUOTA_RESOURCES are treated as
+    deferrable: those objects finish and free their count, so the condition
+    clears by itself. Quotas on object counts that only grow (snapshots,
+    releases) do not recover without outside intervention, so those
+    rejections stay classified as non-recoverable errors.
+    """
+    response = getattr(exc, "response", None)
+    if response is None or getattr(response, "status_code", None) not in (403, 429):
+        return False
+    detail = _api_error_detail(exc).lower()
+    if "exceeded quota" not in detail and "exceeds quota" not in detail:
+        return False
+    # The rejected object type also appears in the message ("pipelineruns.tekton.dev
+    # "x" is forbidden: ..."), so matching the allowlist against the whole message
+    # would misclassify e.g. a compute-resources quota rejecting a PipelineRun
+    # create. Anchor to the quota attribution instead: Kubernetes phrases it as
+    # "exceeded quota: <name>, requested: <resource>=<n>". Only the resource named
+    # there is the one the quota actually limits.
+    requested = re.search(r"requested:\s*([a-z0-9./-]+)=", detail)
+    if requested is None:
+        # Unrecognised phrasing: fail safe (non-deferrable) rather than guess.
+        return False
+    return any(resource in requested.group(1) for resource in DEFERRABLE_QUOTA_RESOURCES)
 
 
 class KubeClient:
@@ -483,7 +520,8 @@ class KubeClient:
         TriggerError -- a rejected create call will not resolve itself by
         retrying the identical request on the next poll, so the caller should
         record a failed release phase instead of looping forever with no state
-        change (LWLP-3937). Returns None only if the Release was created but
+        change (LWLP-3937) -- or QuotaDeferred for a transient namespace-quota
+        exhaustion. Returns None only if the Release was created but
         its name is absent from the response.
         """
         metadata: dict[str, object] = {
@@ -509,8 +547,12 @@ class KubeClient:
         except requests.RequestException as e:
             # Imported lazily: engine.errors pulls in the engine package, which
             # imports clients, so a module-level import would be circular.
-            from import_orchestrator.engine.errors import ReleaseError
+            from import_orchestrator.engine.errors import QuotaDeferred, ReleaseError
 
+            if _is_quota_rejection(e):
+                raise QuotaDeferred(
+                    f"Release creation deferred for Snapshot {snapshot_name}: {_api_error_detail(e)}"
+                ) from e
             raise ReleaseError(f"failed to create Release for Snapshot {snapshot_name}: {_api_error_detail(e)}") from e
 
         try:
@@ -523,9 +565,10 @@ class KubeClient:
         """Create a PipelineRun from a manifest dict and return its generated name.
 
         Raises TriggerError if the API rejects the request (e.g. an invalid
-        pipeline definition), including the cluster's error message. Returns
-        None only if the PipelineRun was created but its name is absent from
-        the response.
+        pipeline definition), including the cluster's error message, or
+        QuotaDeferred if the rejection is a transient namespace-quota
+        exhaustion. Returns None only if the PipelineRun was
+        created but its name is absent from the response.
         """
         try:
             result = self._api.create(
@@ -535,8 +578,10 @@ class KubeClient:
         except requests.RequestException as e:
             # Imported lazily: engine.errors pulls in the engine package, which
             # imports clients, so a module-level import would be circular.
-            from import_orchestrator.engine.errors import TriggerError
+            from import_orchestrator.engine.errors import QuotaDeferred, TriggerError
 
+            if _is_quota_rejection(e):
+                raise QuotaDeferred(f"PipelineRun creation deferred: {_api_error_detail(e)}") from e
             raise TriggerError(f"failed to create PipelineRun: {_api_error_detail(e)}") from e
 
         try:
@@ -816,6 +861,67 @@ class KubeClient:
         except requests.RequestException as e:
             self._log_api_error(f"get Release {release_name} status", e, ignore_not_found=True)
             return None
+
+    def is_pipelinerun_quota_exhausted(self) -> str | None:
+        """Check whether the namespace's PipelineRun count quota is exhausted.
+
+        Lists the namespace's ResourceQuotas and compares ``status.used``
+        against ``status.hard`` for PipelineRun count resources only (e.g.
+        ``pipelineruns.tekton.dev``). Returns a human-readable description
+        of the first exhausted one (e.g. ``"quota pr-count:
+        pipelineruns.tekton.dev 5/5"``), or None when headroom remains (or
+        the quotas cannot be read -- failing open, since an unreadable
+        quota must not fabricate a deferral).
+
+        Only the PipelineRun quota is consulted deliberately: runs finish
+        and free their count, so exhausting it is a transient, self-healing
+        condition worth waiting out. Quotas on object counts that only grow
+        (snapshots, releases) do not recover without outside intervention,
+        so an exhausted one of those is not reported here.
+
+        Used to attribute a stalled Release or unschedulable PipelineRun to
+        quota exhaustion instead of blind-polling to a timeout.
+        """
+        try:
+            result = self._api.list(f"/api/v1/namespaces/{self.namespace}/resourcequotas")
+        except requests.RequestException as e:
+            self._log_api_error("list ResourceQuotas", e, ignore_not_found=True)
+            return None
+        for quota in result.get("items", []):
+            name = quota.get("metadata", {}).get("name", "?")
+            status = quota.get("status", {})
+            hard = status.get("hard", {}) or {}
+            used = status.get("used", {}) or {}
+            for resource, limit in hard.items():
+                if not any(entry in resource.lower() for entry in DEFERRABLE_QUOTA_RESOURCES):
+                    continue
+                current = used.get(resource)
+                detail = self._quota_at_limit(current, limit)
+                if detail is not None:
+                    return f"quota {name}: {resource} {detail}"
+        return None
+
+    @staticmethod
+    def _quota_at_limit(current: str | None, limit: object) -> str | None:
+        """Compare a quota's used value against its hard limit.
+
+        Returns a ``"used/hard"`` description when the quota is at or over its
+        limit, None otherwise. Values Kubernetes cannot count numerically
+        (CPU/memory quantities, "1k"-style counts) fall back to a string
+        comparison so an exhausted count quota (the common case for
+        PipelineRun limits, e.g. ``pipelineruns.tekton.dev: "5"``) is still
+        detected; unparseable pairs are conservatively treated as having
+        headroom.
+        """
+        if current is None or limit is None:
+            return None
+        try:
+            # A hard limit of 0 forbids the resource entirely (the standard
+            # deny-quota idiom) and always reports used "0"; that is not
+            # exhaustion.
+            return f"{current}/{limit}" if float(limit) != 0 and float(current) >= float(limit) else None
+        except (TypeError, ValueError):
+            return f"{current}/{limit}" if str(current) == str(limit) and str(current) != "0" else None
 
     def get_release_failure_detail(self, release_name: str) -> str | None:
         """Summarise why a Release failed, from its ``Released`` condition.
