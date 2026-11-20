@@ -24,6 +24,7 @@ from import_orchestrator.ecosystems.base import (
     LIGHTWELL_ECOSYSTEM_LABEL,
     LIGHTWELL_ORCHESTRATED_LABEL,
 )
+from import_orchestrator.ecosystems.python.identifiers import image_tag, version_label
 from import_orchestrator.engine.errors import TriggerError
 
 __all__ = ["TriggerError", "build_pipelinerun_manifest", "parse_ref"]
@@ -72,7 +73,7 @@ def build_pipelinerun_manifest(
     if bool(pipeline_git_url) != bool(pipeline_revision):
         raise TriggerError("inline pipeline Git URL and revision must be supplied together")
 
-    image = f"{image_repo_base}/{application}/{component}:{package}-{version}"
+    image = f"{image_repo_base}/{application}/{component}:{image_tag(package, version)}"
     if source_type == "git":
         if not (upstream_url and upstream_ref):
             raise TriggerError("upstream_url and upstream_ref must both be supplied for git source_type")
@@ -123,7 +124,7 @@ def build_pipelinerun_manifest(
                 LIGHTWELL_ECOSYSTEM_LABEL: ecosystem,
                 LIGHTWELL_BUILD_TYPE_LABEL: build_type.lower(),
                 "lightwell.redhat.com/package": package,
-                "lightwell.redhat.com/version": version,
+                "lightwell.redhat.com/version": version_label(version),
             },
         },
         "spec": spec,
