@@ -33,7 +33,9 @@ class RequestView:
 
     Retry eligibility matches the legacy flat model: with N attempts recorded, a
     failed Request is retriable while ``attempt_count <= max_retries`` (i.e. up to
-    ``max_retries`` retries after the first attempt).
+    ``max_retries`` retries after the first attempt). A Request whose ``pruned_at`` is
+    set is never retriable: its cluster objects have been deleted, so a later run with a
+    higher ``--max-retries`` must not revive it against resources that no longer exist.
     """
 
     def __init__(self, db: WorkflowDatabase, skip_release: bool, *, request_ids: set[int] | None = None):
@@ -88,7 +90,13 @@ class RequestView:
                 return False
         return True
 
+    def is_retriable(self, request: Request, max_retries: int) -> bool:
+        """Public: whether a FAILED Request is still eligible for another attempt."""
+        return self._is_retriable(request, max_retries)
+
     def _is_retriable(self, request: Request, max_retries: int) -> bool:
-        if request.id is None:
+        # A pruned Request is finished: its objects are gone, so raising --max-retries
+        # must not revive it (it would resume against a deleted Snapshot, LWLP-5515).
+        if request.id is None or request.pruned_at is not None:
             return False
         return self.state(request) == RequestState.FAILED and self.db.attempt_count(request.id) <= max_retries

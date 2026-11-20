@@ -15,7 +15,7 @@ limitations under the License.
 """
 
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -26,10 +26,11 @@ from import_orchestrator.engine import (
     ImportOrchestrator,
     ImportTrigger,
     PipelineMonitor,
+    PruneMonitor,
     ReleaseMonitor,
     RequestView,
 )
-from import_orchestrator.models import ClusterResource, Phase, PhaseStatus, PipelineRunStatus, Request
+from import_orchestrator.models import ClusterResource, Phase, PhaseStatus, PipelineRunStatus, PruneOutcome, Request
 
 
 def _identity(ref: str) -> dict[str, str]:
@@ -229,3 +230,94 @@ class TestStatistics:
         stats = orchestrator.view.statistics()
         assert set(stats) == {"pending", "running", "releasing", "success", "failed"}
         assert stats["running"] == 1
+
+
+def _pruning_orchestrator(db: WorkflowDatabase, mock_kube: MagicMock) -> ImportOrchestrator:
+    """An orchestrator wired with a real PruneMonitor over the mock cluster."""
+    mock_kube.create_pipelinerun.return_value = "pnc-import-xxx"
+    mock_kube.delete_request_resources.return_value = PruneOutcome.DELETED
+    view = RequestView(db, skip_release=False)
+    trigger = ImportTrigger(
+        view=view,
+        kube=mock_kube,
+        build_pipelinerun=MagicMock(return_value={"kind": "PipelineRun"}),
+        max_parallel=5,
+        max_retries=3,
+    )
+    return ImportOrchestrator(
+        view=view,
+        trigger=trigger,
+        pipeline_monitor=PipelineMonitor(view=view, kube=mock_kube),
+        release_monitor=ReleaseMonitor(view=view, kube=mock_kube, max_parallel=5, prefix="pnc-import-"),
+        poll_interval=0,
+        max_retries=3,
+        prune_monitor=PruneMonitor(view=view, kube=mock_kube, max_retries=3),
+    )
+
+
+class TestPruneWiring:
+    def test_prune_completed_is_noop_without_monitor(self, orchestrator: ImportOrchestrator, db: WorkflowDatabase):
+        """An orchestrator with no monitor wired does not prune."""
+        request = _seed_success(db, "r1")
+        orchestrator.prune_completed()
+        assert db.get_request(request.id).pruned_at is None
+
+    def test_run_until_complete_prunes_already_complete_request(self, db: WorkflowDatabase, mock_kube: MagicMock):
+        """A resume where everything already succeeded still prunes via the final sweep."""
+        request = _seed_success(db, "r1")
+        orchestrator = _pruning_orchestrator(db, mock_kube)
+
+        assert orchestrator.run_until_complete() == 0
+
+        mock_kube.delete_request_resources.assert_called_once_with(releases={"rel-r1"}, snapshots=set())
+        assert db.get_request(request.id).pruned_at is not None
+
+    def test_run_until_complete_prunes_request_that_succeeds_mid_run(self, db: WorkflowDatabase, mock_kube: MagicMock):
+        _seed_request(db, "r1")
+        mock_kube.get_pipelinerun_status.return_value = PipelineRunStatus(name="pnc-import-xxx", status="True")
+        mock_kube.find_snapshot_by_pipelinerun.return_value = "snapshot-abc"
+        mock_kube.find_release_for_snapshot.return_value = "release-abc"
+        mock_kube.get_release_status.return_value = "True"
+
+        orchestrator = _pruning_orchestrator(db, mock_kube)
+
+        assert orchestrator.run_until_complete() == 0
+        request = db.list_requests()[0]
+        assert request.pruned_at is not None
+        mock_kube.delete_request_resources.assert_called_with(releases={"release-abc"}, snapshots={"snapshot-abc"})
+
+    def test_persistent_prune_failure_warns_and_still_exits_zero(self, db: WorkflowDatabase, mock_kube, capsys):
+        _seed_success(db, "r1")
+        orchestrator = _pruning_orchestrator(db, mock_kube)
+        mock_kube.delete_request_resources.return_value = PruneOutcome.RETRY  # every prune attempt fails
+
+        assert orchestrator.run_until_complete() == 0  # exit code tracks FAILED requests, not prune
+        assert db.list_requests()[0].pruned_at is None
+        assert "could not be pruned" in capsys.readouterr().err
+
+    def test_prune_runs_after_release_update_before_trigger(self, db: WorkflowDatabase):
+        view = RequestView(db, skip_release=False)
+        trigger = MagicMock()
+        trigger.trigger_next_batch.return_value = 0
+        prune_monitor = MagicMock()
+        orchestrator = ImportOrchestrator(
+            view=view,
+            trigger=trigger,
+            pipeline_monitor=MagicMock(),
+            release_monitor=MagicMock(),
+            poll_interval=0,
+            max_retries=3,
+            prune_monitor=prune_monitor,
+        )
+        manager = MagicMock()
+        manager.attach_mock(orchestrator._release_monitor.update_statuses, "release")
+        manager.attach_mock(prune_monitor.prune_completed, "prune")
+        manager.attach_mock(trigger.trigger_next_batch, "trigger")
+
+        # One loop iteration, then complete: is_complete() is called at the top, after
+        # the batch, and at the next loop check.
+        with patch.object(orchestrator, "is_complete", side_effect=[False, True, True]):
+            orchestrator.run_until_complete()
+
+        order = [name for name, *_ in manager.mock_calls]
+        assert order.index("release") < order.index("prune") < order.index("trigger")

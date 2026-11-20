@@ -20,6 +20,7 @@ import sys
 import time
 
 from import_orchestrator.engine.pipeline import PipelineMonitor
+from import_orchestrator.engine.prune import PruneMonitor
 from import_orchestrator.engine.release import ReleaseMonitor
 from import_orchestrator.engine.request_view import RequestView
 from import_orchestrator.engine.trigger import ImportTrigger
@@ -43,6 +44,7 @@ class ImportOrchestrator:
         release_monitor: ReleaseMonitor,
         poll_interval: int,
         max_retries: int,
+        prune_monitor: PruneMonitor | None = None,
     ):
         self.view = view
         self.poll_interval = poll_interval
@@ -50,6 +52,7 @@ class ImportOrchestrator:
         self._trigger = trigger
         self._pipeline_monitor = pipeline_monitor
         self._release_monitor = release_monitor
+        self._prune_monitor = prune_monitor
 
     def update_pipelinerun_statuses(self) -> None:
         """Check status of all in-progress intake PipelineRuns and update phases."""
@@ -58,6 +61,11 @@ class ImportOrchestrator:
     def update_release_statuses(self) -> None:
         """For Requests past intake, discover snapshots and track releases."""
         self._release_monitor.update_statuses()
+
+    def prune_completed(self) -> None:
+        """Prune terminal Requests; no-op when no monitor is wired."""
+        if self._prune_monitor is not None:
+            self._prune_monitor.prune_completed()
 
     def trigger_next_batch(self) -> int:
         """Trigger imports up to the max_parallel limit, counting all in-flight stages.
@@ -96,6 +104,7 @@ class ImportOrchestrator:
 
             self.update_pipelinerun_statuses()
             self.update_release_statuses()
+            self.prune_completed()
 
             triggered = self.trigger_next_batch()
             if triggered > 0:
@@ -107,8 +116,29 @@ class ImportOrchestrator:
                 print(f"Sleeping {self.poll_interval}s...", file=sys.stderr)
                 time.sleep(self.poll_interval)
 
+        self.prune_completed()
+        self._warn_if_unpruned()
+
         final_stats = self.view.statistics()
         print("\n=== Complete ===", file=sys.stderr)
         self._print_statistics(final_stats)
 
         return 0 if final_stats.get(RequestState.FAILED.value, 0) == 0 else 1
+
+    def _warn_if_unpruned(self) -> None:
+        """Warn once on stderr if any terminal Request is still unpruned.
+
+        Per-cycle prune errors scroll away, and the run still exits 0 when the
+        imports succeeded. This says the quota reclaim never happened, for example
+        because delete RBAC is missing. It does not retry the delete or change the
+        exit code.
+        """
+        if self._prune_monitor is None:
+            return
+        remaining = self._prune_monitor.unpruned_count()
+        if remaining:
+            print(
+                f"WARNING: {remaining} terminal request(s) could not be pruned; their cluster "
+                "resources remain. See the prune errors above (e.g. missing delete RBAC).",
+                file=sys.stderr,
+            )
