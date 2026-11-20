@@ -118,6 +118,7 @@ class WorkflowDatabase:
                 target TEXT NOT NULL,
                 source_repo TEXT NOT NULL DEFAULT '',
                 created_at TIMESTAMP NOT NULL,
+                pruned_at TIMESTAMP,
                 UNIQUE(namespace, application, component, pipeline, release_plan, target, artifact, source_repo)
             )
         """
@@ -216,6 +217,14 @@ class WorkflowDatabase:
         cursor = self.conn.cursor()
         cursor.execute("SELECT * FROM requests ORDER BY id")
         return [self._row_to_request(row) for row in cursor.fetchall()]
+
+    def mark_pruned(self, request_id: int) -> None:
+        """Stamp ``pruned_at`` so the Request's resources are not pruned again."""
+        assert self.conn is not None
+        cursor = self.conn.cursor()
+        now = datetime.now(timezone.utc).isoformat()
+        cursor.execute("UPDATE requests SET pruned_at = ? WHERE id = ?", (now, request_id))
+        self.conn.commit()
 
     # -- Attempts ----------------------------------------------------------
 
@@ -451,6 +460,7 @@ class WorkflowDatabase:
             target=row["target"],
             source_repo=row["source_repo"],
             created_at=self._parse_timestamp(row["created_at"]),
+            pruned_at=self._parse_timestamp(row["pruned_at"]),
         )
 
     def _row_to_attempt(self, row: sqlite3.Row) -> Attempt:

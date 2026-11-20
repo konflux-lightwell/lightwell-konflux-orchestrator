@@ -131,6 +131,20 @@ class TestSelectors:
         candidates = view.retry_candidates(max_retries=3)
         assert [r.artifact for r in candidates] == ["retriable"]
 
+    def test_pruned_failure_is_never_retriable(self, db, view):
+        # A pruned failure is finished: raising --max-retries must not revive it against
+        # the Snapshot/Release prune already deleted (LWLP-5515).
+        pruned = _failed(db, "pruned", attempts=4)
+        db.mark_pruned(pruned.id)
+
+        assert view.retry_candidates(max_retries=10) == []
+        assert view.is_complete(max_retries=10) is True
+
+    def test_unpruned_failure_within_retries_is_still_retriable(self, db, view):
+        # Guard against the pruned_at gate over-reaching: an ordinary failure is unaffected.
+        _failed(db, "live", attempts=1)
+        assert [r.artifact for r in view.retry_candidates(max_retries=3)] == ["live"]
+
     def test_statistics(self, db, view):
         _pending(db, "p1")
         _running(db, "r1")

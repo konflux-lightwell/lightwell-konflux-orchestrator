@@ -21,7 +21,7 @@ from unittest.mock import MagicMock, patch
 
 from import_orchestrator.commands.run import run_single
 from import_orchestrator.database import WorkflowDatabase
-from import_orchestrator.engine import ImportOrchestrator, PipelineMonitor
+from import_orchestrator.engine import ImportOrchestrator, PipelineMonitor, PruneMonitor
 from import_orchestrator.models import ClusterResource, Phase, PhaseStatus
 
 _REF = "ntplib==0.4.0"
@@ -107,6 +107,26 @@ def _make_failure(error_message):
         return 1
 
     return fake_run
+
+
+class TestPruneWiring:
+    def test_run_wires_prune_monitor(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("tempfile.mkdtemp", lambda *a, **k: str(tmp_path / "eph"))
+        captured: dict = {}
+
+        def fake_run(self):
+            captured["monitor"] = self._prune_monitor
+            return 0
+
+        with (
+            patch("import_orchestrator.commands.run.KubeClient"),
+            patch.object(ImportOrchestrator, "run_until_complete", fake_run),
+        ):
+            assert run_single(_args(), _REF) == 0
+
+        monitor = captured["monitor"]
+        assert isinstance(monitor, PruneMonitor)
+        assert monitor.max_retries == 3
 
 
 class TestEphemeralDatabase:

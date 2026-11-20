@@ -32,6 +32,7 @@ from import_orchestrator.engine import (
     ImportOrchestrator,
     ImportTrigger,
     PipelineMonitor,
+    PruneMonitor,
     ReleaseMonitor,
     RequestView,
 )
@@ -140,6 +141,8 @@ def run_orchestrate(args: argparse.Namespace, empty_db_warning: str) -> int:
             release_plan=getattr(args, "release_plan", None),
         )
 
+        prune_monitor = PruneMonitor(view=view, kube=kube, max_retries=args.max_retries)
+
         orchestrator = ImportOrchestrator(
             view=view,
             trigger=trigger,
@@ -147,6 +150,7 @@ def run_orchestrate(args: argparse.Namespace, empty_db_warning: str) -> int:
             release_monitor=release_monitor,
             poll_interval=args.poll_interval,
             max_retries=args.max_retries,
+            prune_monitor=prune_monitor,
         )
 
         return orchestrator.run_until_complete()

@@ -110,6 +110,33 @@ class TestRequests:
         assert len(requests) == 2
         assert [r.target for r in requests] == ["remediated", "novel"]
 
+
+class TestPruning:
+    def test_new_request_is_not_pruned(self, store: WorkflowDatabase):
+        request, _ = _make_request(store)
+        assert request.pruned_at is None
+        assert store.get_request(request.id).pruned_at is None
+
+    def test_mark_pruned_stamps_timezone_aware_utc_timestamp(self, store: WorkflowDatabase):
+        request, _ = _make_request(store)
+
+        store.mark_pruned(request.id)
+
+        pruned_at = store.get_request(request.id).pruned_at
+        assert pruned_at is not None
+        assert pruned_at.tzinfo is not None
+        assert pruned_at.utcoffset() == timedelta(0)
+        # list_requests surfaces the same value the prune monitor reads each cycle.
+        assert store.list_requests()[0].pruned_at == pruned_at
+
+    def test_mark_pruned_is_idempotent(self, store: WorkflowDatabase):
+        request, _ = _make_request(store)
+        store.mark_pruned(request.id)
+        first = store.get_request(request.id).pruned_at
+        store.mark_pruned(request.id)
+        second = store.get_request(request.id).pruned_at
+        assert first is not None and second is not None
+
     def test_created_at_is_timezone_aware_utc(self, store: WorkflowDatabase):
         request, _ = _make_request(store)
         assert request.created_at is not None
