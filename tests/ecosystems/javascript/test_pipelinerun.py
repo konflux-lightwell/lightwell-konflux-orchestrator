@@ -127,6 +127,17 @@ class TestBuildManifest:
         )
         assert params["pulp-read-secret-name"] == "lightwell-pulp-read-secret"
 
+    def test_no_publish_version_override_by_default(self):
+        """Without a suffix the recipes publish manifest.version unchanged."""
+        params = {p["name"]: p["value"] for p in _manifest()["spec"]["params"]}
+        assert params["lightwell-publish-version-override"] == ""
+
+    def test_publish_version_suffix_appended_to_version(self):
+        """A suffix becomes a <version>-<suffix> publish version override."""
+        params = {p["name"]: p["value"] for p in _manifest(publish_version_suffix="lwci.0")["spec"]["params"]}
+        assert params["lightwell-publish-version-override"] == "3.7.2-lwci.0"
+        assert params["output-image"].endswith(":bluebird-3.7.2")
+
     def test_git_auth_workspace_bound_to_secret(self):
         """The clone task authenticates via the git-auth workspace, backed by a secret."""
         workspaces = _manifest()["spec"]["workspaces"]

@@ -36,6 +36,7 @@ TARGET_CONFIGS: dict[str, dict] = {
         "service_account": "build-pipeline-javascript-validated-stage-build",
         "tl_npm_registry_url": TL_NPM_REGISTRY_URL_STAGE,
         "skip_release": True,
+        "allow_publish_version_suffix": True,
     },
     "VALIDATED_STAGE": {
         "app": "javascript-validated-stage",
@@ -72,6 +73,9 @@ DEFAULT_BUILDER_IMAGE = (
     "6a93271ad6350d6bbebd99f18da3abf6957db002@"
     "sha256:5ccbec169ed5516d264979c4d56d8dc8f034989106b0e890dde964a0ed0be6c4"
 )
+# TODO: bump to a bundle whose build-npm-package-oci-ta declares the
+# LIGHTWELL_PUBLISH_VERSION_OVERRIDE param; until then --publish-version-suffix
+# does not reach the recipes.
 DEFAULT_TASK_BUILD_NPM_PACKAGE_BUNDLE = (
     "quay.io/konflux-ci/tekton-catalog/task-build-npm-package:"
     "0.1-1793720581@"
