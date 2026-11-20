@@ -20,9 +20,10 @@ from unittest.mock import MagicMock
 import pytest
 
 from import_orchestrator.clients import KubeClient
+from import_orchestrator.constants import MAX_QUOTA_DEFERRALS
 from import_orchestrator.database import WorkflowDatabase
 from import_orchestrator.engine import ReleaseMonitor, RequestView
-from import_orchestrator.engine.errors import ReleaseError
+from import_orchestrator.engine.errors import QuotaDeferred, ReleaseError
 from import_orchestrator.models import ClusterResource, Fingerprint, Phase, PhaseStatus, Request, RequestState
 
 
@@ -242,6 +243,42 @@ class TestFindOrCreateRelease:
         assert release is not None
         assert release.status == PhaseStatus.FAILED
         assert "403 Forbidden" in release.error_message
+
+    def test_quota_deferral_records_no_phase(
+        self, monitor: ReleaseMonitor, db: WorkflowDatabase, mock_kube: MagicMock, capsys
+    ):
+        """A quota rejection is transient: no release phase is recorded and no
+        retry slot burned, so the snapshot is retried on a later poll."""
+        request = _seed(db, "r-quota", snapshot="snapshot-quota")
+        mock_kube.find_release_for_snapshot.return_value = None
+        mock_kube.find_release_plan_for_snapshot.return_value = "release-plan-default"
+        mock_kube.create_release.side_effect = QuotaDeferred(
+            "Release creation deferred for Snapshot snapshot-quota: exceeded quota"
+        )
+
+        monitor.update_statuses()
+
+        assert "DEFERRED (quota, 1/" in capsys.readouterr().err
+        assert _phase(db, request, Phase.RELEASE) is None
+
+    def test_quota_deferral_escalates_to_failure_at_cap(
+        self, monitor: ReleaseMonitor, db: WorkflowDatabase, mock_kube: MagicMock
+    ):
+        """A never-clearing quota must not spin the release monitor forever:
+        past MAX_QUOTA_DEFERRALS the deferral is recorded as a FAILED release
+        phase (bounded, retriable)."""
+        request = _seed(db, "r-quota-forever", snapshot="snapshot-quota-forever")
+        mock_kube.find_release_for_snapshot.return_value = None
+        mock_kube.find_release_plan_for_snapshot.return_value = "release-plan-default"
+        mock_kube.create_release.side_effect = QuotaDeferred("exceeded quota")
+
+        for _ in range(MAX_QUOTA_DEFERRALS):
+            monitor.update_statuses()
+
+        release = _phase(db, request, Phase.RELEASE)
+        assert release is not None
+        assert release.status == PhaseStatus.FAILED
+        assert "namespace quota" in release.error_message
 
 
 class TestReleasePlanOverride:

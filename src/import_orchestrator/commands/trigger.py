@@ -21,7 +21,7 @@ import sys
 
 from import_orchestrator.clients import KubeClient
 from import_orchestrator.constants import CLUSTER_API, KUBEARCHIVE_API
-from import_orchestrator.engine.errors import TriggerError
+from import_orchestrator.engine.errors import QuotaDeferred, TriggerError
 
 
 def run_trigger(args: argparse.Namespace, ref: str) -> int:
@@ -43,6 +43,9 @@ def run_trigger(args: argparse.Namespace, ref: str) -> int:
         print("ERROR: PipelineRun may have been created but its name could not be parsed", file=sys.stderr)
         return 1
 
+    except QuotaDeferred as e:
+        print(f"DEFERRED: {e}", file=sys.stderr)
+        return 3
     except TriggerError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 1

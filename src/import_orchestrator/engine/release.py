@@ -19,7 +19,8 @@ from __future__ import annotations
 import sys
 
 from import_orchestrator.clients import KubeClient
-from import_orchestrator.engine.errors import ReleaseError
+from import_orchestrator.constants import MAX_QUOTA_DEFERRALS
+from import_orchestrator.engine.errors import QuotaDeferred, ReleaseError
 from import_orchestrator.engine.request_view import RequestView
 from import_orchestrator.models import AttemptPhase, ClusterResource, Fingerprint, Phase, PhaseStatus
 from import_orchestrator.utils import extract_tag
@@ -59,6 +60,9 @@ class ReleaseMonitor:
         self.prefix = prefix
         self.skip_release = view.skip_release
         self.release_plan = release_plan
+        # Consecutive quota deferrals per attempt, this run; see
+        # ImportTrigger._quota_deferrals for the rationale.
+        self._quota_deferrals: dict[int, int] = {}
 
     def update_statuses(self) -> None:
         """For Requests past a successful intake, drive snapshot -> ITS -> release."""
@@ -251,6 +255,29 @@ class ReleaseMonitor:
         )
         try:
             release_name = self.kube.create_release(snapshot_name, release_plan, self.prefix, fingerprint=fingerprint)
+        except QuotaDeferred as e:
+            # Transient capacity condition: record nothing so the attempt is
+            # retried on a later poll once quota headroom returns, rather than
+            # recording a FAILED release phase that burns a retry slot. Past
+            # the deferral cap (a quota condition that never clears within
+            # this run), record a normal retriable failure so the run cannot
+            # spin forever.
+            count = self._quota_deferrals.get(attempt_id, 0) + 1
+            self._quota_deferrals[attempt_id] = count
+            if count >= MAX_QUOTA_DEFERRALS:
+                self.db.upsert_phase(
+                    attempt_id,
+                    Phase.RELEASE,
+                    PhaseStatus.FAILED,
+                    error_message=f"Release creation deferred {count}x by namespace quota: {e}",
+                )
+                print(
+                    f"  ERROR: {tag} deferred by quota {count}x, recording failure: {e}",
+                    file=sys.stderr,
+                )
+                return None
+            print(f"  DEFERRED (quota, {count}/{MAX_QUOTA_DEFERRALS}): {tag}: {e}", file=sys.stderr)
+            return None
         except ReleaseError as e:
             # A rejected create call (e.g. a permissions gap) will not resolve
             # itself by retrying the identical request next poll. Record a
