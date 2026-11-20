@@ -20,7 +20,7 @@ import argparse
 
 from import_orchestrator.commands.orchestrate import add_common_orchestrate_args, run_orchestrate
 from import_orchestrator.ecosystems.base import Ecosystem
-from import_orchestrator.ecosystems.javascript.commands.trigger import add_build_args
+from import_orchestrator.ecosystems.javascript.commands.build_args import add_build_args
 
 _EMPTY_DB_WARNING = "No package references in database. Run 'import-orchestrator javascript import-file' first."
 

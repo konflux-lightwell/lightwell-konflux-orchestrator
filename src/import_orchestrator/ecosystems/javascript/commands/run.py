@@ -21,7 +21,7 @@ import argparse
 from import_orchestrator.commands.run import run_single
 from import_orchestrator.constants import DEFAULT_MAX_RETRIES, DEFAULT_POLL_INTERVAL
 from import_orchestrator.ecosystems.base import Ecosystem
-from import_orchestrator.ecosystems.javascript.commands.trigger import add_build_args
+from import_orchestrator.ecosystems.javascript.commands.build_args import add_build_args
 
 
 def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> None:
