@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import argparse
 
-from import_orchestrator.ecosystems.base import build_request_identity
+from import_orchestrator.ecosystems.base import build_request_identity, build_type_for_python_sdist
 from import_orchestrator.ecosystems.python_sdist import config
 from import_orchestrator.ecosystems.python_sdist.canonical_source import resolve_canonical_source
 from import_orchestrator.ecosystems.python_sdist.pipelinerun import build_pipelinerun_manifest, parse_ref
@@ -61,6 +61,8 @@ class PythonSdistEcosystem:
                 source_type="git",
                 upstream_url=source["upstream_url"],
                 upstream_ref=source["ref"],
+                ecosystem=self.name,
+                build_type=build_type_for_python_sdist(target),
             )
 
         source_registries = getattr(args, "source_registries", "rhtl")
@@ -69,6 +71,8 @@ class PythonSdistEcosystem:
             **common_kwargs,
             pipeline_spec=pipeline_spec,
             source_registries=source_registries,
+            ecosystem=self.name,
+            build_type=build_type_for_python_sdist(target),
         )
 
     def request_identity(self, ref: str, args: argparse.Namespace) -> dict[str, str]:

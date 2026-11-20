@@ -32,7 +32,7 @@ from import_orchestrator.models import (
 
 
 def _request(**overrides) -> Request:
-    """A Request with the seven fingerprint fields populated; override one to test
+    """A Request with the fingerprint fields populated; override one to test
     that it changes the hash."""
     fields = {
         "id": 1,
@@ -43,6 +43,8 @@ def _request(**overrides) -> Request:
         "release_plan": "rp",
         "artifact": "pkg==1.0.0",
         "target": "remediated",
+        "source_repo": "",
+        "build_type": "",
     }
     fields.update(overrides)
     return Request(**fields)
@@ -59,6 +61,8 @@ class TestFingerprint:
             release_plan="rp",
             target="remediated",
             artifact="pkg==1.0.0",
+            source_repo="",
+            build_type="",
         )
 
     def test_hash_is_deterministic_across_instances(self):
@@ -75,10 +79,10 @@ class TestFingerprint:
         # fails if someone regresses to a salted or reordered implementation, so
         # it is what actually guards cross-invocation recognition.
         #
-        # Canonical string: "ns\0app\0comp\0import-pnc\0rp\0remediated\0pkg==1.0.0"
+        # Canonical string: "ns\0app\0comp\0import-pnc\0rp\0remediated\0pkg==1.0.0\0\0\0"
         assert (
             Fingerprint.from_request(_request()).hash()
-            == "8dc7985b88343eb4aad8c69c329c5c8312a99045b92758b18c0f342b00e3afe"
+            == "911a1f1c1b308a7af79bfee33c64e3b87561f0357bf6cf197d649fb3c04d002"
         )
 
     def test_hash_is_label_safe_length(self):
@@ -92,7 +96,17 @@ class TestFingerprint:
 
     @pytest.mark.parametrize(
         "field",
-        ["namespace", "application", "component", "pipeline", "release_plan", "artifact", "target"],
+        [
+            "namespace",
+            "application",
+            "component",
+            "pipeline",
+            "release_plan",
+            "artifact",
+            "target",
+            "source_repo",
+            "build_type",
+        ],
     )
     def test_changing_any_field_changes_the_hash(self, field):
         base = Fingerprint.from_request(_request()).hash()

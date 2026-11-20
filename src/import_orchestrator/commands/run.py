@@ -149,6 +149,7 @@ def run_single(args: argparse.Namespace, ref: str) -> int:
                 build_pipelinerun=lambda r: eco.build_pipelinerun(r, args),
                 max_parallel=1,
                 max_retries=args.max_retries,
+                kueue_queue_name=getattr(args, "kueue_queue_name", None),
             )
             pipeline_monitor = PipelineMonitor(view=view, kube=kube)
             release_monitor = ReleaseMonitor(

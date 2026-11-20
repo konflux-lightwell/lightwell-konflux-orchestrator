@@ -36,6 +36,7 @@ from import_orchestrator.engine import (
     RequestView,
 )
 from import_orchestrator.engine.errors import TriggerError
+from import_orchestrator.engine.kueue import add_kueue_args, apply_kueue_scheduling
 from import_orchestrator.release_data import ReleaseDataError, ReleaseDataResolver, application_of
 
 
@@ -84,6 +85,7 @@ def add_common_orchestrate_args(parser: argparse.ArgumentParser) -> None:
             "resolving one based on the Konflux application."
         ),
     )
+    add_kueue_args(parser)
 
 
 def _is_database_empty(db: WorkflowDatabase) -> bool:
@@ -130,6 +132,7 @@ def run_orchestrate(args: argparse.Namespace, empty_db_warning: str) -> int:
             build_pipelinerun=lambda ref: eco.build_pipelinerun(ref, args),
             max_parallel=args.max_parallel,
             max_retries=args.max_retries,
+            kueue_queue_name=getattr(args, "kueue_queue_name", None),
         )
         pipeline_monitor = PipelineMonitor(view=view, kube=kube)
         release_monitor = ReleaseMonitor(
@@ -175,6 +178,7 @@ def _run_print_resources(args: argparse.Namespace, view: RequestView) -> int:
         print(f"\n=== {request.artifact} ===")
         try:
             manifest = eco.build_pipelinerun(request.artifact, args)
+            apply_kueue_scheduling(manifest, getattr(args, "kueue_queue_name", None))
         except TriggerError as exc:
             print(f"  ERROR building PipelineRun: {exc}", file=sys.stderr)
             continue

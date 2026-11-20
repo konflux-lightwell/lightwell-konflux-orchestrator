@@ -542,3 +542,138 @@ class TestIntegration:
         mock_kube.get_release_status.return_value = "True"
         monitor.update_statuses()
         assert monitor.view.state(request) == RequestState.SUCCESS
+
+
+class TestSnapshotFallback:
+    """Creating the Snapshot ourselves when the integration service doesn't."""
+
+    def test_creates_snapshot_after_grace(
+        self, monitor: ReleaseMonitor, db: WorkflowDatabase, mock_kube: MagicMock
+    ):
+        """When the integration service has not created a Snapshot within the
+        grace window, the monitor builds one from the PipelineRun's results."""
+        request = _seed(db, "r1")
+        monitor.snapshot_fallback_seconds = 0  # grace elapsed
+        mock_kube.find_snapshot_by_pipelinerun.return_value = None
+        mock_kube.create_snapshot_from_pipelinerun.return_value = "snapshot-created"
+
+        monitor.update_statuses()
+
+        mock_kube.create_snapshot_from_pipelinerun.assert_called_once()
+        args = mock_kube.create_snapshot_from_pipelinerun.call_args[0]
+        assert args[0] == "pr-r1"  # the intake PipelineRun
+        snapshot = _phase(db, request, Phase.SNAPSHOT)
+        assert snapshot is not None
+        assert snapshot.status == PhaseStatus.SUCCESS
+        assert snapshot.reference_id == "snapshot-created"
+
+    def test_does_not_create_snapshot_within_grace(
+        self, monitor: ReleaseMonitor, db: WorkflowDatabase, mock_kube: MagicMock
+    ):
+        """A freshly finished intake waits for the integration service."""
+        request = _seed(db, "r1")  # intake recorded now
+        mock_kube.find_snapshot_by_pipelinerun.return_value = None
+        monitor.snapshot_fallback_seconds = 3600
+
+        monitor.update_statuses()
+
+        mock_kube.create_snapshot_from_pipelinerun.assert_not_called()
+        assert _phase(db, request, Phase.SNAPSHOT) is None
+
+    def test_existing_snapshot_wins_no_fallback(
+        self, monitor: ReleaseMonitor, db: WorkflowDatabase, mock_kube: MagicMock
+    ):
+        """When the integration service delivered, we never create our own."""
+        _seed(db, "r1")
+        monitor.snapshot_fallback_seconds = 0
+        mock_kube.find_snapshot_by_pipelinerun.return_value = "snapshot-its"
+
+        monitor.update_statuses()
+
+        mock_kube.create_snapshot_from_pipelinerun.assert_not_called()
+
+    def test_failed_fallback_keeps_waiting(
+        self, monitor: ReleaseMonitor, db: WorkflowDatabase, mock_kube: MagicMock
+    ):
+        """If the fallback create fails (e.g. results unavailable), the
+        request keeps waiting instead of crashing or failing."""
+        request = _seed(db, "r1")
+        monitor.snapshot_fallback_seconds = 0
+        mock_kube.find_snapshot_by_pipelinerun.return_value = None
+        mock_kube.create_snapshot_from_pipelinerun.return_value = None
+
+        monitor.update_statuses()
+
+        assert _phase(db, request, Phase.SNAPSHOT) is None
+
+
+class TestItsFallbackVerdict:
+    """Locally deciding 'no scenario applies' for orchestrator-created Snapshots
+    when no controller stamps the test verdict condition."""
+
+    FALLBACK_SNAP = {"metadata": {"annotations": {"lightwell.dev/snapshot-source": "orchestrator-fallback"}}}
+    ITS_SNAP = {"metadata": {"annotations": {}}}
+
+    def _pending(self, mock_kube: MagicMock, snap: dict) -> None:
+        mock_kube.get_snapshot.return_value = snap
+        mock_kube.get_snapshot_test_status.return_value = "pending"
+        mock_kube.list_integration_test_scenarios.return_value = []
+        mock_kube.find_release_for_snapshot.return_value = "release-789"
+
+    def test_fallback_snapshot_skips_tests_after_timeout(
+        self, monitor: ReleaseMonitor, db: WorkflowDatabase, mock_kube: MagicMock
+    ):
+        """Fallback snapshot + verdict missing past the timeout + no scenario
+        applies -> tests recorded SKIPPED and the release proceeds."""
+        request = _seed(db, "r1", snapshot="snap-fallback")
+        self._pending(mock_kube, self.FALLBACK_SNAP)
+        monitor.its_fallback_seconds = 0
+
+        monitor.update_statuses()
+
+        it = _phase(db, request, Phase.INTEGRATION_TESTS)
+        assert it is not None and it.status == PhaseStatus.SKIPPED
+        assert _phase(db, request, Phase.RELEASE).reference_id == "release-789"
+
+    def test_fallback_snapshot_within_timeout_keeps_waiting(
+        self, monitor: ReleaseMonitor, db: WorkflowDatabase, mock_kube: MagicMock
+    ):
+        """Within the timeout the verdict is still awaited from the cluster."""
+        request = _seed(db, "r1", snapshot="snap-fallback")
+        self._pending(mock_kube, self.FALLBACK_SNAP)
+        monitor.its_fallback_seconds = 3600
+
+        monitor.update_statuses()
+
+        it = _phase(db, request, Phase.INTEGRATION_TESTS)
+        assert it is not None and it.status == PhaseStatus.RUNNING
+        assert _phase(db, request, Phase.RELEASE) is None
+
+    def test_its_snapshot_never_locally_skipped(
+        self, monitor: ReleaseMonitor, db: WorkflowDatabase, mock_kube: MagicMock
+    ):
+        """Integration-service-created snapshots always wait for the cluster verdict."""
+        request = _seed(db, "r1", snapshot="snap-its")
+        self._pending(mock_kube, self.ITS_SNAP)
+        monitor.its_fallback_seconds = 0
+
+        monitor.update_statuses()
+
+        it = _phase(db, request, Phase.INTEGRATION_TESTS)
+        assert it is not None and it.status == PhaseStatus.RUNNING
+        assert _phase(db, request, Phase.RELEASE) is None
+
+    def test_fallback_snapshot_with_scenarios_keeps_waiting(
+        self, monitor: ReleaseMonitor, db: WorkflowDatabase, mock_kube: MagicMock
+    ):
+        """When scenarios DO apply, the local skip is never taken."""
+        request = _seed(db, "r1", snapshot="snap-fallback")
+        self._pending(mock_kube, self.FALLBACK_SNAP)
+        mock_kube.list_integration_test_scenarios.return_value = [{"metadata": {"name": "scenario-1"}}]
+        monitor.its_fallback_seconds = 0
+
+        monitor.update_statuses()
+
+        it = _phase(db, request, Phase.INTEGRATION_TESTS)
+        assert it is not None and it.status == PhaseStatus.RUNNING
+        assert _phase(db, request, Phase.RELEASE) is None

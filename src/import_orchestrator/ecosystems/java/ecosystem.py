@@ -19,7 +19,7 @@ from __future__ import annotations
 import argparse
 
 from import_orchestrator.constants import NAMESPACE
-from import_orchestrator.ecosystems.base import build_request_identity
+from import_orchestrator.ecosystems.base import build_request_identity, build_type_for_java
 from import_orchestrator.ecosystems.java import config
 from import_orchestrator.ecosystems.java.pipelinerun import (
     build_pipelinerun_manifest,
@@ -56,6 +56,8 @@ class JavaEcosystem:
             prefix=self.pipelinerun_prefix,
             verification_secret=config.VERIFICATION_PUBLIC_KEY_SECRET,
             namespace=self.namespace,
+            ecosystem=self.name,
+            build_type=build_type_for_java(artifact_type),
         )
         return apply_pipeline_overrides(manifest, pipeline_path)
 

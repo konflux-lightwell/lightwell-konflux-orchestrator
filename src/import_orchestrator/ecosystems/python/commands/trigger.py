@@ -23,6 +23,7 @@ from import_orchestrator.commands.trigger import run_trigger
 from import_orchestrator.ecosystems.base import Ecosystem
 from import_orchestrator.ecosystems.python import config
 from import_orchestrator.ecosystems.python.commands.build_args import add_build_repo_args
+from import_orchestrator.engine.kueue import add_kueue_args
 
 
 def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> None:
@@ -56,6 +57,7 @@ def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> No
     )
 
     add_build_repo_args(parser)
+    add_kueue_args(parser)
     parser.set_defaults(func=run, ecosystem=ecosystem)
 
 

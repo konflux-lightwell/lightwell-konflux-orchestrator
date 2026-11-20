@@ -22,6 +22,7 @@ from collections.abc import Callable
 from import_orchestrator.clients.kube import KubeClient
 from import_orchestrator.constants import FINGERPRINT_LABEL
 from import_orchestrator.engine.errors import TriggerError
+from import_orchestrator.engine.kueue import apply_kueue_scheduling
 from import_orchestrator.engine.request_view import RequestView
 from import_orchestrator.models import Attempt, ClusterResource, Fingerprint, Phase, PhaseStatus, Request
 from import_orchestrator.utils import extract_tag
@@ -47,6 +48,7 @@ class ImportTrigger:
         build_pipelinerun: Callable[[str], dict],
         max_parallel: int,
         max_retries: int,
+        kueue_queue_name: str | None = None,
     ):
         self.view = view
         self.db = view.db
@@ -54,6 +56,7 @@ class ImportTrigger:
         self.build_pipelinerun = build_pipelinerun
         self.max_parallel = max_parallel
         self.max_retries = max_retries
+        self.kueue_queue_name = kueue_queue_name
 
     def trigger_next_batch(self) -> int:
         """Trigger imports up to the max_parallel limit, counting all in-flight stages.
@@ -110,6 +113,7 @@ class ImportTrigger:
             # builders, which only receive the artifact.
             labels = manifest.setdefault("metadata", {}).setdefault("labels", {})
             labels[FINGERPRINT_LABEL] = Fingerprint.from_request(request).hash()
+            apply_kueue_scheduling(manifest, self.kueue_queue_name)
             pr_name = self.kube.create_pipelinerun(manifest)
             if pr_name is None:
                 raise TriggerError("PipelineRun creation failed (API returned no name)")

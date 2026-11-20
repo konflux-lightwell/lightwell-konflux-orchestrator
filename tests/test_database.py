@@ -32,6 +32,8 @@ REQUEST_FIELDS = {
     "release_plan": "java-remediated-release-prod",
     "artifact": "quay.io/light-castle/java-secure@sha256:abc",
     "target": "remediated",
+    "source_repo": "",
+    "build_type": "",
 }
 
 
@@ -84,11 +86,11 @@ class TestRequests:
     def test_varying_any_fingerprint_field_creates_new_request(self, store: WorkflowDatabase, field: str):
         base, inserted_base = _make_request(store)
         assert inserted_base is True
-        # Changing any one of the seven fingerprint fields is a distinct Request.
+        # Changing any one of the fingerprint fields is a distinct Request.
         varied, inserted = _make_request(store, **{field: REQUEST_FIELDS[field] + "-x"})
         assert inserted is True
         assert varied.id != base.id
-        # The original 7-tuple still dedupes to the original row.
+        # The original tuple still dedupes to the original row.
         again, inserted_again = _make_request(store)
         assert inserted_again is False
         assert again.id == base.id

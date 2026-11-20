@@ -22,6 +22,7 @@ import os
 from import_orchestrator.commands.trigger import run_trigger
 from import_orchestrator.ecosystems.base import Ecosystem
 from import_orchestrator.ecosystems.javascript import config
+from import_orchestrator.engine.kueue import add_kueue_args
 
 
 def add_build_args(parser: argparse.ArgumentParser) -> None:
@@ -96,6 +97,7 @@ def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> No
         help="Package reference to build, in the form package==version (e.g. bluebird==3.7.2)",
     )
     add_build_args(parser)
+    add_kueue_args(parser)
     parser.set_defaults(func=run, ecosystem=ecosystem)
 
 

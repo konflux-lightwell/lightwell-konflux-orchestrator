@@ -1022,3 +1022,112 @@ class TestCreateRelease:
 
         api_path = kube._mock_api.create.call_args[0][0]
         assert "/namespaces/test-ns/" in api_path
+
+
+class TestSnapshotFromPipelinerun:
+    """Building Snapshots from PipelineRun results (integration-service fallback)."""
+
+    def test_results_from_live_cluster(self, monkeypatch):
+        client = _make_kube_client(monkeypatch, kubearchive_api="ka")
+        client._mock_api.get.return_value = {
+            "status": {"results": [{"name": "IMAGE_REF", "value": "ref"}]}
+        }
+        assert client.get_pipelinerun_results("pr-1") == {"IMAGE_REF": "ref"}
+        client._mock_ka_api.get.assert_not_called()
+
+    def test_results_fall_back_to_kubearchive(self, monkeypatch):
+        """A PR deleted by the tekton pruner still yields results via KubeArchive."""
+        client = _make_kube_client(monkeypatch, kubearchive_api="ka")
+
+        class NotFound(requests.RequestException):
+            pass
+
+        client._mock_api.get.side_effect = NotFound()
+        client._mock_ka_api.get.return_value = {
+            "status": {"results": [{"name": "IMAGE_REF", "value": "archived-ref"}]}
+        }
+        assert client.get_pipelinerun_results("pr-1") == {"IMAGE_REF": "archived-ref"}
+
+    def test_no_results_anywhere(self, monkeypatch):
+        client = _make_kube_client(monkeypatch, kubearchive_api="ka")
+
+        class NotFound(requests.RequestException):
+            pass
+
+        client._mock_api.get.side_effect = NotFound()
+        client._mock_ka_api.get.side_effect = NotFound()
+        assert client.get_pipelinerun_results("pr-1") is None
+
+    def test_creates_snapshot_with_source_reference(self, monkeypatch):
+        """The snapshot mirrors the integration-service mapping: results to
+        annotations, chains git results to the component source (without which
+        the release pipeline's slsa_source_correlated policy fails)."""
+        import json as _json
+
+        client = _make_kube_client(monkeypatch)
+        results = {
+            "IMAGE_URL": "quay.io/x/pnc-import:tag",
+            "IMAGE_DIGEST": "sha256:" + "a" * 64,
+            "IMAGE_REF": "quay.io/x/pnc-import@sha256:" + "a" * 64,
+            "SBOM_BLOB_URL": "quay.io/x/sbom",
+            "CHAINS-GIT_URL": "https://github.com/org/repo.git",
+            "CHAINS-GIT_COMMIT": "abc123",
+            "SOURCE_ARTIFACT": "oci:quay.io/x/src",
+            "INDEX_BUILD_JSON_ARTIFACT": "oci:quay.io/x/idx",
+        }
+        monkeypatch.setattr(client, "get_pipelinerun_results", lambda pr: dict(results))
+        client._mock_api.create.return_value = {"metadata": {"name": "snap-1"}}
+
+        name = client.create_snapshot_from_pipelinerun("pr-1", "pnc-import", "snap-1")
+
+        assert name == "snap-1"
+        manifest = client._mock_api.create.call_args[0][1]
+        comp = manifest["spec"]["components"][0]
+        assert comp["containerImage"] == results["IMAGE_REF"]
+        assert comp["source"] == {"git": {"url": results["CHAINS-GIT_URL"], "revision": "abc123"}}
+        ann = manifest["metadata"]["annotations"]
+        assert ann["test.appstudio.openshift.io/result-image-ref"] == results["IMAGE_REF"]
+        assert ann["test.appstudio.openshift.io/result-chains-git-url"] == results["CHAINS-GIT_URL"]
+        assert manifest["metadata"]["labels"]["appstudio.openshift.io/build-pipelinerun"] == "pr-1"
+
+    def test_create_returns_none_without_results(self, monkeypatch):
+        client = _make_kube_client(monkeypatch)
+        monkeypatch.setattr(client, "get_pipelinerun_results", lambda pr: None)
+        assert client.create_snapshot_from_pipelinerun("pr-1", "pnc-import", "snap-1") is None
+        client._mock_api.create.assert_not_called()
+
+    def test_create_survives_api_error(self, monkeypatch):
+        client = _make_kube_client(monkeypatch)
+        monkeypatch.setattr(client, "get_pipelinerun_results", lambda pr: {"IMAGE_REF": "ref"})
+
+        class Boom(requests.RequestException):
+            pass
+
+        client._mock_api.create.side_effect = Boom()
+        assert client.create_snapshot_from_pipelinerun("pr-1", "pnc-import", "snap-1") is None
+
+
+class TestIntegrationTestScenarioFilter:
+    """Scenarios bind via spec.application; the lookup filters client-side."""
+
+    def test_filters_by_spec_application(self, monkeypatch):
+        client = _make_kube_client(monkeypatch)
+        client._mock_api.list.return_value = {
+            "items": [
+                {"metadata": {"name": "s-other"}, "spec": {"application": "other-app"}},
+                {"metadata": {"name": "s-ours"}, "spec": {"application": "pnc-import"}},
+            ]
+        }
+        got = client.list_integration_test_scenarios("pnc-import")
+        assert [s["metadata"]["name"] for s in got] == ["s-ours"]
+        # no labelSelector param: spec fields cannot be label-selected
+        assert "labelSelector" not in client._mock_api.list.call_args[1]
+
+    def test_none_on_api_error(self, monkeypatch):
+        client = _make_kube_client(monkeypatch)
+
+        class Boom(requests.RequestException):
+            pass
+
+        client._mock_api.list.side_effect = Boom()
+        assert client.list_integration_test_scenarios("pnc-import") is None
