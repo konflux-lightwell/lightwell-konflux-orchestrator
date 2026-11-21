@@ -468,6 +468,8 @@ retry. A terminally failed Release is *not* adopted, so a retry after `1` genuin
 **Exit codes:**
 - `0` — PipelineRun triggered successfully
 - `1` — Validation or submission errors
+- `3` — Deferred: the namespace's quota is exhausted. Transient — retry once
+  quota headroom returns rather than treating it as a failure
 
 #### `run` subcommand
 
@@ -506,6 +508,11 @@ reference specifically. The result JSON is printed for both `0` and `1`.
 - `0` — Release succeeded
 - `1` — Release failed terminally, or could not be created
 - `2` — Timed out; the Release is still running
+- `3` — Deferred: the create call was rejected because the namespace's quota is
+  exhausted, or an in-flight Release has no verdict while the quota is exhausted
+  (its release PipelineRun cannot start). Transient — re-run to adopt or retry
+  once quota headroom returns; callers should keep the request queued rather
+  than treat it as a failure
 
 No database is opened at any point, so the global `--db` and `--reset` flags have no effect here.
 

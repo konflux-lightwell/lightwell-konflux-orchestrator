@@ -40,6 +40,11 @@ DEFAULT_MAX_PARALLEL = 1
 DEFAULT_POLL_INTERVAL = 30  # seconds
 DEFAULT_MAX_RETRIES = 3
 
+# Consecutive quota deferrals tolerated per request within one run before the
+# deferral is recorded as an ordinary, retry-bounded failure. Bounds the poll
+# loop against a namespace quota that never clears.
+MAX_QUOTA_DEFERRALS = 20
+
 # ---------------------------------------------------------------------------
 # konflux-release-data (GitOps source of truth for ReleasePlan / RPA).
 # Used by `orchestrate --print-resources` to resolve the release chain offline.

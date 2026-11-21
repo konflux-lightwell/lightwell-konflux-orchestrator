@@ -47,6 +47,22 @@ def _api_error_detail(exc: requests.RequestException) -> str:
     return f"{exc}: {text}" if text else str(exc)
 
 
+def _is_quota_rejection(exc: requests.RequestException) -> bool:
+    """Whether a failed Kubernetes API response is a quota rejection.
+
+    A namespace whose ResourceQuota is exhausted rejects creates with 403
+    (occasionally 429) and a Status message of the form
+    ``pipelineruns.tekton.dev "..." is forbidden: exceeded quota: ...``.
+    Unlike other rejections this is transient -- it clears when quota
+    headroom frees up -- so callers defer rather than fail.
+    """
+    response = getattr(exc, "response", None)
+    if response is None or getattr(response, "status_code", None) not in (403, 429):
+        return False
+    detail = _api_error_detail(exc).lower()
+    return "exceeded quota" in detail or "exceeds quota" in detail
+
+
 class KubeClient:
     """Client for Kubernetes API operations against a cluster.
 
@@ -345,7 +361,8 @@ class KubeClient:
         TriggerError -- a rejected create call will not resolve itself by
         retrying the identical request on the next poll, so the caller should
         record a failed release phase instead of looping forever with no state
-        change (LWLP-3937). Returns None only if the Release was created but
+        change (LWLP-3937) -- or QuotaDeferred for a transient namespace-quota
+        exhaustion. Returns None only if the Release was created but
         its name is absent from the response.
         """
         metadata: dict[str, object] = {
@@ -371,8 +388,12 @@ class KubeClient:
         except requests.RequestException as e:
             # Imported lazily: engine.errors pulls in the engine package, which
             # imports clients, so a module-level import would be circular.
-            from import_orchestrator.engine.errors import ReleaseError
+            from import_orchestrator.engine.errors import QuotaDeferred, ReleaseError
 
+            if _is_quota_rejection(e):
+                raise QuotaDeferred(
+                    f"Release creation deferred for Snapshot {snapshot_name}: {_api_error_detail(e)}"
+                ) from e
             raise ReleaseError(f"failed to create Release for Snapshot {snapshot_name}: {_api_error_detail(e)}") from e
 
         try:
@@ -385,9 +406,10 @@ class KubeClient:
         """Create a PipelineRun from a manifest dict and return its generated name.
 
         Raises TriggerError if the API rejects the request (e.g. an invalid
-        pipeline definition), including the cluster's error message. Returns
-        None only if the PipelineRun was created but its name is absent from
-        the response.
+        pipeline definition), including the cluster's error message, or
+        QuotaDeferred if the rejection is a transient namespace-quota
+        exhaustion. Returns None only if the PipelineRun was
+        created but its name is absent from the response.
         """
         try:
             result = self._api.create(
@@ -397,8 +419,10 @@ class KubeClient:
         except requests.RequestException as e:
             # Imported lazily: engine.errors pulls in the engine package, which
             # imports clients, so a module-level import would be circular.
-            from import_orchestrator.engine.errors import TriggerError
+            from import_orchestrator.engine.errors import QuotaDeferred, TriggerError
 
+            if _is_quota_rejection(e):
+                raise QuotaDeferred(f"PipelineRun creation deferred: {_api_error_detail(e)}") from e
             raise TriggerError(f"failed to create PipelineRun: {_api_error_detail(e)}") from e
 
         try:
@@ -611,6 +635,58 @@ class KubeClient:
         except requests.RequestException as e:
             self._log_api_error(f"get Release {release_name} status", e, ignore_not_found=True)
             return None
+
+    def is_namespace_quota_exhausted(self) -> str | None:
+        """Check whether any ResourceQuota in the namespace is exhausted.
+
+        Lists the namespace's ResourceQuotas and compares ``status.used``
+        against ``status.hard`` per resource. Returns a human-readable
+        description of the first exhausted resource (e.g.
+        ``"quota pr-count: pipelineruns.tekton.dev 5/5"``), or None when
+        headroom remains (or the quotas cannot be read -- failing open,
+        since an unreadable quota must not fabricate a deferral).
+
+        Used to attribute a stalled Release or unschedulable PipelineRun to
+        quota exhaustion instead of blind-polling to a timeout.
+        """
+        try:
+            result = self._api.list(f"/api/v1/namespaces/{self.namespace}/resourcequotas")
+        except requests.RequestException as e:
+            self._log_api_error("list ResourceQuotas", e, ignore_not_found=True)
+            return None
+        for quota in result.get("items", []):
+            name = quota.get("metadata", {}).get("name", "?")
+            status = quota.get("status", {})
+            hard = status.get("hard", {}) or {}
+            used = status.get("used", {}) or {}
+            for resource, limit in hard.items():
+                current = used.get(resource)
+                detail = self._quota_at_limit(current, limit)
+                if detail is not None:
+                    return f"quota {name}: {resource} {detail}"
+        return None
+
+    @staticmethod
+    def _quota_at_limit(current: str | None, limit: object) -> str | None:
+        """Compare a quota's used value against its hard limit.
+
+        Returns a ``"used/hard"`` description when the quota is at or over its
+        limit, None otherwise. Values Kubernetes cannot count numerically
+        (CPU/memory quantities, "1k"-style counts) fall back to a string
+        comparison so an exhausted count quota (the common case for
+        PipelineRun limits, e.g. ``pipelineruns.tekton.dev: "5"``) is still
+        detected; unparseable pairs are conservatively treated as having
+        headroom.
+        """
+        if current is None or limit is None:
+            return None
+        try:
+            # A hard limit of 0 forbids the resource entirely (the standard
+            # deny-quota idiom) and always reports used "0"; that is not
+            # exhaustion.
+            return f"{current}/{limit}" if float(limit) != 0 and float(current) >= float(limit) else None
+        except (TypeError, ValueError):
+            return f"{current}/{limit}" if str(current) == str(limit) and str(current) != "0" else None
 
     def get_release_failure_detail(self, release_name: str) -> str | None:
         """Summarise why a Release failed, from its ``Released`` condition.
