@@ -32,6 +32,7 @@ from import_orchestrator.engine import (
     Ingest,
     PipelineMonitor,
     PruneMonitor,
+    Reconciler,
     ReleaseMonitor,
     RequestView,
 )
@@ -140,9 +141,12 @@ def run_single(args: argparse.Namespace, ref: str) -> int:
             identity = eco.request_identity(ref, args)
             Ingest(db, build_identity=lambda r: identity).from_lines([ref])
             request, _ = db.get_or_create_request(**identity)
+            assert request.id is not None
 
             kube = KubeClient(eco.namespace, CLUSTER_API, KUBEARCHIVE_API)
-            view = RequestView(db, skip_release)
+            # One ref, even when --db is the shared ecosystem database. Reconciling
+            # every row would apply this run's skip_release to other targets.
+            view = RequestView(db, skip_release, request_ids={request.id})
 
             trigger = ImportTrigger(
                 view=view,
@@ -159,6 +163,7 @@ def run_single(args: argparse.Namespace, ref: str) -> int:
                 prefix=eco.pipelinerun_prefix,
                 release_plan=getattr(args, "release_plan", None),
             )
+            reconciler = Reconciler(view=view, kube=kube, release_plan=getattr(args, "release_plan", None))
 
             orchestrator = ImportOrchestrator(
                 view=view,
@@ -168,6 +173,7 @@ def run_single(args: argparse.Namespace, ref: str) -> int:
                 poll_interval=args.poll_interval,
                 max_retries=args.max_retries,
                 prune_monitor=PruneMonitor(view=view, kube=kube, max_retries=args.max_retries),
+                reconciler=reconciler,
             )
 
             rc = orchestrator.run_until_complete()

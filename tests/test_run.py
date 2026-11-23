@@ -21,7 +21,7 @@ from unittest.mock import MagicMock, patch
 
 from import_orchestrator.commands.run import run_single
 from import_orchestrator.database import WorkflowDatabase
-from import_orchestrator.engine import ImportOrchestrator, PipelineMonitor, PruneMonitor
+from import_orchestrator.engine import ImportOrchestrator, PipelineMonitor, PruneMonitor, Reconciler
 from import_orchestrator.models import ClusterResource, Phase, PhaseStatus
 
 _REF = "ntplib==0.4.0"
@@ -335,3 +335,22 @@ class TestSkipRelease:
 
     def test_no_target_does_not_skip_release(self, tmp_path, monkeypatch):
         assert self._captured_skip_release(tmp_path, monkeypatch, _args()) is False
+
+    def test_scopes_reconcile_to_the_single_request(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("tempfile.mkdtemp", lambda *a, **k: str(tmp_path / "eph"))
+        captured: dict = {}
+        real_init = Reconciler.__init__
+
+        def capturing_init(self, view, kube, release_plan=None):
+            captured["request_ids"] = view.request_ids
+            real_init(self, view, kube, release_plan=release_plan)
+
+        with (
+            patch("import_orchestrator.commands.run.KubeClient"),
+            patch.object(ImportOrchestrator, "run_until_complete", lambda self: 0),
+            patch.object(Reconciler, "__init__", capturing_init),
+        ):
+            run_single(_args(), _REF)
+
+        assert captured["request_ids"] is not None
+        assert len(captured["request_ids"]) == 1

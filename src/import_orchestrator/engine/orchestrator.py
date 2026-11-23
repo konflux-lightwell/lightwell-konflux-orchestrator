@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 
 from import_orchestrator.engine.pipeline import PipelineMonitor
 from import_orchestrator.engine.prune import PruneMonitor
+from import_orchestrator.engine.reconcile import Reconciler
 from import_orchestrator.engine.release import ReleaseMonitor
 from import_orchestrator.engine.request_view import RequestView
 from import_orchestrator.engine.trigger import ImportTrigger
@@ -50,6 +51,7 @@ class ImportOrchestrator:
         poll_interval: int,
         max_retries: int,
         prune_monitor: PruneMonitor | None = None,
+        reconciler: Reconciler | None = None,
     ):
         self.view = view
         self.poll_interval = poll_interval
@@ -58,6 +60,11 @@ class ImportOrchestrator:
         self._pipeline_monitor = pipeline_monitor
         self._release_monitor = release_monitor
         self._prune_monitor = prune_monitor
+        self._reconciler = reconciler
+        # Requests the reconciler could not read this run: neither triggered nor allowed
+        # to block loop completion, so one unreadable Request can neither duplicate work
+        # nor hang the run -- it is simply deferred to the next invocation.
+        self._skipped: set[int] = set()
 
     def update_pipelinerun_statuses(self) -> None:
         """Check status of all in-progress intake PipelineRuns and update phases."""
@@ -82,7 +89,7 @@ class ImportOrchestrator:
 
     def is_complete(self) -> bool:
         """Check if all requests are either successful or permanently failed."""
-        return self.view.is_complete(self.max_retries)
+        return self.view.is_complete(self.max_retries, skip_ids=self._skipped)
 
     def _print_statistics(self, stats: dict[str, int], *, timestamped: bool = False) -> None:
         """Print current statistics to stderr.
@@ -106,6 +113,15 @@ class ImportOrchestrator:
         Returns:
             Exit code: 0 if all imports succeeded, 1 if any failed.
         """
+        if self._reconciler is not None:
+            print("\n=== Reconciling cached state from cluster ===", file=sys.stderr)
+            # Requests whose reconcile could not reach the cluster are excluded from
+            # triggering and from release creation this run: their true state is
+            # unknown, so acting would risk a duplicate build or Release.
+            self._skipped = self._reconciler.reconcile_all()
+            self._trigger.skip_requests(self._skipped)
+            self._release_monitor.skip_requests(self._skipped)
+
         last_stats: dict[str, int] | None = None
         last_log_time = 0.0
 

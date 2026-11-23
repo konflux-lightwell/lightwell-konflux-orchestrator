@@ -59,6 +59,14 @@ class ReleaseMonitor:
         self.prefix = prefix
         self.skip_release = view.skip_release
         self.release_plan = release_plan
+        # Requests reconcile could not read this run. Creating a Release for one of
+        # them uses the filtered finder, which hides a terminally failed Release and
+        # would mint a replacement in the same Attempt.
+        self._skipped: set[int] = set()
+
+    def skip_requests(self, request_ids: set[int]) -> None:
+        """Leave these Requests untouched this run (their reconcile failed)."""
+        self._skipped = set(request_ids)
 
     def update_statuses(self) -> None:
         """For Requests past a successful intake, drive snapshot -> ITS -> release."""
@@ -69,6 +77,8 @@ class ReleaseMonitor:
         eligible: list[tuple[int, str, str, dict[Phase, AttemptPhase]]] = []
         for request in self.view.requests():
             assert request.id is not None
+            if request.id in self._skipped:
+                continue
             phases = self.db.latest_phase_map(request.id)
             intake = phases.get(Phase.INTAKE)
             if intake is None or intake.status != PhaseStatus.SUCCESS or intake.attempt_id is None:

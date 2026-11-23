@@ -18,6 +18,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 from import_orchestrator.clients import KubeClient
 from import_orchestrator.database import WorkflowDatabase
@@ -27,10 +28,19 @@ from import_orchestrator.engine import (
     ImportTrigger,
     PipelineMonitor,
     PruneMonitor,
+    Reconciler,
     ReleaseMonitor,
     RequestView,
 )
-from import_orchestrator.models import ClusterResource, Phase, PhaseStatus, PipelineRunStatus, PruneOutcome, Request
+from import_orchestrator.models import (
+    ClusterResource,
+    Fingerprint,
+    Phase,
+    PhaseStatus,
+    PipelineRunStatus,
+    PruneOutcome,
+    Request,
+)
 
 
 def _identity(ref: str) -> dict[str, str]:
@@ -47,6 +57,28 @@ def _identity(ref: str) -> dict[str, str]:
 
 def _seed_request(db: WorkflowDatabase, ref: str) -> Request:
     request, _ = db.get_or_create_request(**_identity(ref))
+    return request
+
+
+def _seed_awaiting_release(db: WorkflowDatabase, ref: str, snapshot: str) -> Request:
+    """Intake, snapshot, and integration tests succeeded; no Release recorded yet."""
+    request = _seed_request(db, ref)
+    attempt = db.create_attempt(request.id)
+    db.upsert_phase(
+        attempt.id,
+        Phase.INTAKE,
+        PhaseStatus.SUCCESS,
+        reference_type=ClusterResource.PIPELINE_RUN,
+        reference_id=f"pr-{ref}",
+    )
+    db.upsert_phase(
+        attempt.id,
+        Phase.SNAPSHOT,
+        PhaseStatus.SUCCESS,
+        reference_type=ClusterResource.SNAPSHOT,
+        reference_id=snapshot,
+    )
+    db.upsert_phase(attempt.id, Phase.INTEGRATION_TESTS, PhaseStatus.SUCCESS)
     return request
 
 
@@ -106,6 +138,9 @@ def mock_kube():
     # care about the ITS gate override this explicitly.
     kube.get_snapshot_test_status.return_value = "passed"
     kube.get_snapshot_test_failure_detail.return_value = None
+    # Reconciliation defaults: nothing on the cluster unless a test says otherwise.
+    kube.find_intake_pipelineruns_by_fingerprint.return_value = []
+    kube.list_releases_for_snapshot_and_plan.return_value = []
     return kube
 
 
@@ -173,6 +208,24 @@ class TestTriggerNextBatch:
         _seed_request(db, "tag")
 
         assert orchestrator.trigger_next_batch() == 0
+
+    def test_skipped_in_flight_request_does_not_consume_a_slot(self, db: WorkflowDatabase, mock_kube):
+        """An unreadable in-flight Request must not fill max_parallel for the rest of the batch."""
+        waiting = _seed_awaiting_release(db, "waiting", "snap-waiting")
+        pending = _seed_request(db, "next")
+        view = RequestView(db, skip_release=False)
+        trigger = ImportTrigger(
+            view=view,
+            kube=mock_kube,
+            build_pipelinerun=MagicMock(return_value={"kind": "PipelineRun"}),
+            max_parallel=1,
+            max_retries=3,
+        )
+        mock_kube.create_pipelinerun.return_value = "pr-next"
+        trigger.skip_requests({waiting.id})
+
+        assert trigger.trigger_next_batch() == 1
+        assert db.latest_phase_map(pending.id)[Phase.INTAKE].reference_id == "pr-next"
 
     def test_handles_trigger_failure(self, orchestrator: ImportOrchestrator, db: WorkflowDatabase, mock_kube):
         request = _seed_request(db, "tag")
@@ -368,3 +421,121 @@ class TestPruneWiring:
 
         order = [name for name, *_ in manager.mock_calls]
         assert order.index("release") < order.index("prune") < order.index("trigger")
+
+
+class TestReconcileIntegration:
+    def _orchestrator(self, db: WorkflowDatabase, mock_kube) -> ImportOrchestrator:
+        view = RequestView(db, skip_release=False)
+        trigger = ImportTrigger(
+            view=view,
+            kube=mock_kube,
+            build_pipelinerun=MagicMock(return_value={"kind": "PipelineRun"}),
+            max_parallel=5,
+            max_retries=3,
+        )
+        return ImportOrchestrator(
+            view=view,
+            trigger=trigger,
+            pipeline_monitor=PipelineMonitor(view=view, kube=mock_kube),
+            release_monitor=ReleaseMonitor(view=view, kube=mock_kube, max_parallel=5, prefix="pnc-import-"),
+            poll_interval=0,
+            max_retries=3,
+            reconciler=Reconciler(view=view, kube=mock_kube),
+        )
+
+    def test_reconcile_prevents_duplicate_intake(self, db: WorkflowDatabase, mock_kube):
+        """Headline AC: an empty cache with a completed workflow already on the cluster is
+        adopted by reconciliation, so the loop never triggers a duplicate intake."""
+        request = _seed_request(db, "r1")
+        mock_kube.find_intake_pipelineruns_by_fingerprint.return_value = [
+            PipelineRunStatus(name="pnc-import-existing", status="True")
+        ]
+        mock_kube.find_snapshot_by_pipelinerun.return_value = "snap-1"
+        mock_kube.get_snapshot_test_status.return_value = "passed"
+        mock_kube.list_releases_for_snapshot_and_plan.return_value = [("rel-1", "True")]
+
+        exit_code = self._orchestrator(db, mock_kube).run_until_complete()
+
+        assert exit_code == 0
+        mock_kube.create_pipelinerun.assert_not_called()
+        # The completed cluster workflow was actually adopted (not just "no create").
+        phases = db.latest_phase_map(request.id)
+        assert phases[Phase.INTAKE].reference_id == "pnc-import-existing"
+        assert phases[Phase.SNAPSHOT].reference_id == "snap-1"
+        assert phases[Phase.INTEGRATION_TESTS].status == PhaseStatus.SUCCESS
+        assert phases[Phase.RELEASE].reference_id == "rel-1"
+        assert phases[Phase.RELEASE].status == PhaseStatus.SUCCESS
+
+    def test_empty_release_list_does_not_rerelease_a_retried_success(self, db: WorkflowDatabase, mock_kube):
+        """A success that took a release retry must survive an empty Release list.
+
+        Rebuilding that history drops the Release phases, the Request looks
+        AWAITING_RELEASE, and the monitor creates a duplicate.
+        """
+        request = _seed_request(db, "r1")
+        mock_kube.find_intake_pipelineruns_by_fingerprint.return_value = [
+            PipelineRunStatus(name="pr-ok", status="True")
+        ]
+        mock_kube.find_snapshot_by_pipelinerun.return_value = "snap-1"
+        mock_kube.get_snapshot_test_status.return_value = "passed"
+        mock_kube.get_snapshot.return_value = {}
+        mock_kube.list_releases_for_snapshot_and_plan.return_value = [
+            ("rel-2", "True"),
+            ("rel-1", "False"),
+        ]
+        Reconciler(view=RequestView(db, skip_release=False), kube=mock_kube).reconcile_all()
+        assert db.attempt_count(request.id) == 2
+
+        mock_kube.list_releases_for_snapshot_and_plan.return_value = []
+        mock_kube.create_release.return_value = "rel-new"
+
+        exit_code = self._orchestrator(db, mock_kube).run_until_complete()
+
+        assert exit_code == 0
+        assert db.attempt_count(request.id) == 2
+        assert db.latest_phase_map(request.id)[Phase.RELEASE].reference_id == "rel-2"
+        mock_kube.create_release.assert_not_called()
+        mock_kube.create_pipelinerun.assert_not_called()
+
+    def test_skipped_request_is_not_released_while_a_sibling_runs(self, db: WorkflowDatabase, mock_kube):
+        """A batch-mate keeps the loop alive. The skipped Request must not get a new Release."""
+        awaiting = _seed_awaiting_release(db, "stuck", "snap-a")
+        running = _seed_running(db, "sibling")
+
+        def find_intake(fingerprint: str):
+            if fingerprint == Fingerprint.from_request(awaiting).hash():
+                raise requests.HTTPError("503")
+            return [PipelineRunStatus(name="pr-sibling", status="Unknown")]
+
+        mock_kube.find_intake_pipelineruns_by_fingerprint.side_effect = find_intake
+        mock_kube.get_pipelinerun_status.return_value = PipelineRunStatus(name="pr-sibling", status="True")
+        mock_kube.find_snapshot_by_pipelinerun.return_value = "snap-b"
+        mock_kube.get_snapshot.return_value = {}
+        mock_kube.get_snapshot_test_status.return_value = "passed"
+        mock_kube.find_release_for_snapshot.return_value = None
+        mock_kube.create_release.return_value = "rel-b"
+        mock_kube.get_release_status.return_value = "True"
+
+        exit_code = self._orchestrator(db, mock_kube).run_until_complete()
+
+        assert exit_code == 0
+        created = [call.args[0] for call in mock_kube.create_release.call_args_list]
+        assert created == ["snap-b"]
+        assert Phase.RELEASE not in db.latest_phase_map(awaiting.id)
+        assert db.latest_phase_map(running.id)[Phase.RELEASE].status == PhaseStatus.SUCCESS
+
+    def test_reconcile_failure_does_not_trigger_duplicate(self, db: WorkflowDatabase, mock_kube):
+        """If the cluster cannot be read during reconcile, the Request is skipped this run:
+        it must not be triggered, or a transient error would duplicate in-flight work."""
+        _seed_request(db, "r1")
+        mock_kube.find_intake_pipelineruns_by_fingerprint.side_effect = requests.HTTPError("503")
+
+        exit_code = self._orchestrator(db, mock_kube).run_until_complete()
+
+        assert exit_code == 0
+        mock_kube.create_pipelinerun.assert_not_called()
+
+    def test_reconciler_is_optional(self, orchestrator: ImportOrchestrator, mock_kube):
+        """The default orchestrator fixture has no reconciler; it must still run."""
+        assert orchestrator.run_until_complete() == 0
+        mock_kube.find_intake_pipelineruns_by_fingerprint.assert_not_called()
