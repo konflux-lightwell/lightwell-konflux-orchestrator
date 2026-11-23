@@ -313,7 +313,8 @@ class WorkflowDatabase:
         order (the cache is disposable; the cluster is the source of truth, ADR-0001).
         Phases are removed first because the schema's foreign key has no cascade.
         """
-        assert self.conn is not None
+        if self.conn is None:
+            raise RuntimeError("database connection is not open")
         cursor = self.conn.cursor()
         try:
             cursor.execute(

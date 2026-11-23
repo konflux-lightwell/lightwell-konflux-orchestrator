@@ -314,8 +314,11 @@ class KubeClient:
     # return only intakes.
     _PIPELINERUN_TYPE_LABEL = "pipelines.appstudio.openshift.io/type"
 
-    def find_intake_pipelineruns_by_fingerprint(self, fingerprint: str) -> list[PipelineRunStatus]:
+    def find_intake_pipelinerun_statuses_by_fingerprint(self, fingerprint: str) -> list[PipelineRunStatus]:
         """Find intake PipelineRuns carrying ``fingerprint``, oldest first.
+
+        Returns a :class:`PipelineRunStatus` per match (its name *and* current status),
+        not just the names, oldest-first.
 
         Reconciliation entry point (ADR-0001): a run finds the PipelineRuns it stamped
         with the Request fingerprint instead of trusting the cache. Each Attempt stamps
@@ -347,6 +350,9 @@ class KubeClient:
         create a duplicate). KubeArchive only supplies pruned history, so its outage
         degrades to [] and simply merges nothing. Live items first, then
         KubeArchive-only items (deduplicated by name).
+
+        Raises :class:`requests.RequestException` when the live list fails; this is the
+        origin of the same exception documented on the public callers.
         """
         path = f"/apis/tekton.dev/v1/namespaces/{self.namespace}/pipelineruns"
         items = self._list_by_label(self._api, path, selector, source="cluster", raise_on_error=True)
@@ -637,10 +643,8 @@ class KubeClient:
             return "Unknown"
         status = released.get("status", "")
         reason = released.get("reason", "")
-        if status == "True":
-            return "True"
-        if status == "False" and reason != "Progressing":
-            return "False"
+        if status == "True" or (status == "False" and reason != "Progressing"):
+            return status
         return "Unknown"
 
     def get_snapshot_test_status(

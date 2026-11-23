@@ -141,7 +141,8 @@ def run_single(args: argparse.Namespace, ref: str) -> int:
             identity = eco.request_identity(ref, args)
             Ingest(db, build_identity=lambda r: identity).from_lines([ref])
             request, _ = db.get_or_create_request(**identity)
-            assert request.id is not None
+            if request.id is None:
+                raise RuntimeError("get_or_create_request returned a Request without an id")
 
             kube = KubeClient(eco.namespace, CLUSTER_API, KUBEARCHIVE_API)
             # One ref, even when --db is the shared ecosystem database. Reconciling

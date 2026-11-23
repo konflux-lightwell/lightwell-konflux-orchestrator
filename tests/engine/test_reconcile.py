@@ -64,7 +64,7 @@ def db(tmp_path: Path):
 @pytest.fixture
 def mock_kube():
     kube = MagicMock(spec=KubeClient)
-    kube.find_intake_pipelineruns_by_fingerprint.return_value = []
+    kube.find_intake_pipelinerun_statuses_by_fingerprint.return_value = []
     kube.get_pipelinerun_failure_detail.return_value = None
     kube.find_snapshot_by_pipelinerun.return_value = None
     kube.get_snapshot.return_value = {}
@@ -85,7 +85,7 @@ def _reconciler(db, mock_kube, *, skip_release=False, release_plan=None) -> Reco
 class TestReconcileIntakeOnly:
     def test_no_intake_pipelineruns_leaves_request_untouched(self, db, mock_kube):
         request = _seed_request(db, "r1")
-        mock_kube.find_intake_pipelineruns_by_fingerprint.return_value = []
+        mock_kube.find_intake_pipelinerun_statuses_by_fingerprint.return_value = []
 
         _reconciler(db, mock_kube).reconcile_all()
 
@@ -94,7 +94,7 @@ class TestReconcileIntakeOnly:
 
     def test_running_intake_is_rebuilt_from_empty_cache(self, db, mock_kube):
         request = _seed_request(db, "r1")
-        mock_kube.find_intake_pipelineruns_by_fingerprint.return_value = [_pr("pnc-import-run", "Unknown")]
+        mock_kube.find_intake_pipelinerun_statuses_by_fingerprint.return_value = [_pr("pnc-import-run", "Unknown")]
 
         _reconciler(db, mock_kube).reconcile_all()
 
@@ -105,7 +105,7 @@ class TestReconcileIntakeOnly:
 
     def test_failed_intake_records_failure_detail(self, db, mock_kube):
         request = _seed_request(db, "r1")
-        mock_kube.find_intake_pipelineruns_by_fingerprint.return_value = [_pr("pnc-import-bad", "False")]
+        mock_kube.find_intake_pipelinerun_statuses_by_fingerprint.return_value = [_pr("pnc-import-bad", "False")]
         mock_kube.get_pipelinerun_failure_detail.return_value = "compiler blew up"
 
         _reconciler(db, mock_kube).reconcile_all()
@@ -119,7 +119,7 @@ class TestReconcileFullHistory:
     def test_reconstructs_one_attempt_per_intake_oldest_first(self, db, mock_kube):
         request = _seed_request(db, "r1")
         # find_intake returns oldest-first; the newest (running) must become the latest attempt.
-        mock_kube.find_intake_pipelineruns_by_fingerprint.return_value = [
+        mock_kube.find_intake_pipelinerun_statuses_by_fingerprint.return_value = [
             _pr("pr-1", "False"),
             _pr("pr-2", "False"),
             _pr("pr-3", "Unknown"),
@@ -134,7 +134,7 @@ class TestReconcileFullHistory:
 
     def test_is_idempotent_across_runs(self, db, mock_kube):
         request = _seed_request(db, "r1")
-        mock_kube.find_intake_pipelineruns_by_fingerprint.return_value = [
+        mock_kube.find_intake_pipelinerun_statuses_by_fingerprint.return_value = [
             _pr("pr-1", "False"),
             _pr("pr-2", "Unknown"),
         ]
@@ -147,12 +147,12 @@ class TestReconcileFullHistory:
 
     def test_new_cluster_attempt_appends_without_duplicating_cached_one(self, db, mock_kube):
         request = _seed_request(db, "r1")
-        mock_kube.find_intake_pipelineruns_by_fingerprint.return_value = [_pr("pr-1", "False")]
+        mock_kube.find_intake_pipelinerun_statuses_by_fingerprint.return_value = [_pr("pr-1", "False")]
         reconciler = _reconciler(db, mock_kube)
         reconciler.reconcile_all()
 
         # A retry PipelineRun appeared on the cluster since the last run.
-        mock_kube.find_intake_pipelineruns_by_fingerprint.return_value = [
+        mock_kube.find_intake_pipelinerun_statuses_by_fingerprint.return_value = [
             _pr("pr-1", "False"),
             _pr("pr-2", "Unknown"),
         ]
@@ -165,7 +165,7 @@ class TestReconcileFullHistory:
 class TestReconcileChain:
     def test_rebuilds_full_chain_to_release(self, db, mock_kube):
         request = _seed_request(db, "r1")
-        mock_kube.find_intake_pipelineruns_by_fingerprint.return_value = [_pr("pr-ok", "True")]
+        mock_kube.find_intake_pipelinerun_statuses_by_fingerprint.return_value = [_pr("pr-ok", "True")]
         mock_kube.find_snapshot_by_pipelinerun.return_value = "snap-1"
         mock_kube.get_snapshot_test_status.return_value = "passed"
         mock_kube.list_releases_for_snapshot_and_plan.return_value = [("rel-1", "True")]
@@ -181,7 +181,7 @@ class TestReconcileChain:
 
     def test_uses_unscoped_release_lookup_without_a_plan(self, db, mock_kube):
         _seed_request(db, "r1")
-        mock_kube.find_intake_pipelineruns_by_fingerprint.return_value = [_pr("pr-ok", "True")]
+        mock_kube.find_intake_pipelinerun_statuses_by_fingerprint.return_value = [_pr("pr-ok", "True")]
         mock_kube.find_snapshot_by_pipelinerun.return_value = "snap-1"
         mock_kube.get_snapshot_test_status.return_value = "passed"
         mock_kube.list_releases_for_snapshot_and_plan.return_value = [("rel-any", "Unknown")]
@@ -192,7 +192,7 @@ class TestReconcileChain:
 
     def test_stops_at_snapshot_when_not_yet_created(self, db, mock_kube):
         request = _seed_request(db, "r1")
-        mock_kube.find_intake_pipelineruns_by_fingerprint.return_value = [_pr("pr-ok", "True")]
+        mock_kube.find_intake_pipelinerun_statuses_by_fingerprint.return_value = [_pr("pr-ok", "True")]
         mock_kube.find_snapshot_by_pipelinerun.return_value = None
 
         _reconciler(db, mock_kube).reconcile_all()
@@ -203,7 +203,7 @@ class TestReconcileChain:
 
     def test_integration_tests_pending_blocks_release(self, db, mock_kube):
         request = _seed_request(db, "r1")
-        mock_kube.find_intake_pipelineruns_by_fingerprint.return_value = [_pr("pr-ok", "True")]
+        mock_kube.find_intake_pipelinerun_statuses_by_fingerprint.return_value = [_pr("pr-ok", "True")]
         mock_kube.find_snapshot_by_pipelinerun.return_value = "snap-1"
         mock_kube.get_snapshot_test_status.return_value = "pending"
 
@@ -216,7 +216,7 @@ class TestReconcileChain:
 
     def test_skip_release_stops_after_integration_tests(self, db, mock_kube):
         request = _seed_request(db, "r1")
-        mock_kube.find_intake_pipelineruns_by_fingerprint.return_value = [_pr("pr-ok", "True")]
+        mock_kube.find_intake_pipelinerun_statuses_by_fingerprint.return_value = [_pr("pr-ok", "True")]
         mock_kube.find_snapshot_by_pipelinerun.return_value = "snap-1"
         mock_kube.get_snapshot_test_status.return_value = "passed"
 
@@ -230,7 +230,7 @@ class TestReconcileChain:
     def test_unreadable_snapshot_skips_request_without_writing(self, db, mock_kube):
         """A snapshot that cannot be read must not leave a partial chain for the monitor."""
         request = _seed_request(db, "r1")
-        mock_kube.find_intake_pipelineruns_by_fingerprint.return_value = [_pr("pr-ok", "True")]
+        mock_kube.find_intake_pipelinerun_statuses_by_fingerprint.return_value = [_pr("pr-ok", "True")]
         mock_kube.find_snapshot_by_pipelinerun.return_value = "snap-1"
         mock_kube.get_snapshot.return_value = None
         mock_kube.get_snapshot_test_status.return_value = None
@@ -243,7 +243,7 @@ class TestReconcileChain:
 
     def test_snapshot_list_error_skips_request_without_writing(self, db, mock_kube):
         request = _seed_request(db, "r1")
-        mock_kube.find_intake_pipelineruns_by_fingerprint.return_value = [_pr("pr-ok", "True")]
+        mock_kube.find_intake_pipelinerun_statuses_by_fingerprint.return_value = [_pr("pr-ok", "True")]
         mock_kube.find_snapshot_by_pipelinerun.side_effect = requests.HTTPError("503")
 
         unreconciled = _reconciler(db, mock_kube, release_plan="rp").reconcile_all()
@@ -255,7 +255,7 @@ class TestReconcileChain:
 class TestReconcileState:
     def test_running_intake_yields_running_state(self, db, mock_kube):
         request = _seed_request(db, "r1")
-        mock_kube.find_intake_pipelineruns_by_fingerprint.return_value = [_pr("pr-run", "Unknown")]
+        mock_kube.find_intake_pipelinerun_statuses_by_fingerprint.return_value = [_pr("pr-run", "Unknown")]
 
         view = RequestView(db, skip_release=False)
         Reconciler(view=view, kube=mock_kube).reconcile_all()
@@ -268,7 +268,7 @@ class TestReconcileReleaseRetries:
     not the intake count -- are what reconstruct the attempt history and the retry budget."""
 
     def _passed_chain(self, mock_kube):
-        mock_kube.find_intake_pipelineruns_by_fingerprint.return_value = [_pr("pr-ok", "True")]
+        mock_kube.find_intake_pipelinerun_statuses_by_fingerprint.return_value = [_pr("pr-ok", "True")]
         mock_kube.find_snapshot_by_pipelinerun.return_value = "snap-1"
         mock_kube.get_snapshot_test_status.return_value = "passed"
 
@@ -390,7 +390,7 @@ class TestReconcileTransientFailure:
 
     def test_live_intake_query_failure_skips_request_and_leaves_cache(self, db, mock_kube):
         request = _seed_request(db, "r1")
-        mock_kube.find_intake_pipelineruns_by_fingerprint.side_effect = requests.HTTPError("503")
+        mock_kube.find_intake_pipelinerun_statuses_by_fingerprint.side_effect = requests.HTTPError("503")
 
         unreconciled = _reconciler(db, mock_kube).reconcile_all()
 
@@ -399,7 +399,7 @@ class TestReconcileTransientFailure:
 
     def test_release_list_failure_skips_request_without_partial_write(self, db, mock_kube):
         request = _seed_request(db, "r1")
-        mock_kube.find_intake_pipelineruns_by_fingerprint.return_value = [_pr("pr-ok", "True")]
+        mock_kube.find_intake_pipelinerun_statuses_by_fingerprint.return_value = [_pr("pr-ok", "True")]
         mock_kube.find_snapshot_by_pipelinerun.return_value = "snap-1"
         mock_kube.get_snapshot_test_status.return_value = "passed"
         mock_kube.list_releases_for_snapshot_and_plan.side_effect = requests.HTTPError("503")
@@ -414,12 +414,12 @@ class TestReconcileOrdering:
     def test_rebuilds_in_timestamp_order_when_older_pr_appears_later(self, db, mock_kube):
         request = _seed_request(db, "r1")
         # First run sees only the newer (live) PipelineRun.
-        mock_kube.find_intake_pipelineruns_by_fingerprint.return_value = [_pr("pr-new", "Unknown")]
+        mock_kube.find_intake_pipelinerun_statuses_by_fingerprint.return_value = [_pr("pr-new", "Unknown")]
         reconciler = _reconciler(db, mock_kube)
         reconciler.reconcile_all()
 
         # Next run, KubeArchive returns an older pruned PipelineRun too (oldest-first).
-        mock_kube.find_intake_pipelineruns_by_fingerprint.return_value = [
+        mock_kube.find_intake_pipelinerun_statuses_by_fingerprint.return_value = [
             _pr("pr-old", "False"),
             _pr("pr-new", "Unknown"),
         ]
@@ -433,7 +433,7 @@ class TestReconcileOrdering:
     def test_phaseless_attempt_is_not_duplicated(self, db, mock_kube):
         request = _seed_request(db, "r1")
         db.create_attempt(request.id)  # crash window: an Attempt with no intake phase
-        mock_kube.find_intake_pipelineruns_by_fingerprint.return_value = [_pr("pr-1", "Unknown")]
+        mock_kube.find_intake_pipelinerun_statuses_by_fingerprint.return_value = [_pr("pr-1", "Unknown")]
 
         _reconciler(db, mock_kube).reconcile_all()
 
@@ -496,7 +496,7 @@ class TestReconcileKeepsRetryBudget:
         assert request.id is not None
         for _ in range(4):
             _carried_attempt(db, request.id)
-        mock_kube.find_intake_pipelineruns_by_fingerprint.return_value = [_pr("pr-ok", "True")]
+        mock_kube.find_intake_pipelinerun_statuses_by_fingerprint.return_value = [_pr("pr-ok", "True")]
         mock_kube.find_snapshot_by_pipelinerun.return_value = "snap-1"
         mock_kube.get_snapshot_test_status.return_value = "failed"
 
@@ -513,7 +513,7 @@ class TestReconcileKeepsRetryBudget:
         _carried_attempt(db, request.id, its=PhaseStatus.SUCCESS, release=("rel-1", PhaseStatus.FAILED))
         for _ in range(3):
             _carried_attempt(db, request.id, its=PhaseStatus.SUCCESS, release_error="create failed")
-        mock_kube.find_intake_pipelineruns_by_fingerprint.return_value = [_pr("pr-ok", "True")]
+        mock_kube.find_intake_pipelinerun_statuses_by_fingerprint.return_value = [_pr("pr-ok", "True")]
         mock_kube.find_snapshot_by_pipelinerun.return_value = "snap-1"
         mock_kube.get_snapshot_test_status.return_value = "passed"
         mock_kube.list_releases_for_snapshot_and_plan.return_value = [("rel-1", "False")]
@@ -529,7 +529,7 @@ class TestReconcileKeepsRetryBudget:
         request = _seed_request(db, "r1")
         assert request.id is not None
         _carried_attempt(db, request.id, its=PhaseStatus.SUCCESS, release=("rel-1", PhaseStatus.FAILED))
-        mock_kube.find_intake_pipelineruns_by_fingerprint.return_value = [_pr("pr-ok", "True")]
+        mock_kube.find_intake_pipelinerun_statuses_by_fingerprint.return_value = [_pr("pr-ok", "True")]
         mock_kube.find_snapshot_by_pipelinerun.return_value = "snap-1"
         mock_kube.get_snapshot_test_status.return_value = "passed"
         mock_kube.list_releases_for_snapshot_and_plan.return_value = [
@@ -552,14 +552,14 @@ class TestReconcileScope:
         _carried_attempt(db, other.id, its=PhaseStatus.SUCCESS, release=("rel-2", PhaseStatus.SUCCESS))
         # What a scratch reconcile would write if it walked this row too: one intake,
         # no Release list, so the two Release attempts would be deleted.
-        mock_kube.find_intake_pipelineruns_by_fingerprint.return_value = [_pr("pr-ok", "True")]
+        mock_kube.find_intake_pipelinerun_statuses_by_fingerprint.return_value = [_pr("pr-ok", "True")]
         mock_kube.find_snapshot_by_pipelinerun.return_value = "snap-1"
         mock_kube.get_snapshot_test_status.return_value = "passed"
 
         view = RequestView(db, skip_release=True, request_ids={scratch.id})
         Reconciler(view=view, kube=mock_kube).reconcile_all()
 
-        assert mock_kube.find_intake_pipelineruns_by_fingerprint.call_count == 1
+        assert mock_kube.find_intake_pipelinerun_statuses_by_fingerprint.call_count == 1
         assert db.attempt_count(other.id) == 2
         assert db.latest_phase_map(other.id)[Phase.RELEASE].reference_id == "rel-2"
         assert db.attempt_count(scratch.id) == 1
@@ -584,7 +584,7 @@ class TestKeepsUnrepresentedRetriesEdges:
                 reference_type=ClusterResource.PIPELINE_RUN,
                 reference_id="pr-old",
             )
-        mock_kube.find_intake_pipelineruns_by_fingerprint.return_value = [_pr("pr-new", "Unknown")]
+        mock_kube.find_intake_pipelinerun_statuses_by_fingerprint.return_value = [_pr("pr-new", "Unknown")]
         mock_kube.find_snapshot_by_pipelinerun.return_value = None
 
         _reconciler(db, mock_kube).reconcile_all()

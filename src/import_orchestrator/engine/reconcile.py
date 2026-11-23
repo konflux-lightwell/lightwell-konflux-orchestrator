@@ -119,7 +119,8 @@ class Reconciler:
 
     def _reconcile_request(self, request: Request) -> bool:
         """Reconcile one Request. Returns False if a live query failed (skip it this run)."""
-        assert request.id is not None
+        if request.id is None:
+            raise ValueError("cannot reconcile a Request that has not been persisted (id is None)")
         fingerprint = Fingerprint.from_request(request).hash()
         tag = extract_tag(request.artifact)
         try:
@@ -131,7 +132,12 @@ class Reconciler:
             )
             return False
         if specs is None:
-            return True  # no intake PipelineRun: leave the Request for the trigger to start fresh
+            # no intake PipelineRun: leave the Request for the trigger to start fresh
+            print(
+                f"  {tag}: no intake PipelineRun on cluster; leaving for the trigger to start fresh",
+                file=sys.stderr,
+            )
+            return True
         self._apply(request.id, specs, tag)
         return True
 
@@ -149,7 +155,7 @@ class Reconciler:
         :class:`requests.RequestException` on a live-list failure and
         :class:`_Unreadable` when a snapshot or integration-test read fails.
         """
-        intake_prs = self.kube.find_intake_pipelineruns_by_fingerprint(fingerprint)
+        intake_prs = self.kube.find_intake_pipelinerun_statuses_by_fingerprint(fingerprint)
         if not intake_prs:
             return None
 
@@ -166,7 +172,8 @@ class Reconciler:
         # Snapshot is one Attempt (release retries share the carried-forward intake),
         # oldest-first; the newest Release decides the latest Attempt's state.
         snapshot_name = self._ref(last_chain, Phase.SNAPSHOT)
-        assert snapshot_name is not None
+        if snapshot_name is None:
+            raise RuntimeError("release gate reached but the intake chain has no Snapshot reference")
         releases = self.kube.list_releases_for_snapshot_and_plan(snapshot_name, self.release_plan)
         if not releases:
             specs.append(last_chain)  # no Release yet: leave it for the monitor to create in-loop

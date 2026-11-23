@@ -139,7 +139,7 @@ def mock_kube():
     kube.get_snapshot_test_status.return_value = "passed"
     kube.get_snapshot_test_failure_detail.return_value = None
     # Reconciliation defaults: nothing on the cluster unless a test says otherwise.
-    kube.find_intake_pipelineruns_by_fingerprint.return_value = []
+    kube.find_intake_pipelinerun_statuses_by_fingerprint.return_value = []
     kube.list_releases_for_snapshot_and_plan.return_value = []
     return kube
 
@@ -447,7 +447,7 @@ class TestReconcileIntegration:
         """Headline AC: an empty cache with a completed workflow already on the cluster is
         adopted by reconciliation, so the loop never triggers a duplicate intake."""
         request = _seed_request(db, "r1")
-        mock_kube.find_intake_pipelineruns_by_fingerprint.return_value = [
+        mock_kube.find_intake_pipelinerun_statuses_by_fingerprint.return_value = [
             PipelineRunStatus(name="pnc-import-existing", status="True")
         ]
         mock_kube.find_snapshot_by_pipelinerun.return_value = "snap-1"
@@ -473,7 +473,7 @@ class TestReconcileIntegration:
         AWAITING_RELEASE, and the monitor creates a duplicate.
         """
         request = _seed_request(db, "r1")
-        mock_kube.find_intake_pipelineruns_by_fingerprint.return_value = [
+        mock_kube.find_intake_pipelinerun_statuses_by_fingerprint.return_value = [
             PipelineRunStatus(name="pr-ok", status="True")
         ]
         mock_kube.find_snapshot_by_pipelinerun.return_value = "snap-1"
@@ -507,7 +507,7 @@ class TestReconcileIntegration:
                 raise requests.HTTPError("503")
             return [PipelineRunStatus(name="pr-sibling", status="Unknown")]
 
-        mock_kube.find_intake_pipelineruns_by_fingerprint.side_effect = find_intake
+        mock_kube.find_intake_pipelinerun_statuses_by_fingerprint.side_effect = find_intake
         mock_kube.get_pipelinerun_status.return_value = PipelineRunStatus(name="pr-sibling", status="True")
         mock_kube.find_snapshot_by_pipelinerun.return_value = "snap-b"
         mock_kube.get_snapshot.return_value = {}
@@ -528,7 +528,7 @@ class TestReconcileIntegration:
         """If the cluster cannot be read during reconcile, the Request is skipped this run:
         it must not be triggered, or a transient error would duplicate in-flight work."""
         _seed_request(db, "r1")
-        mock_kube.find_intake_pipelineruns_by_fingerprint.side_effect = requests.HTTPError("503")
+        mock_kube.find_intake_pipelinerun_statuses_by_fingerprint.side_effect = requests.HTTPError("503")
 
         exit_code = self._orchestrator(db, mock_kube).run_until_complete()
 
@@ -538,4 +538,4 @@ class TestReconcileIntegration:
     def test_reconciler_is_optional(self, orchestrator: ImportOrchestrator, mock_kube):
         """The default orchestrator fixture has no reconciler; it must still run."""
         assert orchestrator.run_until_complete() == 0
-        mock_kube.find_intake_pipelineruns_by_fingerprint.assert_not_called()
+        mock_kube.find_intake_pipelinerun_statuses_by_fingerprint.assert_not_called()

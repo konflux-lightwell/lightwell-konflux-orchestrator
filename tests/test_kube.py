@@ -412,7 +412,7 @@ class TestFindIntakePipelinerunsByFingerprint:
     def test_queries_with_fingerprint_and_build_type_selector(self, kube: KubeClient):
         kube._mock_api.list.return_value = {"items": [self._pr("pnc-import-a")]}
 
-        kube.find_intake_pipelineruns_by_fingerprint("fp-abc")
+        kube.find_intake_pipelinerun_statuses_by_fingerprint("fp-abc")
 
         kube._mock_api.list.assert_called_once_with(
             "/apis/tekton.dev/v1/namespaces/test-ns/pipelineruns",
@@ -428,7 +428,7 @@ class TestFindIntakePipelinerunsByFingerprint:
             ]
         }
 
-        result = kube.find_intake_pipelineruns_by_fingerprint("fp-abc")
+        result = kube.find_intake_pipelinerun_statuses_by_fingerprint("fp-abc")
 
         assert [pr.name for pr in result] == ["pr-old", "pr-mid", "pr-new"]
         assert [pr.status for pr in result] == ["True", "False", "Unknown"]
@@ -440,7 +440,7 @@ class TestFindIntakePipelinerunsByFingerprint:
             "items": [{"metadata": {"name": "pr-fresh", "creationTimestamp": "2026-01-01T00:00:00Z"}, "status": {}}]
         }
 
-        result = kube.find_intake_pipelineruns_by_fingerprint("fp-abc")
+        result = kube.find_intake_pipelinerun_statuses_by_fingerprint("fp-abc")
 
         assert len(result) == 1
         assert result[0].name == "pr-fresh"
@@ -449,7 +449,7 @@ class TestFindIntakePipelinerunsByFingerprint:
     def test_skips_unnamed_items(self, kube: KubeClient):
         kube._mock_api.list.return_value = {"items": [{"metadata": {}, "status": {}}]}
 
-        assert kube.find_intake_pipelineruns_by_fingerprint("fp-abc") == []
+        assert kube.find_intake_pipelinerun_statuses_by_fingerprint("fp-abc") == []
 
     def test_raises_on_live_error_so_caller_can_tell_failure_from_empty(self, kube: KubeClient):
         """A failed live list must NOT look like "no PipelineRuns": the caller has to be
@@ -457,13 +457,13 @@ class TestFindIntakePipelinerunsByFingerprint:
         kube._mock_api.list.side_effect = requests.HTTPError("500")
 
         with pytest.raises(requests.HTTPError):
-            kube.find_intake_pipelineruns_by_fingerprint("fp-abc")
+            kube.find_intake_pipelinerun_statuses_by_fingerprint("fp-abc")
 
     def test_falls_back_to_kubearchive_when_live_empty(self, kube_with_ka: KubeClient):
         kube_with_ka._mock_api.list.return_value = {"items": []}
         kube_with_ka._mock_ka_api.list.return_value = {"items": [self._pr("pr-archived")]}
 
-        result = kube_with_ka.find_intake_pipelineruns_by_fingerprint("fp-abc")
+        result = kube_with_ka.find_intake_pipelinerun_statuses_by_fingerprint("fp-abc")
 
         assert [pr.name for pr in result] == ["pr-archived"]
 
@@ -483,7 +483,7 @@ class TestFindIntakePipelinerunsByFingerprint:
             ]
         }
 
-        result = kube_with_ka.find_intake_pipelineruns_by_fingerprint("fp-abc")
+        result = kube_with_ka.find_intake_pipelinerun_statuses_by_fingerprint("fp-abc")
 
         assert [pr.name for pr in result] == ["pr-archived", "pr-overlap", "pr-live"]
 
@@ -495,7 +495,7 @@ class TestFindIntakePipelinerunsByFingerprint:
         kube_with_ka._mock_ka_api.list.return_value = {"items": [self._pr("pr-archived")]}
 
         with pytest.raises(requests.HTTPError):
-            kube_with_ka.find_intake_pipelineruns_by_fingerprint("fp-abc")
+            kube_with_ka.find_intake_pipelinerun_statuses_by_fingerprint("fp-abc")
 
 
 class TestFindSnapshotByPipelinerun:
