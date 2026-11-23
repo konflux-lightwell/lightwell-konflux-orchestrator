@@ -19,6 +19,7 @@ from import_orchestrator.engine.ingest import Ingest, IngestResult
 from import_orchestrator.engine.orchestrator import ImportOrchestrator
 from import_orchestrator.engine.pipeline import PipelineMonitor
 from import_orchestrator.engine.prune import PruneMonitor
+from import_orchestrator.engine.reconcile import Reconciler
 from import_orchestrator.engine.release import ReleaseMonitor
 from import_orchestrator.engine.request_view import RequestView
 from import_orchestrator.engine.trigger import ImportTrigger
@@ -30,6 +31,7 @@ __all__ = [
     "IngestResult",
     "PipelineMonitor",
     "PruneMonitor",
+    "Reconciler",
     "ReleaseError",
     "ReleaseMonitor",
     "TriggerError",

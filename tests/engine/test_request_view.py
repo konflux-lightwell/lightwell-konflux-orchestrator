@@ -125,6 +125,11 @@ class TestSelectors:
         _pending(db, "p1")
         assert view.in_flight_count() == 2
 
+    def test_in_flight_count_excludes_skipped_ids(self, db, view):
+        skipped = _running(db, "r1")
+        _running(db, "r2")
+        assert view.in_flight_count(skip_ids={skipped.id}) == 1
+
     def test_retry_candidates_respect_max_retries(self, db, view):
         _failed(db, "retriable", attempts=1)
         _failed(db, "exhausted", attempts=4)  # 4 > max_retries=3

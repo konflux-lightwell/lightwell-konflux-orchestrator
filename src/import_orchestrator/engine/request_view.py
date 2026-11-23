@@ -69,9 +69,19 @@ class RequestView:
         """Failed Requests still eligible for another attempt."""
         return [r for r in self.requests() if self._is_retriable(r, max_retries)]
 
-    def in_flight_count(self) -> int:
-        """Count Requests actively being processed (running or awaiting release)."""
-        return sum(1 for r in self.requests() if self.state(r) in (RequestState.RUNNING, RequestState.AWAITING_RELEASE))
+    def in_flight_count(self, skip_ids: set[int] | None = None) -> int:
+        """Count Requests actively being processed (running or awaiting release).
+
+        ``skip_ids`` are Requests reconcile could not read this run. They stay out of
+        the parallel slot count, so one unreadable in-flight Request cannot block
+        every other Request while completion is already ignoring it.
+        """
+        skip = skip_ids or set()
+        return sum(
+            1
+            for r in self.requests()
+            if r.id not in skip and self.state(r) in (RequestState.RUNNING, RequestState.AWAITING_RELEASE)
+        )
 
     def statistics(self) -> dict[str, int]:
         """Return counts grouped by :class:`RequestState` value, for reporting."""
@@ -80,9 +90,17 @@ class RequestView:
             stats[self.state(r).value] += 1
         return stats
 
-    def is_complete(self, max_retries: int) -> bool:
-        """True when no Request is still in flight or retriable."""
+    def is_complete(self, max_retries: int, skip_ids: set[int] | None = None) -> bool:
+        """True when no Request is still in flight or retriable.
+
+        ``skip_ids`` are Requests the reconciler could not read this run; they are
+        neither triggered nor counted toward completion, so one unreadable Request does
+        not hang the loop -- it is deferred to the next invocation.
+        """
+        skip = skip_ids or set()
         for r in self.requests():
+            if r.id in skip:
+                continue
             st = self.state(r)
             if st in (RequestState.PENDING, RequestState.RUNNING, RequestState.AWAITING_RELEASE):
                 return False
