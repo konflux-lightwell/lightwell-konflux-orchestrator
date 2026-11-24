@@ -131,11 +131,13 @@ class TestBuildManifest:
         """Without a suffix the recipes publish manifest.version unchanged."""
         params = {p["name"]: p["value"] for p in _manifest()["spec"]["params"]}
         assert params["lightwell-publish-version-override"] == ""
+        assert params["lightwell-build-intent"] == "release"
 
     def test_publish_version_suffix_appended_to_version(self):
         """A suffix becomes a <version>-<suffix> publish version override."""
         params = {p["name"]: p["value"] for p in _manifest(publish_version_suffix="lwci.0")["spec"]["params"]}
         assert params["lightwell-publish-version-override"] == "3.7.2-lwci.0"
+        assert params["lightwell-build-intent"] == "release"
         assert params["output-image"].endswith(":bluebird-3.7.2")
 
     def test_git_auth_workspace_bound_to_secret(self):

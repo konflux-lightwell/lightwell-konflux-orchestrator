@@ -51,10 +51,17 @@ spec:
       default: ""
     - name: lightwell-publish-version-override
       description: >-
-        Version the recipes publish instead of manifest.version (e.g.
-        <manifest.version>-lwci.0). Empty for production remediations.
+        Passed to build as LIGHTWELL_SCRATCH_PUBLISH_VERSION, which entrypoints
+        do not read. Refused unless lightwell-build-intent is scratch and the
+        manifest stream is validated. Leave empty for remediations.
       type: string
       default: ""
+    - name: lightwell-build-intent
+      description: >-
+        scratch or release. Remediations stay release, so a publish-version
+        override fails in the build step.
+      type: string
+      default: "release"
     - name: npm-publish-secret-name
       type: string
       default: rhtl-pulp-npm-stage-credentials
@@ -137,8 +144,10 @@ spec:
           value: $(params.npm-publish-secret-name)
         - name: PUBLISH_TO_PULP
           value: $(params.publish-to-pulp)
-        - name: LIGHTWELL_PUBLISH_VERSION_OVERRIDE
+        - name: LIGHTWELL_SCRATCH_PUBLISH_VERSION
           value: $(params.lightwell-publish-version-override)
+        - name: LIGHTWELL_BUILD_INTENT
+          value: $(params.lightwell-build-intent)
       taskRef:
         resolver: bundles
         params:

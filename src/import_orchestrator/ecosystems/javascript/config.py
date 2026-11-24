@@ -90,7 +90,11 @@ DEFAULT_SOURCE_REVISION = "main"
 # against gitlab.cee.redhat.com (same secret name as the python ecosystem).
 GIT_AUTH_SECRET = "lightwell-builds-git-auth"
 
-# Pinned digests from the calunga npm PoC (reuse until lightwell npm-builder lands).
+# TODO: keep this change draft until the npm-builder PR is merged and its main
+# builds publish a new image and both task bundles. These three digests do not
+# declare LIGHTWELL_SCRATCH_PUBLISH_VERSION or LIGHTWELL_BUILD_INTENT, and the
+# pipelines already pass both, so replace the tag and sha256 on each pin before
+# marking the PR ready.
 DEFAULT_BUILDER_IMAGE = (
     "quay.io/light-factory/npm-builder:"
     "6a93271ad6350d6bbebd99f18da3abf6957db002@"

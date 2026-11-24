@@ -74,6 +74,9 @@ class JavaScriptEcosystem:
             git_auth_secret=getattr(args, "git_auth_secret", config.GIT_AUTH_SECRET),
             publish_version_suffix=getattr(args, "publish_version_suffix", None),
             include_assess=include_assess,
+            build_intent=(
+                "scratch" if cfg.get("skip_release") and cfg.get("allow_publish_version_suffix") else "release"
+            ),
         )
 
     def request_identity(self, ref: str, args: argparse.Namespace) -> dict[str, str]:

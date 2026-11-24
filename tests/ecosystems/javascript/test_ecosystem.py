@@ -58,6 +58,7 @@ def test_build_pipelinerun_from_ref(monkeypatch, tmp_path):
     assert params["packages"] == ["packages/bluebird/3.7.2"]
     assert params["output-image"].endswith(":bluebird-3.7.2")
     assert params["tl-npm-registry-url"] == config.TL_NPM_REGISTRY_URL_PROD
+    assert params["lightwell-build-intent"] == "release"
     assert labels["lightwell.redhat.com/package"] == "bluebird"
 
 
@@ -117,6 +118,7 @@ def test_build_pipelinerun_publish_version_suffix(monkeypatch, tmp_path):
     )
     params = {p["name"]: p["value"] for p in manifest["spec"]["params"]}
     assert params["lightwell-publish-version-override"] == "3.7.2-lwci.0"
+    assert params["lightwell-build-intent"] == "scratch"
 
 
 def test_build_pipelinerun_scoped_package(monkeypatch, tmp_path):
@@ -175,6 +177,7 @@ def test_build_pipelinerun_remediated_stage_target(monkeypatch, tmp_path):
     assert "task-assess-npm-compliance-bundle" not in params
     assert "tl-npm-registry-url" not in params
     assert "pulp-read-secret-name" not in params
+    assert params["lightwell-build-intent"] == "release"
     assert params["output-image"].endswith(
         "/javascript-remediated-stage/javascript-remediated-stage-build:bluebird-3.7.2"
     )
