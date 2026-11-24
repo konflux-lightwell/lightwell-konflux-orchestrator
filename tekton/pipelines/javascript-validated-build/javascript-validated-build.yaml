@@ -12,7 +12,11 @@ spec:
     Clones the recipe monorepo, builds one package directory
     (packages/<name>/<version>), runs assess-npm-compliance, and pushes a
     durable :<tag>.npm snapshot OCI. Unlike the PAC PoC pipelines, package
-    selection is an explicit param (no git-diff identify step).
+    selection is an explicit param (no git-diff identify step). When
+    lightwell-publish-version-override is set, build and assess each rewrite
+    recipe manifests via calunga-javascript hack/manifest_publish_version.py
+    before they run. The override is refused unless the manifest stream is
+    validated and lightwell-build-intent is scratch.
   params:
     - name: git-url
       type: string
@@ -72,11 +76,18 @@ spec:
       default: lightwell-pulp-read-secret
     - name: lightwell-publish-version-override
       description: >-
-        Version the recipes publish instead of manifest.version (e.g.
-        <manifest.version>-lwci.0), so SCRATCH builds exercise re-versioning
-        without editing the manifest. Empty for production builds.
+        When non-empty, build and assess rewrite recipe manifests to this
+        version. Passed to those tasks as LIGHTWELL_SCRATCH_PUBLISH_VERSION,
+        which entrypoints do not read. Refused unless lightwell-build-intent
+        is scratch and every manifest stream is validated. Empty skips the rewrite.
       type: string
       default: ""
+    - name: lightwell-build-intent
+      description: >-
+        scratch or release. scratch is the only intent that may set
+        lightwell-publish-version-override. release fails that step.
+      type: string
+      default: "release"
     - name: npm-publish-secret-name
       type: string
       default: rhtl-pulp-npm-stage-credentials
@@ -159,8 +170,10 @@ spec:
           value: $(params.npm-publish-secret-name)
         - name: PUBLISH_TO_PULP
           value: $(params.publish-to-pulp)
-        - name: LIGHTWELL_PUBLISH_VERSION_OVERRIDE
+        - name: LIGHTWELL_SCRATCH_PUBLISH_VERSION
           value: $(params.lightwell-publish-version-override)
+        - name: LIGHTWELL_BUILD_INTENT
+          value: $(params.lightwell-build-intent)
       taskRef:
         resolver: bundles
         params:
@@ -185,6 +198,10 @@ spec:
           value: $(params.builder-image)
         - name: SOURCE_ARTIFACT
           value: $(tasks.clone-repository.results.SOURCE_ARTIFACT)
+        - name: LIGHTWELL_SCRATCH_PUBLISH_VERSION
+          value: $(params.lightwell-publish-version-override)
+        - name: LIGHTWELL_BUILD_INTENT
+          value: $(params.lightwell-build-intent)
         - name: PACKAGES
           value: $(params.packages[*])
         - name: PACKAGES_STATUS
