@@ -141,7 +141,7 @@ spec:
         resolver: bundles
         params:
           - name: bundle
-            value: quay.io/light-factory/tekton-catalog/task-package-git-source-image@sha256:ab212d2c9abe1a26bacea1e0a05599f459aee681cc498ce7cbddafd5484475fa
+            value: quay.io/light-factory/tekton-catalog/task-package-git-source-image@sha256:80bb6c2031ec91101f55c9ef5fe0352eadd52ec5a8a65d365ce38b297daffdb9
           - name: name
             value: package-git-source-image
           - name: kind
