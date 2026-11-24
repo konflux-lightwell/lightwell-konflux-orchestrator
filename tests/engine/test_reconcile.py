@@ -26,6 +26,7 @@ from import_orchestrator.engine import Reconciler, RequestView
 from import_orchestrator.models import (
     Attempt,
     ClusterResource,
+    Fingerprint,
     Phase,
     PhaseStatus,
     PipelineRunStatus,
@@ -180,7 +181,7 @@ class TestReconcileChain:
         assert phases[Phase.RELEASE].reference_id == "rel-1"
 
     def test_uses_unscoped_release_lookup_without_a_plan(self, db, mock_kube):
-        _seed_request(db, "r1")
+        request = _seed_request(db, "r1")
         mock_kube.find_intake_pipelinerun_statuses_by_fingerprint.return_value = [_pr("pr-ok", "True")]
         mock_kube.find_snapshot_by_pipelinerun.return_value = "snap-1"
         mock_kube.get_snapshot_test_status.return_value = "passed"
@@ -188,7 +189,10 @@ class TestReconcileChain:
 
         _reconciler(db, mock_kube, release_plan=None).reconcile_all()
 
-        mock_kube.list_releases_for_snapshot_and_plan.assert_called_once_with("snap-1", None)
+        # The release lookup is scoped server-side by the Request fingerprint so it
+        # does not list the whole namespace; the plan stays None here.
+        fingerprint = Fingerprint.from_request(request).hash()
+        mock_kube.list_releases_for_snapshot_and_plan.assert_called_once_with("snap-1", None, fingerprint)
 
     def test_stops_at_snapshot_when_not_yet_created(self, db, mock_kube):
         request = _seed_request(db, "r1")

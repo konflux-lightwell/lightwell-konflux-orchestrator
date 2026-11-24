@@ -594,7 +594,7 @@ class KubeClient:
             return None
 
     def list_releases_for_snapshot_and_plan(
-        self, snapshot_name: str, release_plan: str | None = None
+        self, snapshot_name: str, release_plan: str | None = None, fingerprint: str | None = None
     ) -> list[tuple[str, Literal["True", "False", "Unknown"]]]:
         """List every Release for a snapshot (optionally scoped to a ReleasePlan), newest first.
 
@@ -605,15 +605,28 @@ class KubeClient:
         is the effective ``Released`` condition ("True"/"False"/"Unknown"), newest first
         by ``creationTimestamp``.
 
+        ``fingerprint`` narrows the list server-side to the Releases *this orchestrator
+        created* for the Request (``create_release`` stamps the label). Releases are not
+        selectable by ``spec.snapshot`` field, so without it the whole namespace is
+        listed and filtered client-side -- costly where a namespace holds tens of
+        thousands of Releases before garbage collection. Supplying it means a Release
+        made outside the orchestrator (an auto-release on the same ReleasePlan) is no
+        longer counted, which is correct for reconstructing the orchestrator's own
+        Attempt history.
+
         Raises :class:`requests.RequestException` on a failed list, so the caller can
         tell "query failed" from "no Releases exist" rather than silently undercounting
         the retry budget (which would reset ``max_retries`` across a cache wipe).
         """
-        result = self._api.list(
-            f"/apis/appstudio.redhat.com/v1alpha1/namespaces/{self.namespace}/releases",
-        )
+        path = f"/apis/appstudio.redhat.com/v1alpha1/namespaces/{self.namespace}/releases"
+        if fingerprint is not None:
+            items = self._list_by_label(
+                self._api, path, f"{FINGERPRINT_LABEL}={fingerprint}", source="cluster", raise_on_error=True
+            )
+        else:
+            items = self._api.list(path).get("items", [])
         matches = []
-        for item in result.get("items", []):
+        for item in items:
             spec = item.get("spec", {})
             if spec.get("snapshot") != snapshot_name:
                 continue

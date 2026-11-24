@@ -22,6 +22,7 @@ import requests
 
 from import_orchestrator.clients import KubeClient
 from import_orchestrator.clients.kube_api import KubeAuth
+from import_orchestrator.constants import FINGERPRINT_LABEL
 from import_orchestrator.engine.errors import ReleaseError, TriggerError
 from import_orchestrator.models import PruneOutcome
 
@@ -760,6 +761,29 @@ class TestListReleasesForSnapshotAndPlan:
 
         with pytest.raises(requests.HTTPError):
             kube.list_releases_for_snapshot_and_plan("snap-1", "remediated-build-prod")
+
+    def test_fingerprint_filters_server_side(self, kube: KubeClient):
+        """With a fingerprint the list is narrowed server-side by the label so the whole
+        namespace is not fetched; snapshot/plan filtering still applies to the result."""
+        kube._mock_api.list.return_value = {
+            "items": [
+                self._rel("rel-match", created="2026-01-01T00:00:00Z"),
+                self._rel("rel-other-snap", created="2026-01-01T00:00:00Z", snapshot="snap-2"),
+            ]
+        }
+
+        result = kube.list_releases_for_snapshot_and_plan("snap-1", "remediated-build-prod", "fp-abc")
+
+        assert [name for name, _ in result] == ["rel-match"]
+        _, kwargs = kube._mock_api.list.call_args
+        assert kwargs["labelSelector"] == f"{FINGERPRINT_LABEL}=fp-abc"
+
+    def test_fingerprint_list_error_raises(self, kube: KubeClient):
+        """A failed server-side list still raises so reconcile skips rather than undercounts."""
+        kube._mock_api.list.side_effect = requests.HTTPError("503")
+
+        with pytest.raises(requests.HTTPError):
+            kube.list_releases_for_snapshot_and_plan("snap-1", "remediated-build-prod", "fp-abc")
 
 
 class TestGetReleaseStatus:

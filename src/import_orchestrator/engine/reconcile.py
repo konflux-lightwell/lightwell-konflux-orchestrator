@@ -174,7 +174,7 @@ class Reconciler:
         snapshot_name = self._ref(last_chain, Phase.SNAPSHOT)
         if snapshot_name is None:
             raise RuntimeError("release gate reached but the intake chain has no Snapshot reference")
-        releases = self.kube.list_releases_for_snapshot_and_plan(snapshot_name, self.release_plan)
+        releases = self.kube.list_releases_for_snapshot_and_plan(snapshot_name, self.release_plan, fingerprint)
         if not releases:
             specs.append(last_chain)  # no Release yet: leave it for the monitor to create in-loop
             return specs
@@ -375,7 +375,8 @@ class Reconciler:
     def _refresh_latest(self, existing: list[Attempt], specs: list[list[AttemptPhase]]) -> None:
         """Write the newest spec onto the latest cached Attempt, leaving earlier ones."""
         latest_id = existing[-1].id
-        assert latest_id is not None
+        if latest_id is None:
+            raise RuntimeError("cannot refresh an Attempt that has not been persisted (id is None)")
         for phase in specs[-1]:
             self._upsert(latest_id, phase)
 
