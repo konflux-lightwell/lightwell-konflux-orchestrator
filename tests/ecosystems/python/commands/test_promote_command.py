@@ -23,12 +23,13 @@ from import_orchestrator.cli import make_parser
 from import_orchestrator.constants import DEFAULT_POLL_INTERVAL
 from import_orchestrator.ecosystems.python.commands.promote import (
     DEFAULT_TIMEOUT,
+    EXIT_DEFERRED,
     EXIT_FAILED,
     EXIT_OK,
     EXIT_TIMEOUT,
     promote,
 )
-from import_orchestrator.engine.errors import ReleaseError
+from import_orchestrator.engine.errors import QuotaDeferred, ReleaseError
 
 
 class TestPromoteArgParsing:
@@ -129,6 +130,7 @@ class TestPromoteCommand:
             "release_name": "rel-prod-1",
             "status": "True",
             "adopted": False,
+            "reason": None,
         }
 
     def test_adopts_existing_release_without_creating_another(self):
@@ -136,6 +138,7 @@ class TestPromoteCommand:
         kube = MagicMock()
         kube.find_release_for_snapshot_and_plan.return_value = "rel-live"
         kube.get_release_status.side_effect = ["Unknown", "True"]
+        kube.is_pipelinerun_quota_exhausted.return_value = None
 
         rc, payload = _run(kube)
 
@@ -180,7 +183,57 @@ class TestPromoteCommand:
         assert rc == EXIT_FAILED
         assert payload["release_name"] is None
         assert payload["status"] == "CreateFailed"
+        assert "403 Forbidden" in payload["reason"]
         kube.get_release_status.assert_not_called()
+
+    def test_reports_deferred_when_create_quota_deferred(self):
+        """A quota rejection is a deferral, not a failure: exit 3, status Deferred
+        . The caller keeps the request queued and retries later."""
+        kube = MagicMock()
+        kube.find_release_for_snapshot_and_plan.return_value = None
+        kube.create_release.side_effect = QuotaDeferred(
+            "Release creation deferred for Snapshot x: 403 Forbidden: exceeded quota"
+        )
+
+        rc, payload = _run(kube)
+
+        assert rc == EXIT_DEFERRED
+        assert payload["release_name"] is None
+        assert payload["status"] == "Deferred"
+        assert payload["adopted"] is False
+        assert "exceeded quota" in payload["reason"]
+        kube.get_release_status.assert_not_called()
+
+    def test_defers_when_release_stalls_behind_quota(self):
+        """A Release with no verdict while the namespace quota is exhausted is
+        attributed now: exit 3, status Deferred, carrying the in-flight Release
+        so a re-run adopts it rather than recreating."""
+        kube = MagicMock()
+        kube.find_release_for_snapshot_and_plan.return_value = None
+        kube.create_release.return_value = "rel-stalled"
+        kube.get_release_status.return_value = "Unknown"
+        kube.is_pipelinerun_quota_exhausted.return_value = "quota pr-count: pipelineruns.tekton.dev 5/5"
+
+        rc, payload = _run(kube, timeout=60)
+
+        assert rc == EXIT_DEFERRED
+        assert payload["status"] == "Deferred"
+        assert payload["release_name"] == "rel-stalled"
+        assert payload["adopted"] is False
+        assert payload["reason"] == "quota pr-count: pipelineruns.tekton.dev 5/5"
+
+    def test_defers_when_adopted_release_stalls_behind_quota(self):
+        kube = MagicMock()
+        kube.find_release_for_snapshot_and_plan.return_value = "rel-adopted"
+        kube.get_release_status.return_value = "Unknown"
+        kube.is_pipelinerun_quota_exhausted.return_value = "quota pr-count: x 1/1"
+
+        rc, payload = _run(kube, timeout=60)
+
+        assert rc == EXIT_DEFERRED
+        assert payload["status"] == "Deferred"
+        assert payload["release_name"] == "rel-adopted"
+        assert payload["adopted"] is True
 
     def test_times_out_while_still_progressing(self):
         """Timeout is distinct from failure: the release is still running, so exit 2."""
@@ -188,6 +241,7 @@ class TestPromoteCommand:
         kube.find_release_for_snapshot_and_plan.return_value = None
         kube.create_release.return_value = "rel-slow"
         kube.get_release_status.return_value = "Unknown"
+        kube.is_pipelinerun_quota_exhausted.return_value = None
 
         rc, payload = _run(kube, timeout=0)
 
@@ -201,6 +255,7 @@ class TestPromoteCommand:
         kube.find_release_for_snapshot_and_plan.return_value = None
         kube.create_release.return_value = "rel-flaky"
         kube.get_release_status.side_effect = [None, "Unknown", "True"]
+        kube.is_pipelinerun_quota_exhausted.return_value = None
 
         rc, payload = _run(kube)
 

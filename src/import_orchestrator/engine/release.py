@@ -19,7 +19,8 @@ from __future__ import annotations
 import sys
 
 from import_orchestrator.clients import KubeClient
-from import_orchestrator.engine.errors import ReleaseError
+from import_orchestrator.engine.deferrals import QuotaDeferralCounter
+from import_orchestrator.engine.errors import QuotaDeferred, ReleaseError
 from import_orchestrator.engine.request_view import RequestView
 from import_orchestrator.models import AttemptPhase, ClusterResource, Fingerprint, Phase, PhaseStatus
 from import_orchestrator.utils import extract_tag
@@ -63,6 +64,7 @@ class ReleaseMonitor:
         # them uses the filtered finder, which hides a terminally failed Release and
         # would mint a replacement in the same Attempt.
         self._skipped: set[int] = set()
+        self._quota_deferrals = QuotaDeferralCounter()
 
     def skip_requests(self, request_ids: set[int]) -> None:
         """Leave these Requests untouched this run (their reconcile failed)."""
@@ -261,6 +263,28 @@ class ReleaseMonitor:
         )
         try:
             release_name = self.kube.create_release(snapshot_name, release_plan, self.prefix, fingerprint=fingerprint)
+        except QuotaDeferred as e:
+            # Transient capacity condition: record nothing so the attempt is
+            # retried on a later poll once quota headroom returns, rather than
+            # recording a FAILED release phase that burns a retry slot. Past
+            # the deferral cap (a quota condition that never clears within
+            # this run), record a normal retriable failure so the run cannot
+            # spin forever.
+            count = self._quota_deferrals.increment(attempt_id)
+            if self._quota_deferrals.at_cap(count):
+                self.db.upsert_phase(
+                    attempt_id,
+                    Phase.RELEASE,
+                    PhaseStatus.FAILED,
+                    error_message=f"Release creation deferred {count}x by namespace quota: {e}",
+                )
+                print(
+                    f"  ERROR: {tag} deferred by quota {count}x, recording failure: {e}",
+                    file=sys.stderr,
+                )
+                return None
+            print(f"  DEFERRED (quota, {count}): {tag}: {e}", file=sys.stderr)
+            return None
         except ReleaseError as e:
             # A rejected create call (e.g. a permissions gap) will not resolve
             # itself by retrying the identical request next poll. Record a
@@ -281,6 +305,9 @@ class ReleaseMonitor:
             print(f"  Failed to create release for {snapshot_name} ({tag}), will retry", file=sys.stderr)
             return None
 
+        # A created or adopted Release means the quota episode is over: reset
+        # the consecutive-deferral counter so later blips start from zero.
+        self._quota_deferrals.reset(attempt_id)
         self._track_release(attempt_id, release_name, tag)
         return release_name
 

@@ -23,7 +23,7 @@ import requests
 from import_orchestrator.clients import KubeClient
 from import_orchestrator.clients.kube_api import KubeAuth
 from import_orchestrator.constants import FINGERPRINT_LABEL
-from import_orchestrator.engine.errors import ReleaseError, TriggerError
+from import_orchestrator.engine.errors import QuotaDeferred, ReleaseError, TriggerError
 from import_orchestrator.models import PruneOutcome
 
 
@@ -144,6 +144,99 @@ class TestApiErrorLogging:
 
         with pytest.raises(ReleaseError, match="Upstream proxy unavailable"):
             kube.create_release("snap-1", "plan-1", "release-")
+
+    def test_release_count_quota_rejection_is_not_deferred(self, kube):
+        """Object-count quotas (releases, snapshots) only grow and need
+        outside intervention, so their rejections stay non-recoverable."""
+        response = requests.Response()
+        response.status_code = 403
+        response._content = (
+            b'{"message": "releases.appstudio.redhat.com \\"x\\" is forbidden: exceeded quota: rel-count"}'
+        )
+        kube._mock_api.create.side_effect = requests.HTTPError("403 Forbidden", response=response)
+
+        with pytest.raises(ReleaseError, match="exceeded quota"):
+            kube.create_release("snap-1", "plan-1", "release-")
+
+
+class TestPipelinerunQuotaExhausted:
+    """Test the is_pipelinerun_quota_exhausted method."""
+
+    @staticmethod
+    def _quota(items):
+        return {"items": items}
+
+    def test_reports_exhausted_count_quota(self, kube: KubeClient):
+        kube._mock_api.list.return_value = self._quota(
+            [
+                {
+                    "metadata": {"name": "pr-count"},
+                    "status": {"hard": {"pipelineruns.tekton.dev": "5"}, "used": {"pipelineruns.tekton.dev": "5"}},
+                }
+            ]
+        )
+
+        assert kube.is_pipelinerun_quota_exhausted() == "quota pr-count: pipelineruns.tekton.dev 5/5"
+
+    def test_headroom_returns_none(self, kube: KubeClient):
+        kube._mock_api.list.return_value = self._quota(
+            [
+                {
+                    "metadata": {"name": "pr-count"},
+                    "status": {"hard": {"pipelineruns.tekton.dev": "5"}, "used": {"pipelineruns.tekton.dev": "2"}},
+                }
+            ]
+        )
+
+        assert kube.is_pipelinerun_quota_exhausted() is None
+
+    def test_deny_quota_with_zero_limit_is_not_exhausted(self, kube: KubeClient):
+        """A hard limit of 0 forbids the resource and always reports used
+        "0" -- that is a routine deny-quota, not exhaustion."""
+        kube._mock_api.list.return_value = self._quota(
+            [
+                {
+                    "metadata": {"name": "deny-nodeports"},
+                    "status": {"hard": {"services.nodeports": "0"}, "used": {"services.nodeports": "0"}},
+                }
+            ]
+        )
+
+        assert kube.is_pipelinerun_quota_exhausted() is None
+
+    def test_snapshot_count_quota_exhaustion_is_not_reported(self, kube: KubeClient):
+        """An exhausted snapshot-count quota is not self-recovering (objects
+        accumulate), so it is deliberately not reported as a deferral cause."""
+        kube._mock_api.list.return_value = self._quota(
+            [
+                {
+                    "metadata": {"name": "object-counts"},
+                    "status": {
+                        "hard": {"count/snapshots.appstudio.redhat.com": "10"},
+                        "used": {"count/snapshots.appstudio.redhat.com": "10"},
+                    },
+                }
+            ]
+        )
+
+        assert kube.is_pipelinerun_quota_exhausted() is None
+
+    def test_unparseable_quantity_fails_open(self, kube: KubeClient):
+        kube._mock_api.list.return_value = self._quota(
+            [
+                {
+                    "metadata": {"name": "compute"},
+                    "status": {"hard": {"cpu": "2"}, "used": {"cpu": "500m"}},
+                }
+            ]
+        )
+
+        assert kube.is_pipelinerun_quota_exhausted() is None
+
+    def test_api_failure_fails_open(self, kube: KubeClient):
+        kube._mock_api.list.side_effect = requests.ConnectionError("refused")
+
+        assert kube.is_pipelinerun_quota_exhausted() is None
 
     def test_release_status_logs_connection_error(self, kube, capsys):
         kube._mock_api.get.side_effect = requests.ConnectionError("Connection refused")
@@ -1141,6 +1234,75 @@ class TestCreatePipelinerun:
 
         result = kube.create_pipelinerun({"kind": "PipelineRun"})
         assert result is None
+
+    def test_quota_rejection_raises_quota_deferred(self, kube: KubeClient):
+        """A 403 'exceeded quota' is transient, not a trigger failure."""
+        response = requests.Response()
+        response.status_code = 403
+        response._content = (
+            b'{"kind": "Status", "message": "pipelineruns.tekton.dev \\"x\\" is forbidden: '
+            b'exceeded quota: pr-count, requested: pipelineruns.tekton.dev=1, limited: 0"}'
+        )
+        kube._mock_api.create.side_effect = requests.HTTPError("403 Forbidden", response=response)
+
+        with pytest.raises(QuotaDeferred, match="exceeded quota"):
+            kube.create_pipelinerun({"kind": "PipelineRun"})
+
+    @pytest.mark.parametrize("status_code", [403, 429])
+    def test_quota_rejection_variant_phrasings(self, kube: KubeClient, status_code):
+        response = requests.Response()
+        response.status_code = status_code
+        response._content = b'{"message": "exceeds quota: pr-count, requested: pipelineruns.tekton.dev=1"}'
+        kube._mock_api.create.side_effect = requests.HTTPError(f"{status_code}", response=response)
+
+        with pytest.raises(QuotaDeferred):
+            kube.create_pipelinerun({"kind": "PipelineRun"})
+
+    def test_other_quota_rejecting_pipelinerun_create_is_not_deferred(self, kube: KubeClient):
+        """The rejected object type appears in the message prefix, so the
+        allowlist must anchor to the quota attribution, not the whole text:
+        a compute-resources quota rejecting a PipelineRun create is NOT a
+        deferrable PipelineRun-count rejection."""
+        response = requests.Response()
+        response.status_code = 403
+        response._content = (
+            b'{"message": "pipelineruns.tekton.dev "x" is forbidden: '
+            b'exceeded quota: compute-resources, requested: requests.cpu=1"}'
+        )
+        kube._mock_api.create.side_effect = requests.HTTPError("403 Forbidden", response=response)
+
+        with pytest.raises(TriggerError):
+            kube.create_pipelinerun({"kind": "PipelineRun"})
+
+    def test_quota_message_without_requested_resource_fails_safe(self, kube: KubeClient):
+        """Unrecognised quota phrasing is not guessed at: non-deferrable."""
+        response = requests.Response()
+        response.status_code = 403
+        response._content = b'{"message": "exceeded quota: something-unparseable"}'
+        kube._mock_api.create.side_effect = requests.HTTPError("403 Forbidden", response=response)
+
+        with pytest.raises(TriggerError):
+            kube.create_pipelinerun({"kind": "PipelineRun"})
+
+    def test_rate_limit_429_without_quota_message_is_not_deferred(self, kube: KubeClient):
+        """An apiserver flow-control 429 is not a ResourceQuota rejection."""
+        response = requests.Response()
+        response.status_code = 429
+        response._content = b'{"message": "Too many requests"}'
+        kube._mock_api.create.side_effect = requests.HTTPError("429 Too Many Requests", response=response)
+
+        with pytest.raises(TriggerError):
+            kube.create_pipelinerun({"kind": "PipelineRun"})
+
+    def test_plain_forbidden_still_raises_trigger_error(self, kube: KubeClient):
+        """A permissions-gap 403 must keep the non-recoverable classification."""
+        response = requests.Response()
+        response.status_code = 403
+        response._content = b'{"message": "pipelineruns.tekton.dev \\"x\\" is forbidden: User cannot create resource"}'
+        kube._mock_api.create.side_effect = requests.HTTPError("403 Forbidden", response=response)
+
+        with pytest.raises(TriggerError):
+            kube.create_pipelinerun({"kind": "PipelineRun"})
 
     def test_uses_correct_namespace_in_path(self, kube: KubeClient):
         kube._mock_api.create.return_value = {"metadata": {"name": "pnc-import-ns"}}
