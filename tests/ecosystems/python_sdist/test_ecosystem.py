@@ -56,7 +56,7 @@ def test_build_pipelinerun_from_ref(monkeypatch, tmp_path):
     params = {p["name"]: p["value"] for p in manifest["spec"]["params"]}
     assert params["PACKAGE"] == "foolib"
     assert params["VERSION"] == "0.4.0"
-    assert params["SOURCE_REGISTRIES"] == "rhtl"
+    assert params["SOURCE_REGISTRIES"] == "pypi.org"
 
 
 def test_build_pipelinerun_rejects_malformed_ref(tmp_path, monkeypatch):

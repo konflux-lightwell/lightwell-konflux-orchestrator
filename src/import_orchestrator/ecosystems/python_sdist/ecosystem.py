@@ -63,7 +63,7 @@ class PythonSdistEcosystem:
                 upstream_ref=source["ref"],
             )
 
-        source_registries = getattr(args, "source_registries", "rhtl")
+        source_registries = getattr(args, "source_registries", "pypi.org")
         pipeline_spec = load_pipeline(config.pipeline_definition_path())
         return build_pipelinerun_manifest(
             **common_kwargs,

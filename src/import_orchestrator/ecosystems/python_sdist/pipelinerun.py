@@ -47,7 +47,7 @@ def build_pipelinerun_manifest(
     prefix: str,
     image_repo_base: str,
     service_account: str | None = None,
-    source_registries: str = "rhtl",
+    source_registries: str = "pypi.org",
     pipeline_git_url: str | None = None,
     pipeline_revision: str | None = None,
     source_type: str = "pypi-sdist",
