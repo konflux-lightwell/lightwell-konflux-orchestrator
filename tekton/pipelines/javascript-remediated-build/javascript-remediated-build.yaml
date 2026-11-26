@@ -49,6 +49,12 @@ spec:
       description: Pulp Stage npm registry URL (only when publish-to-pulp is true)
       type: string
       default: ""
+    - name: sbom-repository-url
+      description: >-
+        https URL stored as the CycloneDX purl repository_url qualifier.
+        Defaults to the lightwell-stage javascript/remediated distribution.
+      type: string
+      default: "https://packages.redhat.com/api/pulp-content/lightwell-stage/javascript/remediated"
     - name: lightwell-publish-version-override
       description: >-
         Version the recipes publish instead of manifest.version (e.g.
@@ -139,6 +145,8 @@ spec:
           value: $(params.publish-to-pulp)
         - name: LIGHTWELL_PUBLISH_VERSION_OVERRIDE
           value: $(params.lightwell-publish-version-override)
+        - name: SBOM_REPOSITORY_URL
+          value: $(params.sbom-repository-url)
       taskRef:
         resolver: bundles
         params:

@@ -81,6 +81,15 @@ def add_build_args(parser: argparse.ArgumentParser) -> None:
         ),
     )
     parser.add_argument(
+        "--sbom-repository-url",
+        default=os.environ.get("LIGHTWELL_JAVASCRIPT_SBOM_REPOSITORY_URL") or None,
+        help=(
+            "CycloneDX purl repository_url "
+            "(default: the target's npm content URL; "
+            "or LIGHTWELL_JAVASCRIPT_SBOM_REPOSITORY_URL)"
+        ),
+    )
+    parser.add_argument(
         "--publish-version-suffix",
         default=None,
         metavar="SUFFIX",

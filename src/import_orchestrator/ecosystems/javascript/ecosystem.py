@@ -17,10 +17,12 @@ limitations under the License.
 from __future__ import annotations
 
 import argparse
+import os
 
 from import_orchestrator.ecosystems.base import build_request_identity
 from import_orchestrator.ecosystems.javascript import config
 from import_orchestrator.ecosystems.javascript.pipelinerun import build_pipelinerun_manifest, parse_ref
+from import_orchestrator.engine.errors import TriggerError
 from import_orchestrator.engine.pipeline_loader import load_pipeline
 
 
@@ -38,11 +40,22 @@ class JavaScriptEcosystem:
         return config.TARGET_CONFIGS.get(target, {}).get("pipelinerun_prefix", self.pipelinerun_prefix)
 
     def build_pipelinerun(self, ref: str, args: argparse.Namespace) -> dict:
-        """Build a PipelineRun manifest for one ``package==version`` reference."""
+        """Build a PipelineRun manifest for one ``package==version`` reference.
+
+        The CycloneDX repository URL comes from ``--sbom-repository-url`` or the
+        target's npm content URL.
+        """
         package, version = parse_ref(ref)
         target = getattr(args, "target", config.DEFAULT_TARGET)
         cfg = config.TARGET_CONFIGS[target]
         include_assess = cfg.get("include_assess", True)
+        explicit_sbom_url = getattr(args, "sbom_repository_url", None) or os.environ.get(
+            "LIGHTWELL_JAVASCRIPT_SBOM_REPOSITORY_URL"
+        )
+        try:
+            sbom_repository_url = config.resolve_sbom_repository_url(target, explicit_sbom_url)
+        except ValueError as exc:
+            raise TriggerError(str(exc)) from exc
         pipeline_spec = load_pipeline(config.pipeline_definition_path(target))
         assess_bundle = getattr(args, "task_assess_npm_compliance_bundle", None)
         pulp_secret = getattr(args, "pulp_read_secret_name", None)
@@ -70,6 +83,7 @@ class JavaScriptEcosystem:
                 or cfg.get("tl_npm_registry_url")
                 or config.DEFAULT_TL_NPM_REGISTRY_URL
             ),
+            sbom_repository_url=sbom_repository_url,
             pulp_read_secret_name=(pulp_secret or config.DEFAULT_PULP_READ_SECRET_NAME),
             git_auth_secret=getattr(args, "git_auth_secret", config.GIT_AUTH_SECRET),
             publish_version_suffix=getattr(args, "publish_version_suffix", None),

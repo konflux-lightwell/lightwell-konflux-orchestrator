@@ -78,6 +78,7 @@ def _manifest(**overrides):
         task_build_npm_package_bundle="quay.io/example/task-build@sha256:def",
         task_assess_npm_compliance_bundle="quay.io/example/task-assess@sha256:ghi",
         service_account="build-pipeline-javascript-validated-build",
+        sbom_repository_url="https://packages.redhat.com/api/pulp-content/lightwell/javascript/validated",
     )
     kwargs.update(overrides)
     return build_pipelinerun_manifest(**kwargs)
@@ -123,6 +124,9 @@ class TestBuildManifest:
         assert params["output-image"] == expected_image
         assert params["builder-image"].startswith("quay.io/example/npm-builder")
         assert params["tl-npm-registry-url"] == (
+            "https://packages.redhat.com/api/pulp-content/lightwell/javascript/validated"
+        )
+        assert params["sbom-repository-url"] == (
             "https://packages.redhat.com/api/pulp-content/lightwell/javascript/validated"
         )
         assert params["pulp-read-secret-name"] == "lightwell-pulp-read-secret"
@@ -178,6 +182,11 @@ class TestBuildManifest:
         )
         assert params["output-image"] == expected_image
 
+    def test_sbom_repository_url_required(self):
+        """A PipelineRun without a CycloneDX repository URL is rejected."""
+        with pytest.raises(TriggerError, match="sbom_repository_url"):
+            _manifest(sbom_repository_url="")
+
     def test_remediated_omits_assess_params(self):
         """Thin remediations PipelineRuns omit assess registry params."""
         manifest = _manifest(
@@ -191,4 +200,5 @@ class TestBuildManifest:
         assert "task-assess-npm-compliance-bundle" not in params
         assert "tl-npm-registry-url" not in params
         assert "pulp-read-secret-name" not in params
+        assert params["sbom-repository-url"].endswith("/javascript/validated")
         assert manifest["metadata"]["labels"]["pipelines.openshift.io/runtime"] == "build-npm"

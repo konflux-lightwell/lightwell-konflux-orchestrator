@@ -68,6 +68,7 @@ def build_pipelinerun_manifest(
     task_build_npm_package_bundle: str,
     task_assess_npm_compliance_bundle: str | None = None,
     tl_npm_registry_url: str = config.DEFAULT_TL_NPM_REGISTRY_URL,
+    sbom_repository_url: str = "",
     pulp_read_secret_name: str = config.DEFAULT_PULP_READ_SECRET_NAME,
     git_auth_secret: str = config.GIT_AUTH_SECRET,
     publish_version_suffix: str | None = None,
@@ -88,11 +89,16 @@ def build_pipelinerun_manifest(
 
     When ``include_assess`` is False (remediated thin builds), assess-related
     params are omitted and the runtime label is ``build-npm``.
+
+    ``sbom_repository_url`` is the CycloneDX purl ``repository_url`` qualifier.
+    It is required for every target, including thin remediations.
     """
     package_path = config.package_dir(package, version)
     package_slug = sanitize_package_for_resource(package)
     image = f"{image_repo_base}/{application}/{component}:{package_slug}-{version}"
     publish_version_override = f"{version}-{publish_version_suffix}" if publish_version_suffix else ""
+    if not sbom_repository_url:
+        raise TriggerError("sbom_repository_url is required")
     params: list[dict[str, Any]] = [
         {"name": "git-url", "value": source_git_url},
         {"name": "revision", "value": source_revision},
@@ -101,6 +107,7 @@ def build_pipelinerun_manifest(
         {"name": "builder-image", "value": builder_image},
         {"name": "task-build-npm-package-bundle", "value": task_build_npm_package_bundle},
         {"name": "lightwell-publish-version-override", "value": publish_version_override},
+        {"name": "sbom-repository-url", "value": sbom_repository_url},
     ]
     if include_assess:
         if not task_assess_npm_compliance_bundle:

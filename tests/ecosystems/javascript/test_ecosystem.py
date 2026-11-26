@@ -58,6 +58,7 @@ def test_build_pipelinerun_from_ref(monkeypatch, tmp_path):
     assert params["packages"] == ["packages/bluebird/3.7.2"]
     assert params["output-image"].endswith(":bluebird-3.7.2")
     assert params["tl-npm-registry-url"] == config.TL_NPM_REGISTRY_URL_PROD
+    assert params["sbom-repository-url"] == config.TL_NPM_REGISTRY_URL_PROD
     assert labels["lightwell.redhat.com/package"] == "bluebird"
 
 
@@ -81,6 +82,7 @@ def test_build_pipelinerun_validated_stage_target(monkeypatch, tmp_path):
     )
     params = {p["name"]: p["value"] for p in manifest["spec"]["params"]}
     assert params["tl-npm-registry-url"] == config.TL_NPM_REGISTRY_URL_STAGE
+    assert params["sbom-repository-url"] == config.TL_NPM_REGISTRY_URL_STAGE
     assert params["output-image"].endswith(
         "/javascript-validated-stage/javascript-validated-stage-build:bluebird-3.7.2"
     )
@@ -160,7 +162,10 @@ def test_build_pipelinerun_remediated_stage_target(monkeypatch, tmp_path):
 
     manifest = JavaScriptEcosystem().build_pipelinerun(
         "bluebird==3.7.2",
-        argparse.Namespace(target="REMEDIATED_STAGE"),
+        argparse.Namespace(
+            target="REMEDIATED_STAGE",
+            sbom_repository_url="https://example.test/javascript/remediated",
+        ),
     )
 
     labels = manifest["metadata"]["labels"]
@@ -175,9 +180,28 @@ def test_build_pipelinerun_remediated_stage_target(monkeypatch, tmp_path):
     assert "task-assess-npm-compliance-bundle" not in params
     assert "tl-npm-registry-url" not in params
     assert "pulp-read-secret-name" not in params
+    assert params["sbom-repository-url"] == "https://example.test/javascript/remediated"
     assert params["output-image"].endswith(
         "/javascript-remediated-stage/javascript-remediated-stage-build:bluebird-3.7.2"
     )
+
+
+def test_remediated_stage_sbom_repository_url(monkeypatch, tmp_path):
+    """REMEDIATED_STAGE uses the lightwell-stage javascript/remediated distribution."""
+    pipeline_file = (
+        tmp_path / "tekton" / "pipelines" / "javascript-remediated-build" / "javascript-remediated-build.yaml"
+    )
+    pipeline_file.parent.mkdir(parents=True)
+    pipeline_file.write_text("spec:\n  tasks: []\n")
+    monkeypatch.setenv("TEKTON_PIPELINE_DIR", str(tmp_path / "tekton"))
+    monkeypatch.delenv("LIGHTWELL_JAVASCRIPT_SBOM_REPOSITORY_URL", raising=False)
+
+    manifest = JavaScriptEcosystem().build_pipelinerun(
+        "bluebird==3.7.2",
+        argparse.Namespace(target="REMEDIATED_STAGE"),
+    )
+    params = {p["name"]: p["value"] for p in manifest["spec"]["params"]}
+    assert params["sbom-repository-url"] == config.SBOM_REPOSITORY_URL_REMEDIATED_STAGE
 
 
 def test_pipelinerun_prefix_for_remediated_stage():

@@ -54,6 +54,11 @@ spec:
       description: Pulp Stage npm registry URL (only when publish-to-pulp is true)
       type: string
       default: ""
+    - name: sbom-repository-url
+      description: >-
+        https URL stored as the CycloneDX purl repository_url qualifier.
+        Validated targets use the Lightwell npm content URL.
+      type: string
     - name: tl-npm-registry-url
       description: >-
         Read-only npm registry used by assess-npm-compliance for dependency
@@ -161,6 +166,8 @@ spec:
           value: $(params.publish-to-pulp)
         - name: LIGHTWELL_PUBLISH_VERSION_OVERRIDE
           value: $(params.lightwell-publish-version-override)
+        - name: SBOM_REPOSITORY_URL
+          value: $(params.sbom-repository-url)
       taskRef:
         resolver: bundles
         params:
