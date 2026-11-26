@@ -57,8 +57,8 @@ def register(subparsers: argparse._SubParsersAction, ecosystem: Ecosystem) -> No
         default=None,
         help=(
             "Build type passed to the Pipeline (Backport, Novel, Validated, or Scratch). "
-            "When omitted, defaults to the target's pinned build type (Scratch for the "
-            "SCRATCH target), else Validated for VALIDATED/VALIDATED-STAGE targets and "
+            "When omitted, defaults to the target's pinned build type (Novel for NOVEL, "
+            "Scratch for SCRATCH), else Validated for VALIDATED/VALIDATED-STAGE targets and "
             "Backport for all others."
         ),
     )

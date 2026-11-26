@@ -42,6 +42,12 @@ TARGET_CONFIGS: dict[str, dict] = {
         "component": "remediated-build",
         "service_account": "build-pipeline-remediated-build",
     },
+    "NOVEL": {
+        "app": "python-novel",
+        "component": "python-novel",
+        "service_account": "build-pipeline-python-novel",
+        "build_type": "Novel",
+    },
     "SCRATCH": {
         "app": "scratch-build",
         "component": "scratch-build",
