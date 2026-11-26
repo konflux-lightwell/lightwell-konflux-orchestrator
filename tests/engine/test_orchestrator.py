@@ -401,17 +401,18 @@ class TestPruneWiring:
         trigger = MagicMock()
         trigger.trigger_next_batch.return_value = 0
         prune_monitor = MagicMock()
+        release_monitor = MagicMock()
         orchestrator = ImportOrchestrator(
             view=view,
             trigger=trigger,
             pipeline_monitor=MagicMock(),
-            release_monitor=MagicMock(),
+            release_monitor=release_monitor,
             poll_interval=0,
             max_retries=3,
             prune_monitor=prune_monitor,
         )
         manager = MagicMock()
-        manager.attach_mock(orchestrator._release_monitor.update_statuses, "release")
+        manager.attach_mock(release_monitor.update_statuses, "release")
         manager.attach_mock(prune_monitor.prune_completed, "prune")
         manager.attach_mock(trigger.trigger_next_batch, "trigger")
 

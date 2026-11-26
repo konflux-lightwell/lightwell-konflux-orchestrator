@@ -160,6 +160,7 @@ class TestFindRpa:
         assert rpa.namespace == "rhtap-releng-tenant"
         assert rpa.policy == "mrrc-lightwell-poc-novel-prod"
         assert rpa.service_account == "release-pulp-lightwell-prod"
+        assert rpa.pipeline is not None
         assert rpa.pipeline.endswith("slan-cuan-release.yaml")
 
     def test_label_target_missing_raises(self, tmp_path: Path):

@@ -14,6 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
+from typing import Any
+
 import pytest
 
 from import_orchestrator.models import (
@@ -34,7 +36,7 @@ from import_orchestrator.models import (
 def _request(**overrides) -> Request:
     """A Request with the seven fingerprint fields populated; override one to test
     that it changes the hash."""
-    fields = {
+    fields: dict[str, Any] = {
         "id": 1,
         "namespace": "ns",
         "application": "app",
