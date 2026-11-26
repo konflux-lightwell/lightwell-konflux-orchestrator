@@ -113,7 +113,7 @@ def promote(args: argparse.Namespace) -> int:
     release_name = kube.find_release_for_snapshot_and_plan(args.snapshot, args.release_plan)
     adopted = release_name is not None
 
-    if adopted:
+    if release_name is not None:
         print(
             f"Found existing Release {release_name} for {args.snapshot} against "
             f"{args.release_plan}; adopting it instead of creating another.",
