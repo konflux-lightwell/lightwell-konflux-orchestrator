@@ -26,6 +26,7 @@ from import_orchestrator.engine import Reconciler, RequestView
 from import_orchestrator.models import (
     Attempt,
     ClusterResource,
+    ConditionStatus,
     Fingerprint,
     Phase,
     PhaseStatus,
@@ -52,7 +53,7 @@ def _seed_request(db: WorkflowDatabase, ref: str) -> Request:
     return request
 
 
-def _pr(name: str, status: str) -> PipelineRunStatus:
+def _pr(name: str, status: ConditionStatus) -> PipelineRunStatus:
     return PipelineRunStatus(name=name, status=status)
 
 
