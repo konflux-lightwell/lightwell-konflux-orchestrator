@@ -23,6 +23,7 @@ from import_orchestrator.clients import KubeClient
 from import_orchestrator.database import WorkflowDatabase
 from import_orchestrator.engine import PruneMonitor, RequestView
 from import_orchestrator.models import ClusterResource, Phase, PhaseStatus, PruneOutcome, Request
+from tests.helpers import require_id
 
 MAX_RETRIES = 3
 
@@ -46,9 +47,9 @@ def _seed_request(db: WorkflowDatabase, ref: str) -> Request:
 
 def _seed_running(db: WorkflowDatabase, ref: str) -> Request:
     request = _seed_request(db, ref)
-    attempt = db.create_attempt(request.id)
+    attempt = db.create_attempt(require_id(request))
     db.upsert_phase(
-        attempt.id,
+        require_id(attempt),
         Phase.INTAKE,
         PhaseStatus.RUNNING,
         reference_type=ClusterResource.PIPELINE_RUN,
@@ -59,23 +60,23 @@ def _seed_running(db: WorkflowDatabase, ref: str) -> Request:
 
 def _seed_success(db: WorkflowDatabase, ref: str) -> Request:
     request = _seed_request(db, ref)
-    attempt = db.create_attempt(request.id)
+    attempt = db.create_attempt(require_id(request))
     db.upsert_phase(
-        attempt.id,
+        require_id(attempt),
         Phase.INTAKE,
         PhaseStatus.SUCCESS,
         reference_type=ClusterResource.PIPELINE_RUN,
         reference_id=f"pr-{ref}",
     )
     db.upsert_phase(
-        attempt.id,
+        require_id(attempt),
         Phase.SNAPSHOT,
         PhaseStatus.SUCCESS,
         reference_type=ClusterResource.SNAPSHOT,
         reference_id=f"snap-{ref}",
     )
     db.upsert_phase(
-        attempt.id,
+        require_id(attempt),
         Phase.RELEASE,
         PhaseStatus.SUCCESS,
         reference_type=ClusterResource.RELEASE,
@@ -88,23 +89,23 @@ def _seed_failed(db: WorkflowDatabase, ref: str, *, attempts: int = 1) -> Reques
     """Seed a FAILED Request with ``attempts`` attempts; the latest has deletable refs."""
     request = _seed_request(db, ref)
     for _ in range(attempts):
-        attempt = db.create_attempt(request.id)
+        attempt = db.create_attempt(require_id(request))
         db.upsert_phase(
-            attempt.id,
+            require_id(attempt),
             Phase.INTAKE,
             PhaseStatus.SUCCESS,
             reference_type=ClusterResource.PIPELINE_RUN,
             reference_id=f"pr-{ref}",
         )
         db.upsert_phase(
-            attempt.id,
+            require_id(attempt),
             Phase.SNAPSHOT,
             PhaseStatus.SUCCESS,
             reference_type=ClusterResource.SNAPSHOT,
             reference_id=f"snap-{ref}",
         )
         db.upsert_phase(
-            attempt.id,
+            require_id(attempt),
             Phase.RELEASE,
             PhaseStatus.FAILED,
             reference_type=ClusterResource.RELEASE,

@@ -23,6 +23,7 @@ import pytest
 from import_orchestrator import database as database_module
 from import_orchestrator.database import WorkflowDatabase
 from import_orchestrator.models import AttemptPhase, ClusterResource, Phase, PhaseStatus
+from tests.helpers import require, require_id
 
 REQUEST_FIELDS = {
     "namespace": "lightwell-poc-tenant",
@@ -115,14 +116,14 @@ class TestPruning:
     def test_new_request_is_not_pruned(self, store: WorkflowDatabase):
         request, _ = _make_request(store)
         assert request.pruned_at is None
-        assert store.get_request(request.id).pruned_at is None
+        assert require(store.get_request(request.id)).pruned_at is None
 
     def test_mark_pruned_stamps_timezone_aware_utc_timestamp(self, store: WorkflowDatabase):
         request, _ = _make_request(store)
 
         store.mark_pruned(request.id)
 
-        pruned_at = store.get_request(request.id).pruned_at
+        pruned_at = require(store.get_request(request.id)).pruned_at
         assert pruned_at is not None
         assert pruned_at.tzinfo is not None
         assert pruned_at.utcoffset() == timedelta(0)
@@ -132,9 +133,9 @@ class TestPruning:
     def test_mark_pruned_is_idempotent(self, store: WorkflowDatabase):
         request, _ = _make_request(store)
         store.mark_pruned(request.id)
-        first = store.get_request(request.id).pruned_at
+        first = require(store.get_request(request.id)).pruned_at
         store.mark_pruned(request.id)
-        second = store.get_request(request.id).pruned_at
+        second = require(store.get_request(request.id)).pruned_at
         assert first is not None and second is not None
 
     def test_created_at_is_timezone_aware_utc(self, store: WorkflowDatabase):
@@ -493,7 +494,7 @@ class TestStoreInfrastructure:
             assert again.id == request.id
             latest = store.latest_attempt(request.id)
             assert latest is not None
-            phase = store.get_phase(latest.id, Phase.INTAKE)
+            phase = store.get_phase(require_id(latest), Phase.INTAKE)
             assert phase is not None
             assert phase.status is PhaseStatus.SUCCESS
 
@@ -517,9 +518,9 @@ class TestDerivedViews:
     def test_latest_phase_map_uses_latest_attempt(self, store: WorkflowDatabase):
         request, _ = _make_request(store)
         first = store.create_attempt(request.id)
-        store.upsert_phase(first.id, Phase.INTAKE, PhaseStatus.FAILED, error_message="old")
+        store.upsert_phase(require_id(first), Phase.INTAKE, PhaseStatus.FAILED, error_message="old")
         second = store.create_attempt(request.id)
-        store.upsert_phase(second.id, Phase.INTAKE, PhaseStatus.RUNNING)
+        store.upsert_phase(require_id(second), Phase.INTAKE, PhaseStatus.RUNNING)
 
         phase_map = store.latest_phase_map(request.id)
         assert phase_map[Phase.INTAKE].status is PhaseStatus.RUNNING

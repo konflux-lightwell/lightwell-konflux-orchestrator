@@ -23,6 +23,7 @@ from import_orchestrator.clients import KubeClient
 from import_orchestrator.database import WorkflowDatabase
 from import_orchestrator.engine import PipelineMonitor, RequestView
 from import_orchestrator.models import ClusterResource, Phase, PhaseStatus, PipelineRunStatus, Request, RequestState
+from tests.helpers import require_id
 
 
 def _identity(ref: str) -> dict[str, str]:
@@ -40,9 +41,9 @@ def _identity(ref: str) -> dict[str, str]:
 def _seed_running(db: WorkflowDatabase, ref: str, pr_name: str) -> Request:
     """Seed a Request whose latest attempt has an intake RUNNING with a reference."""
     request, _ = db.get_or_create_request(**_identity(ref))
-    attempt = db.create_attempt(request.id)
+    attempt = db.create_attempt(require_id(request))
     db.upsert_phase(
-        attempt.id,
+        require_id(attempt),
         Phase.INTAKE,
         PhaseStatus.RUNNING,
         reference_type=ClusterResource.PIPELINE_RUN,
@@ -52,7 +53,7 @@ def _seed_running(db: WorkflowDatabase, ref: str, pr_name: str) -> Request:
 
 
 def _intake(db: WorkflowDatabase, request: Request):
-    return db.latest_phase_map(request.id).get(Phase.INTAKE)
+    return db.latest_phase_map(require_id(request)).get(Phase.INTAKE)
 
 
 @pytest.fixture

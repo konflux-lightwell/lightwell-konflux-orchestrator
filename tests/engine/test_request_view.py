@@ -22,6 +22,7 @@ import pytest
 from import_orchestrator.database import WorkflowDatabase
 from import_orchestrator.engine import PipelineMonitor, ReleaseMonitor, RequestView
 from import_orchestrator.models import ClusterResource, Phase, PhaseStatus, Request, RequestState
+from tests.helpers import require_id
 
 
 def _identity(ref: str) -> dict[str, str]:
@@ -54,9 +55,13 @@ def _pending(db: WorkflowDatabase, ref: str) -> Request:
 
 def _running(db: WorkflowDatabase, ref: str) -> Request:
     request = _pending(db, ref)
-    attempt = db.create_attempt(request.id)
+    attempt = db.create_attempt(require_id(request))
     db.upsert_phase(
-        attempt.id, Phase.INTAKE, PhaseStatus.RUNNING, reference_type=ClusterResource.PIPELINE_RUN, reference_id=ref
+        require_id(attempt),
+        Phase.INTAKE,
+        PhaseStatus.RUNNING,
+        reference_type=ClusterResource.PIPELINE_RUN,
+        reference_id=ref,
     )
     return request
 
@@ -64,8 +69,8 @@ def _running(db: WorkflowDatabase, ref: str) -> Request:
 def _failed(db: WorkflowDatabase, ref: str, attempts: int = 1) -> Request:
     request = _pending(db, ref)
     for _ in range(attempts):
-        attempt = db.create_attempt(request.id)
-        db.upsert_phase(attempt.id, Phase.INTAKE, PhaseStatus.FAILED, error_message="boom")
+        attempt = db.create_attempt(require_id(request))
+        db.upsert_phase(require_id(attempt), Phase.INTAKE, PhaseStatus.FAILED, error_message="boom")
     return request
 
 
@@ -178,15 +183,15 @@ class TestIsComplete:
 class TestSkipRelease:
     def _seed_intake_success(self, db: WorkflowDatabase, ref: str) -> tuple[Request, int]:
         request = _pending(db, ref)
-        attempt = db.create_attempt(request.id)
+        attempt = db.create_attempt(require_id(request))
         db.upsert_phase(
-            attempt.id,
+            require_id(attempt),
             Phase.INTAKE,
             PhaseStatus.SUCCESS,
             reference_type=ClusterResource.PIPELINE_RUN,
             reference_id=f"pr-{ref}",
         )
-        return request, attempt.id
+        return request, require_id(attempt)
 
     def test_intake_success_awaits_integration_tests(self, db):
         """A skip_release request is not terminal at intake -- ITS still has to run."""

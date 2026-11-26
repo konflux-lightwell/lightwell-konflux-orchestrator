@@ -41,6 +41,7 @@ from import_orchestrator.models import (
     PruneOutcome,
     Request,
 )
+from tests.helpers import require, require_id
 
 
 def _identity(ref: str) -> dict[str, str]:
@@ -63,30 +64,30 @@ def _seed_request(db: WorkflowDatabase, ref: str) -> Request:
 def _seed_awaiting_release(db: WorkflowDatabase, ref: str, snapshot: str) -> Request:
     """Intake, snapshot, and integration tests succeeded; no Release recorded yet."""
     request = _seed_request(db, ref)
-    attempt = db.create_attempt(request.id)
+    attempt = db.create_attempt(require_id(request))
     db.upsert_phase(
-        attempt.id,
+        require_id(attempt),
         Phase.INTAKE,
         PhaseStatus.SUCCESS,
         reference_type=ClusterResource.PIPELINE_RUN,
         reference_id=f"pr-{ref}",
     )
     db.upsert_phase(
-        attempt.id,
+        require_id(attempt),
         Phase.SNAPSHOT,
         PhaseStatus.SUCCESS,
         reference_type=ClusterResource.SNAPSHOT,
         reference_id=snapshot,
     )
-    db.upsert_phase(attempt.id, Phase.INTEGRATION_TESTS, PhaseStatus.SUCCESS)
+    db.upsert_phase(require_id(attempt), Phase.INTEGRATION_TESTS, PhaseStatus.SUCCESS)
     return request
 
 
 def _seed_running(db: WorkflowDatabase, ref: str) -> Request:
     request = _seed_request(db, ref)
-    attempt = db.create_attempt(request.id)
+    attempt = db.create_attempt(require_id(request))
     db.upsert_phase(
-        attempt.id,
+        require_id(attempt),
         Phase.INTAKE,
         PhaseStatus.RUNNING,
         reference_type=ClusterResource.PIPELINE_RUN,
@@ -97,16 +98,16 @@ def _seed_running(db: WorkflowDatabase, ref: str) -> Request:
 
 def _seed_success(db: WorkflowDatabase, ref: str) -> Request:
     request = _seed_request(db, ref)
-    attempt = db.create_attempt(request.id)
+    attempt = db.create_attempt(require_id(request))
     db.upsert_phase(
-        attempt.id,
+        require_id(attempt),
         Phase.INTAKE,
         PhaseStatus.SUCCESS,
         reference_type=ClusterResource.PIPELINE_RUN,
         reference_id=f"pr-{ref}",
     )
     db.upsert_phase(
-        attempt.id,
+        require_id(attempt),
         Phase.RELEASE,
         PhaseStatus.SUCCESS,
         reference_type=ClusterResource.RELEASE,
@@ -119,8 +120,8 @@ def _seed_exhausted_failure(db: WorkflowDatabase, ref: str, attempts: int) -> Re
     """Seed a Request with ``attempts`` failed attempts (intake FAILED on each)."""
     request = _seed_request(db, ref)
     for _ in range(attempts):
-        attempt = db.create_attempt(request.id)
-        db.upsert_phase(attempt.id, Phase.INTAKE, PhaseStatus.FAILED, error_message="boom")
+        attempt = db.create_attempt(require_id(request))
+        db.upsert_phase(require_id(attempt), Phase.INTAKE, PhaseStatus.FAILED, error_message="boom")
     return request
 
 
@@ -175,7 +176,7 @@ class TestUpdatePipelineRunStatuses:
 
         orchestrator.update_pipelinerun_statuses()
 
-        assert db.latest_phase_map(request.id)[Phase.INTAKE].status == PhaseStatus.SUCCESS
+        assert db.latest_phase_map(require_id(request))[Phase.INTAKE].status == PhaseStatus.SUCCESS
 
     def test_advances_running_to_failed(self, orchestrator: ImportOrchestrator, db: WorkflowDatabase, mock_kube):
         request = _seed_running(db, "r1")
@@ -184,7 +185,7 @@ class TestUpdatePipelineRunStatuses:
 
         orchestrator.update_pipelinerun_statuses()
 
-        assert db.latest_phase_map(request.id)[Phase.INTAKE].status == PhaseStatus.FAILED
+        assert db.latest_phase_map(require_id(request))[Phase.INTAKE].status == PhaseStatus.FAILED
 
     def test_skips_requests_without_attempt(self, orchestrator: ImportOrchestrator, db: WorkflowDatabase, mock_kube):
         _seed_request(db, "r1")
@@ -222,10 +223,10 @@ class TestTriggerNextBatch:
             max_retries=3,
         )
         mock_kube.create_pipelinerun.return_value = "pr-next"
-        trigger.skip_requests({waiting.id})
+        trigger.skip_requests({require_id(waiting)})
 
         assert trigger.trigger_next_batch() == 1
-        assert db.latest_phase_map(pending.id)[Phase.INTAKE].reference_id == "pr-next"
+        assert db.latest_phase_map(require_id(pending))[Phase.INTAKE].reference_id == "pr-next"
 
     def test_handles_trigger_failure(self, orchestrator: ImportOrchestrator, db: WorkflowDatabase, mock_kube):
         request = _seed_request(db, "tag")
@@ -233,7 +234,7 @@ class TestTriggerNextBatch:
 
         triggered = orchestrator.trigger_next_batch()
         assert triggered == 0
-        assert db.latest_phase_map(request.id)[Phase.INTAKE].status == PhaseStatus.FAILED
+        assert db.latest_phase_map(require_id(request))[Phase.INTAKE].status == PhaseStatus.FAILED
 
 
 class TestIsComplete:
@@ -360,7 +361,7 @@ class TestPruneWiring:
         """An orchestrator with no monitor wired does not prune."""
         request = _seed_success(db, "r1")
         orchestrator.prune_completed()
-        assert db.get_request(request.id).pruned_at is None
+        assert require(db.get_request(require_id(request))).pruned_at is None
 
     def test_run_until_complete_prunes_already_complete_request(self, db: WorkflowDatabase, mock_kube: MagicMock):
         """A resume where everything already succeeded still prunes via the final sweep."""
@@ -370,7 +371,7 @@ class TestPruneWiring:
         assert orchestrator.run_until_complete() == 0
 
         mock_kube.delete_request_resources.assert_called_once_with(releases={"rel-r1"}, snapshots=set())
-        assert db.get_request(request.id).pruned_at is not None
+        assert require(db.get_request(require_id(request))).pruned_at is not None
 
     def test_run_until_complete_prunes_request_that_succeeds_mid_run(self, db: WorkflowDatabase, mock_kube: MagicMock):
         _seed_request(db, "r1")
@@ -459,7 +460,7 @@ class TestReconcileIntegration:
         assert exit_code == 0
         mock_kube.create_pipelinerun.assert_not_called()
         # The completed cluster workflow was actually adopted (not just "no create").
-        phases = db.latest_phase_map(request.id)
+        phases = db.latest_phase_map(require_id(request))
         assert phases[Phase.INTAKE].reference_id == "pnc-import-existing"
         assert phases[Phase.SNAPSHOT].reference_id == "snap-1"
         assert phases[Phase.INTEGRATION_TESTS].status == PhaseStatus.SUCCESS
@@ -484,7 +485,7 @@ class TestReconcileIntegration:
             ("rel-1", "False"),
         ]
         Reconciler(view=RequestView(db, skip_release=False), kube=mock_kube).reconcile_all()
-        assert db.attempt_count(request.id) == 2
+        assert db.attempt_count(require_id(request)) == 2
 
         mock_kube.list_releases_for_snapshot_and_plan.return_value = []
         mock_kube.create_release.return_value = "rel-new"
@@ -492,8 +493,8 @@ class TestReconcileIntegration:
         exit_code = self._orchestrator(db, mock_kube).run_until_complete()
 
         assert exit_code == 0
-        assert db.attempt_count(request.id) == 2
-        assert db.latest_phase_map(request.id)[Phase.RELEASE].reference_id == "rel-2"
+        assert db.attempt_count(require_id(request)) == 2
+        assert db.latest_phase_map(require_id(request))[Phase.RELEASE].reference_id == "rel-2"
         mock_kube.create_release.assert_not_called()
         mock_kube.create_pipelinerun.assert_not_called()
 
@@ -521,8 +522,8 @@ class TestReconcileIntegration:
         assert exit_code == 0
         created = [call.args[0] for call in mock_kube.create_release.call_args_list]
         assert created == ["snap-b"]
-        assert Phase.RELEASE not in db.latest_phase_map(awaiting.id)
-        assert db.latest_phase_map(running.id)[Phase.RELEASE].status == PhaseStatus.SUCCESS
+        assert Phase.RELEASE not in db.latest_phase_map(require_id(awaiting))
+        assert db.latest_phase_map(require_id(running))[Phase.RELEASE].status == PhaseStatus.SUCCESS
 
     def test_reconcile_failure_does_not_trigger_duplicate(self, db: WorkflowDatabase, mock_kube):
         """If the cluster cannot be read during reconcile, the Request is skipped this run:
