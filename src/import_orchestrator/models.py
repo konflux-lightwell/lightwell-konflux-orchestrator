@@ -20,10 +20,18 @@ import hashlib
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Literal
+from typing import Literal, TypeGuard, get_args
 
 # Kubernetes caps a label *value* at 63 characters.
 _MAX_LABEL_VALUE_LEN = 63
+
+
+ConditionStatus = Literal["True", "False", "Unknown"]
+
+
+def is_condition_status(value: str) -> TypeGuard[ConditionStatus]:
+    """Narrow a raw condition status string to the values Tekton may report."""
+    return value in get_args(ConditionStatus)
 
 
 @dataclass
@@ -31,7 +39,7 @@ class PipelineRunStatus:
     """Status of a PipelineRun."""
 
     name: str
-    status: Literal["True", "False", "Unknown"]
+    status: ConditionStatus
 
     @property
     def is_running(self) -> bool:
@@ -47,7 +55,7 @@ class PipelineRunStatus:
 
     @staticmethod
     def from_str(name: str, status: str) -> PipelineRunStatus | None:
-        if name and status in ("True", "False", "Unknown"):
+        if name and is_condition_status(status):
             return PipelineRunStatus(name, status)
         return None
 

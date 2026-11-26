@@ -25,7 +25,7 @@ import requests
 
 from import_orchestrator.clients.kube_api import KubeAPI, KubeAuth, resolve_auth
 from import_orchestrator.constants import FINGERPRINT_LABEL, KONFLUX_RELEASE_URL_TEMPLATE
-from import_orchestrator.models import PipelineRunStatus, PruneOutcome
+from import_orchestrator.models import PipelineRunStatus, PruneOutcome, is_condition_status
 
 
 def _api_error_detail(exc: requests.RequestException) -> str:
@@ -391,9 +391,7 @@ class KubeClient:
             return None
         cond = KubeClient._succeeded_condition(item)
         status = cond.get("status", "") if cond else ""
-        if status not in ("True", "False", "Unknown"):
-            status = "Unknown"
-        return PipelineRunStatus(name, status)
+        return PipelineRunStatus(name, status if is_condition_status(status) else "Unknown")
 
     def find_snapshot_by_pipelinerun(self, pr_name: str, *, raise_on_error: bool = False) -> str | None:
         """Find the Snapshot created by a specific PipelineRun via its label.
