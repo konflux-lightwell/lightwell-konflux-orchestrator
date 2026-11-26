@@ -17,6 +17,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest>=7.0",
+    "mypy>=1.10",
     "pytest-cov>=4.0",
     "ruff>=0.4",
 ]
@@ -36,6 +37,10 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src", "tests"]
 
 [tool.ruff]
 target-version = "py311"
