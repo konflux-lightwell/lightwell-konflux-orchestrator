@@ -24,6 +24,7 @@ from import_orchestrator.database import WorkflowDatabase
 from import_orchestrator.engine import ReleaseMonitor, RequestView
 from import_orchestrator.engine.errors import ReleaseError
 from import_orchestrator.models import ClusterResource, Fingerprint, Phase, PhaseStatus, Request, RequestState
+from tests.helpers import require, require_id
 
 
 def _identity(ref: str) -> dict[str, str]:
@@ -48,9 +49,9 @@ def _seed(
     """Seed a Request whose latest attempt has a successful intake, and optionally
     a discovered snapshot and/or a tracked (RUNNING) release."""
     request, _ = db.get_or_create_request(**_identity(ref))
-    attempt = db.create_attempt(request.id)
+    attempt = db.create_attempt(require_id(request))
     db.upsert_phase(
-        attempt.id,
+        require_id(attempt),
         Phase.INTAKE,
         PhaseStatus.SUCCESS,
         reference_type=ClusterResource.PIPELINE_RUN,
@@ -58,7 +59,7 @@ def _seed(
     )
     if snapshot is not None:
         db.upsert_phase(
-            attempt.id,
+            require_id(attempt),
             Phase.SNAPSHOT,
             PhaseStatus.SUCCESS,
             reference_type=ClusterResource.SNAPSHOT,
@@ -66,7 +67,7 @@ def _seed(
         )
     if release is not None:
         db.upsert_phase(
-            attempt.id,
+            require_id(attempt),
             Phase.RELEASE,
             PhaseStatus.RUNNING,
             reference_type=ClusterResource.RELEASE,
@@ -76,7 +77,7 @@ def _seed(
 
 
 def _phase(db: WorkflowDatabase, request: Request, name: Phase):
-    return db.latest_phase_map(request.id).get(name)
+    return db.latest_phase_map(require_id(request)).get(name)
 
 
 @pytest.fixture
@@ -493,8 +494,8 @@ class TestIntegrationTestGate:
     ):
         """A non-skip request whose ITS already FAILED is terminal: not re-polled, no release."""
         request = _seed(db, "r1", snapshot="snapshot-123")
-        attempt = db.latest_attempt(request.id)
-        db.upsert_phase(attempt.id, Phase.INTEGRATION_TESTS, PhaseStatus.FAILED, error_message="tests failed")
+        attempt = require(db.latest_attempt(require_id(request)))
+        db.upsert_phase(require_id(attempt), Phase.INTEGRATION_TESTS, PhaseStatus.FAILED, error_message="tests failed")
 
         monitor.update_statuses()
 

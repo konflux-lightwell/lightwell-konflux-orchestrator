@@ -24,6 +24,7 @@ from import_orchestrator.database import WorkflowDatabase
 from import_orchestrator.ecosystems.java.pipelinerun import TriggerError
 from import_orchestrator.engine import ImportTrigger, RequestView
 from import_orchestrator.models import ClusterResource, Fingerprint, Phase, PhaseStatus, Request, RequestState
+from tests.helpers import require_id
 
 
 def _identity(ref: str) -> dict[str, str]:
@@ -46,9 +47,9 @@ def _seed_request(db: WorkflowDatabase, ref: str) -> Request:
 def _seed_running(db: WorkflowDatabase, ref: str) -> Request:
     """Seed a Request whose latest attempt has an in-flight intake."""
     request = _seed_request(db, ref)
-    attempt = db.create_attempt(request.id)
+    attempt = db.create_attempt(require_id(request))
     db.upsert_phase(
-        attempt.id,
+        require_id(attempt),
         Phase.INTAKE,
         PhaseStatus.RUNNING,
         reference_type=ClusterResource.PIPELINE_RUN,
@@ -60,8 +61,8 @@ def _seed_running(db: WorkflowDatabase, ref: str) -> Request:
 def _seed_failed_intake(db: WorkflowDatabase, ref: str) -> Request:
     """Seed a Request whose latest attempt failed at intake (retriable)."""
     request = _seed_request(db, ref)
-    attempt = db.create_attempt(request.id)
-    db.upsert_phase(attempt.id, Phase.INTAKE, PhaseStatus.FAILED, error_message="boom")
+    attempt = db.create_attempt(require_id(request))
+    db.upsert_phase(require_id(attempt), Phase.INTAKE, PhaseStatus.FAILED, error_message="boom")
     return request
 
 
@@ -116,7 +117,7 @@ class TestTriggerNextBatch:
         running_intakes = [
             r
             for r in db.list_requests()
-            if (p := db.latest_phase_map(r.id).get(Phase.INTAKE)) is not None
+            if (p := db.latest_phase_map(require_id(r)).get(Phase.INTAKE)) is not None
             and p.status == PhaseStatus.RUNNING
             and r.artifact.startswith("tag")
         ]
@@ -134,7 +135,7 @@ class TestTriggerNextBatch:
 
         # Pending request still has no attempt.
         pending = next(r for r in db.list_requests() if r.artifact == "tag-pending")
-        assert db.attempt_count(pending.id) == 0
+        assert db.attempt_count(require_id(pending)) == 0
 
     def test_handles_trigger_failure(self, trigger: ImportTrigger, db: WorkflowDatabase, mock_kube: MagicMock):
         """Verify that trigger failures are recorded on the intake phase."""
@@ -144,8 +145,9 @@ class TestTriggerNextBatch:
         triggered = trigger.trigger_next_batch()
         assert triggered == 0
 
-        intake = db.latest_phase_map(request.id)[Phase.INTAKE]
+        intake = db.latest_phase_map(require_id(request))[Phase.INTAKE]
         assert intake.status == PhaseStatus.FAILED
+        assert intake.error_message is not None
         assert "connection refused" in intake.error_message
 
     def test_logs_full_admission_webhook_error(
@@ -170,7 +172,7 @@ class TestTriggerNextBatch:
         assert trigger.trigger_next_batch() == 0
 
         assert f"ERROR: Failed to trigger vcrpy==9.0.0: {message}" in capsys.readouterr().err
-        intake = db.latest_phase_map(request.id)[Phase.INTAKE]
+        intake = db.latest_phase_map(require_id(request))[Phase.INTAKE]
         assert intake.status == PhaseStatus.FAILED
         assert intake.error_message == f"PipelineRun trigger failed: {message}"
 
@@ -184,8 +186,9 @@ class TestTriggerNextBatch:
         triggered = trigger.trigger_next_batch()
         assert triggered == 0
 
-        intake = db.latest_phase_map(request.id)[Phase.INTAKE]
+        intake = db.latest_phase_map(require_id(request))[Phase.INTAKE]
         assert intake.status == PhaseStatus.FAILED
+        assert intake.error_message is not None
         assert "PipelineRun creation failed" in intake.error_message
 
     def test_records_intake_reference_on_success(
@@ -198,7 +201,7 @@ class TestTriggerNextBatch:
         triggered = trigger.trigger_next_batch()
         assert triggered == 1
 
-        intake = db.latest_phase_map(request.id)[Phase.INTAKE]
+        intake = db.latest_phase_map(require_id(request))[Phase.INTAKE]
         assert intake.status == PhaseStatus.RUNNING
         assert intake.reference_type == ClusterResource.PIPELINE_RUN
         assert intake.reference_id == "pnc-import-12345"
@@ -206,14 +209,14 @@ class TestTriggerNextBatch:
     def test_triggers_retry_candidate_as_new_attempt(self, trigger: ImportTrigger, db: WorkflowDatabase):
         """A failed import is retried as a brand-new Attempt; history is preserved."""
         request = _seed_failed_intake(db, "tag-retry")
-        assert db.attempt_count(request.id) == 1
+        assert db.attempt_count(require_id(request)) == 1
 
         triggered = trigger.trigger_next_batch()
         assert triggered == 1
 
         # A second Attempt now exists with a RUNNING intake.
-        assert db.attempt_count(request.id) == 2
-        intake = db.latest_phase_map(request.id)[Phase.INTAKE]
+        assert db.attempt_count(require_id(request)) == 2
+        intake = db.latest_phase_map(require_id(request))[Phase.INTAKE]
         assert intake.status == PhaseStatus.RUNNING
 
     def test_resumes_past_carried_forward_intake(
@@ -221,9 +224,9 @@ class TestTriggerNextBatch:
     ):
         """A retry whose intake already succeeded resumes without a new PipelineRun."""
         request = _seed_request(db, "tag-resume")
-        attempt = db.create_attempt(request.id)
+        attempt = db.create_attempt(require_id(request))
         db.upsert_phase(
-            attempt.id,
+            require_id(attempt),
             Phase.INTAKE,
             PhaseStatus.SUCCESS,
             reference_type=ClusterResource.PIPELINE_RUN,
@@ -231,7 +234,7 @@ class TestTriggerNextBatch:
         )
         # The release failed, so the request is FAILED and retriable.
         db.upsert_phase(
-            attempt.id,
+            require_id(attempt),
             Phase.RELEASE,
             PhaseStatus.FAILED,
             reference_type=ClusterResource.RELEASE,
@@ -244,8 +247,8 @@ class TestTriggerNextBatch:
 
         # No new PipelineRun was submitted; the new attempt carried intake SUCCESS forward.
         mock_kube.create_pipelinerun.assert_not_called()
-        assert db.attempt_count(request.id) == 2
-        latest = db.latest_phase_map(request.id)
+        assert db.attempt_count(require_id(request)) == 2
+        latest = db.latest_phase_map(require_id(request))
         assert latest[Phase.INTAKE].status == PhaseStatus.SUCCESS
         # The failed release was NOT carried forward; only settled phases are.
         assert Phase.RELEASE not in latest
@@ -254,13 +257,13 @@ class TestTriggerNextBatch:
         """Once attempts exceed max_retries the failed request is not retried."""
         request = _seed_request(db, "tag-exhausted")
         for _ in range(4):  # max_retries=3 -> 4th attempt is the last allowed
-            attempt = db.create_attempt(request.id)
-            db.upsert_phase(attempt.id, Phase.INTAKE, PhaseStatus.FAILED, error_message="boom")
+            attempt = db.create_attempt(require_id(request))
+            db.upsert_phase(require_id(attempt), Phase.INTAKE, PhaseStatus.FAILED, error_message="boom")
 
         view = trigger.view
         assert view.state(request) == RequestState.FAILED
         assert trigger.trigger_next_batch() == 0
-        assert db.attempt_count(request.id) == 4  # unchanged
+        assert db.attempt_count(require_id(request)) == 4  # unchanged
 
     def test_trigger_error_from_build_is_recorded_and_batch_survives(
         self, trigger: ImportTrigger, db: WorkflowDatabase, mock_build: MagicMock
@@ -281,10 +284,11 @@ class TestTriggerNextBatch:
         triggered = trigger.trigger_next_batch()
         assert triggered == 1
 
-        bad_intake = db.latest_phase_map(bad.id)[Phase.INTAKE]
+        bad_intake = db.latest_phase_map(require_id(bad))[Phase.INTAKE]
         assert bad_intake.status == PhaseStatus.FAILED
+        assert bad_intake.error_message is not None
         assert "malformed ref" in bad_intake.error_message
-        assert db.latest_phase_map(good.id)[Phase.INTAKE].status == PhaseStatus.RUNNING
+        assert db.latest_phase_map(require_id(good))[Phase.INTAKE].status == PhaseStatus.RUNNING
 
     def test_unexpected_build_error_propagates(
         self, trigger: ImportTrigger, db: WorkflowDatabase, mock_build: MagicMock
@@ -345,15 +349,15 @@ class TestRecovery:
         """A latest Attempt with no intake phase (e.g. a crash between creating the
         Attempt and recording its intake) is reused and re-triggered, not stacked."""
         request = _seed_request(db, "tag-bare")
-        bare = db.create_attempt(request.id)  # committed Attempt, no intake phase yet
-        assert db.attempt_count(request.id) == 1
+        bare = db.create_attempt(require_id(request))  # committed Attempt, no intake phase yet
+        assert db.attempt_count(require_id(request)) == 1
         mock_kube.create_pipelinerun.return_value = "pnc-import-recovered"
 
         triggered = trigger.trigger_next_batch()
         assert triggered == 1
 
         # The bare Attempt was reused rather than a second one created.
-        assert db.attempt_count(request.id) == 1
-        intake = db.latest_phase_map(request.id)[Phase.INTAKE]
+        assert db.attempt_count(require_id(request)) == 1
+        intake = db.latest_phase_map(require_id(request))[Phase.INTAKE]
         assert intake.status == PhaseStatus.RUNNING
         assert intake.attempt_id == bare.id

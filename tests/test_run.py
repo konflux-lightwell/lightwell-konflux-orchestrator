@@ -23,6 +23,7 @@ from import_orchestrator.commands.run import run_single
 from import_orchestrator.database import WorkflowDatabase
 from import_orchestrator.engine import ImportOrchestrator, PipelineMonitor, PruneMonitor, Reconciler
 from import_orchestrator.models import ClusterResource, Phase, PhaseStatus
+from tests.helpers import require_id
 
 _REF = "ntplib==0.4.0"
 
@@ -67,20 +68,20 @@ def _record_phases(
 ):
     """Record the latest attempt's phases for the single seeded request."""
     request = db.list_requests()[0]
-    attempt = db.latest_attempt(request.id) or db.create_attempt(request.id)
+    attempt = db.latest_attempt(require_id(request)) or db.create_attempt(require_id(request))
     if pipelinerun:
         db.upsert_phase(
-            attempt.id, Phase.INTAKE, status, ClusterResource.PIPELINE_RUN, pipelinerun, error_message=error
+            require_id(attempt), Phase.INTAKE, status, ClusterResource.PIPELINE_RUN, pipelinerun, error_message=error
         )
     else:
-        db.upsert_phase(attempt.id, Phase.INTAKE, status, error_message=error)
+        db.upsert_phase(require_id(attempt), Phase.INTAKE, status, error_message=error)
     if snapshot:
-        db.upsert_phase(attempt.id, Phase.SNAPSHOT, PhaseStatus.SUCCESS, ClusterResource.SNAPSHOT, snapshot)
+        db.upsert_phase(require_id(attempt), Phase.SNAPSHOT, PhaseStatus.SUCCESS, ClusterResource.SNAPSHOT, snapshot)
         # The integration-tests gate runs after the snapshot; a completed run has it
         # SUCCESS. For skip_release targets this is what makes the request terminal.
-        db.upsert_phase(attempt.id, Phase.INTEGRATION_TESTS, PhaseStatus.SUCCESS)
+        db.upsert_phase(require_id(attempt), Phase.INTEGRATION_TESTS, PhaseStatus.SUCCESS)
     if release:
-        db.upsert_phase(attempt.id, Phase.RELEASE, PhaseStatus.SUCCESS, ClusterResource.RELEASE, release)
+        db.upsert_phase(require_id(attempt), Phase.RELEASE, PhaseStatus.SUCCESS, ClusterResource.RELEASE, release)
 
 
 def _make_success(pipelinerun_name=None, snapshot_name=None, release_name=None):
