@@ -90,15 +90,10 @@ DEFAULT_SOURCE_REVISION = "main"
 # against gitlab.cee.redhat.com (same secret name as the python ecosystem).
 GIT_AUTH_SECRET = "lightwell-builds-git-auth"
 
-# TODO: keep this change draft until the npm-builder PR is merged and its main
-# builds publish a new image and both task bundles. These three digests do not
-# declare LIGHTWELL_SCRATCH_PUBLISH_VERSION or LIGHTWELL_BUILD_INTENT, and the
-# pipelines already pass both, so replace the tag and sha256 on each pin before
-# marking the PR ready.
 DEFAULT_BUILDER_IMAGE = (
     "quay.io/light-factory/npm-builder:"
-    "6a93271ad6350d6bbebd99f18da3abf6957db002@"
-    "sha256:5ccbec169ed5516d264979c4d56d8dc8f034989106b0e890dde964a0ed0be6c4"
+    "31efab6b071fbcd98b77b92ead3bcbf95f7c1a54@"
+    "sha256:3adc8635181030088e268132faa35f0ca9684f61eb2bc9d59defb380ecc77bf8"
 )
 DEFAULT_TASK_BUILD_NPM_PACKAGE_BUNDLE = (
     "quay.io/konflux-ci/tekton-catalog/task-build-npm-package:"
