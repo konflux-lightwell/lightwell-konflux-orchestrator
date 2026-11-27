@@ -157,6 +157,31 @@ def test_build_pipelinerun_remediated_target_defaults_build_type(monkeypatch, tm
     assert params["BUILD_TYPE"] == "Backport"
 
 
+@pytest.mark.parametrize("command", ["trigger", "run", "orchestrate"])
+def test_novel_cli_target_uses_p0_build_resources(monkeypatch, tmp_path, command):
+    _pipeline_file(tmp_path, monkeypatch)
+    argv = ["python", command, "--target", "NOVEL"]
+    if command != "orchestrate":
+        argv.append("foolib==0.4.0")
+    args = make_parser().parse_args(argv)
+    manifest = args.ecosystem.build_pipelinerun("foolib==0.4.0", args)
+    labels = manifest["metadata"]["labels"]
+    assert labels["appstudio.openshift.io/application"] == "python-novel"
+    assert labels["appstudio.openshift.io/component"] == "python-novel"
+    spec = manifest["spec"]
+    assert spec["taskRunTemplate"]["serviceAccountName"] == "build-pipeline-python-novel"
+    params = {p["name"]: p["value"] for p in spec["params"]}
+    assert params["BUILD_TYPE"] == "Novel"
+    assert params["IMAGE"].startswith(
+        "quay.io/redhat-user-workloads/lightwell-python-tenant/python-novel/python-novel:"
+    )
+    identity = args.ecosystem.request_identity("foolib==0.4.0", args)
+    assert identity["application"] == "python-novel"
+    assert identity["component"] == "python-novel"
+    assert identity["target"] == "NOVEL"
+    assert args.ecosystem.target_skip_release("NOVEL") is False
+
+
 def test_build_pipelinerun_scratch_target_defaults_build_type(monkeypatch, tmp_path):
     _pipeline_file(tmp_path, monkeypatch)
     manifest = PythonEcosystem().build_pipelinerun("foolib==0.4.0", argparse.Namespace(target="SCRATCH"))
@@ -164,11 +189,14 @@ def test_build_pipelinerun_scratch_target_defaults_build_type(monkeypatch, tmp_p
     assert params["BUILD_TYPE"] == "Scratch"
 
 
-def test_build_pipelinerun_explicit_build_type_overrides_target_pin(monkeypatch, tmp_path):
+@pytest.mark.parametrize("target", ["SCRATCH", "NOVEL"])
+@pytest.mark.parametrize("command", ["trigger", "run"])
+def test_build_pipelinerun_explicit_build_type_overrides_target_pin(monkeypatch, tmp_path, target, command):
     _pipeline_file(tmp_path, monkeypatch)
-    manifest = PythonEcosystem().build_pipelinerun(
-        "foolib==0.4.0", argparse.Namespace(target="SCRATCH", build_type="Backport")
+    args = make_parser().parse_args(
+        ["python", command, "foolib==0.4.0", "--target", target, "--build-type", "Backport"]
     )
+    manifest = args.ecosystem.build_pipelinerun("foolib==0.4.0", args)
     params = {p["name"]: p["value"] for p in manifest["spec"]["params"]}
     assert params["BUILD_TYPE"] == "Backport"
 
@@ -205,7 +233,7 @@ def test_request_identity_honours_target():
     assert identity["artifact"] == "foolib==0.4.0"
 
 
-@pytest.mark.parametrize("target", ["VALIDATED", "VALIDATED-STAGE", "REMEDIATED", "SCRATCH"])
+@pytest.mark.parametrize("target", ["VALIDATED", "VALIDATED-STAGE", "REMEDIATED", "NOVEL", "SCRATCH"])
 def test_real_pipeline_preserves_service_account_auth_for_each_target(monkeypatch, target):
     project_root = Path(__file__).resolve().parents[3]
     monkeypatch.setenv("TEKTON_PIPELINE_DIR", str(project_root / "tekton"))
