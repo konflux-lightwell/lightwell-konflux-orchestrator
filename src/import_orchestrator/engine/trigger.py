@@ -54,13 +54,6 @@ class ImportTrigger:
         self.build_pipelinerun = build_pipelinerun
         self.max_parallel = max_parallel
         self.max_retries = max_retries
-        # Requests the reconciler could not read from the cluster this run; never
-        # triggered here, so a failed reconcile cannot duplicate in-flight work.
-        self._skipped: set[int] = set()
-
-    def skip_requests(self, request_ids: set[int]) -> None:
-        """Exclude these Requests from triggering this run (their reconcile failed)."""
-        self._skipped = set(request_ids)
 
     def trigger_next_batch(self) -> int:
         """Trigger imports up to the max_parallel limit, counting all in-flight stages.
@@ -68,13 +61,11 @@ class ImportTrigger:
         Returns:
             The number of imports successfully triggered.
         """
-        available_slots = max(0, self.max_parallel - self.view.in_flight_count(skip_ids=self._skipped))
+        available_slots = max(0, self.max_parallel - self.view.in_flight_count())
         if available_slots == 0:
             return 0
 
-        candidates = [
-            r for r in (self.view.pending() + self.view.retry_candidates(self.max_retries)) if r.id not in self._skipped
-        ][:available_slots]
+        candidates = (self.view.pending() + self.view.retry_candidates(self.max_retries))[:available_slots]
 
         triggered = 0
         for request in candidates:

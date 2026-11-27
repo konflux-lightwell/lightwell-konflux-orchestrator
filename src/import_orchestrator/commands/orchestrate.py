@@ -34,7 +34,6 @@ from import_orchestrator.engine import (
     ImportTrigger,
     PipelineMonitor,
     PruneMonitor,
-    Reconciler,
     ReleaseMonitor,
     RequestView,
 )
@@ -142,7 +141,6 @@ def run_orchestrate(args: argparse.Namespace, empty_db_warning: str) -> int:
             prefix=resolve_pipelinerun_prefix(eco, args),
             release_plan=getattr(args, "release_plan", None),
         )
-        reconciler = Reconciler(view=view, kube=kube, release_plan=getattr(args, "release_plan", None))
 
         prune_monitor = PruneMonitor(view=view, kube=kube, max_retries=args.max_retries)
 
@@ -154,7 +152,6 @@ def run_orchestrate(args: argparse.Namespace, empty_db_warning: str) -> int:
             poll_interval=args.poll_interval,
             max_retries=args.max_retries,
             prune_monitor=prune_monitor,
-            reconciler=reconciler,
         )
 
         return orchestrator.run_until_complete()
